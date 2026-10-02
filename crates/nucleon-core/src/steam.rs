@@ -176,5 +176,38 @@ pub fn install_compatibility_tool(runner_bin: &Path) -> Result<()> {
     let vdf_path = tool_dir.join("compatibilitytool.vdf");
     vdf::write_compatibilitytool_vdf(&vdf_path)?;
 
+    // Migrate any legacy config.vdf mappings from notproton to nucleon
+    let _ = migrate_compat_mappings();
+
+    Ok(())
+}
+
+pub fn migrate_compat_mappings() -> Result<()> {
+    let config_path = paths::home_dir().join("Library/Application Support/Steam/config/config.vdf");
+    if !config_path.exists() {
+        return Ok(());
+    }
+    let content = match fs::read_to_string(&config_path) {
+        Ok(c) => c,
+        Err(_) => return Ok(()),
+    };
+    if content.contains("\"notproton\"") {
+        let updated = content.replace("\"notproton\"", "\"nucleon\"");
+        let perms = fs::metadata(&config_path)?.permissions();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut write_perms = perms.clone();
+            write_perms.set_mode(0o644);
+            let _ = fs::set_permissions(&config_path, write_perms);
+        }
+        let write_res = fs::write(&config_path, updated);
+        let _ = fs::set_permissions(&config_path, perms);
+        if let Err(e) = write_res {
+            log::warn!("Could not update config.vdf compat mappings: {e}");
+        } else {
+            log::info!("Migrated legacy 'notproton' compatibility tool mappings to 'nucleon' in config.vdf");
+        }
+    }
     Ok(())
 }

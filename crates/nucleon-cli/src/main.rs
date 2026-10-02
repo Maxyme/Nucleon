@@ -126,8 +126,12 @@ fn main() -> Result<()> {
             println!("==============================================================================");
             println!("To use Nucleon in Steam:");
             println!("  1. Restart Steam: pkill steam_osx && open -a /Applications/Steam.app");
-            println!("  2. Open Steam Settings -> Compatibility -> Enable Steam Play -> Select 'Nucleon'");
-            println!("  3. Or run from terminal: nucleon launch <AppID>");
+            println!("  2. In your Library, right-click the Windows game -> Properties... -> Compatibility");
+            println!("  3. Check 'Force the use of a specific Steam Play compatibility tool'");
+            println!("  4. Select 'Nucleon (Game Porting Toolkit 4)' from the dropdown");
+            println!("     (Note: Global Steam Settings -> Compatibility is no longer present on macOS;");
+            println!("      configure compatibility directly in each game's Compatibility properties)");
+            println!("  5. Or launch directly from terminal: nucleon launch <AppID>");
         }
 
         Commands::Status => {
