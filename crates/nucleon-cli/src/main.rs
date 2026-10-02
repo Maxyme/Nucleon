@@ -118,7 +118,7 @@ fn main() -> Result<()> {
                 steam::patch_steam(&hook_dylib)?;
                 println!("  ✓ Steam.app patched and signed with ad-hoc signature");
             } else {
-                println!("  ! Run 'make build' or 'cargo build --release' to compile hook dylib before patching Steam");
+                println!("  ! Run 'just build' or 'cargo build --release' to compile hook dylib before patching Steam");
             }
 
             println!("\n==============================================================================");
@@ -209,7 +209,7 @@ fn main() -> Result<()> {
         Commands::Steam { action } => match action {
             SteamAction::Patch => {
                 let hook_dylib = find_hook_dylib()
-                    .ok_or_else(|| anyhow::anyhow!("Hook dylib not found. Build it first with 'make build' or 'cargo build --release'"))?;
+                    .ok_or_else(|| anyhow::anyhow!("Hook dylib not found. Build it first with 'just build' or 'cargo build --release'"))?;
                 steam::patch_steam(&hook_dylib)?;
                 println!("  ✓ Successfully patched and signed Steam.app");
             }
