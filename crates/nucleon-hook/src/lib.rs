@@ -38,6 +38,9 @@ fn init() {
         let log_file = paths::support_dir().join("nucleon-helper.log");
         let _ = logger::init(log_file);
         info!("==> Nucleon hook injected into Steam Helper (pid {})", std::process::id());
+        if let Err(e) = hooks::fs::install_fs_hooks() {
+            warn!("Failed to install fs hooks in Steam Helper: {e:#}");
+        }
         if let Err(e) = hooks::webpatch::install_webpatch_hooks() {
             warn!("Failed to install webpatch hooks in Steam Helper: {e:#}");
         }
