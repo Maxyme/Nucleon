@@ -32,7 +32,7 @@ crates/
   - Configures optimal Wine environment parameters (`D3DM_MTL4=1`, `WINEMSYNC=1`, `WINEDLLOVERRIDES`).
 - **`nucleon-hook` (`libnucleon.dylib`)**: Universal Mach-O library injected into `steam_osx`.
   - Powered by **Frida Gum** (`frida-gum`) for robust inline function interception on macOS Apple Silicon and x86_64 (`CCompatManager::Init`, `CCompatManager::BIsEnabled`).
-  - Interposes file descriptors (`open`/`openat`) to patch Steam CEF WebUI chunks in memory, exposing the native Compatibility settings tab.
+  - Interposes file descriptors (`open`/`openat`) to patch Steam CEF WebUI chunks in memory (enables `.exe` selection in non-Steam game dialogs and displays Windows game compatibility notices).
   - Built as a universal fat binary (`arm64` + `x86_64`) with ad-hoc code signatures to run under both native ARM64 and Rosetta execution.
 - **`overlay-shim`**: Native Metal translation layer hooking `[CAMetalLayer nextDrawable]` to ensure stutter-free presentation and HUD telemetry.
 - **`nucleon-core`**: Shared models, Wine prefix initialization, registry overrides (`OpenGLSurfaceMode=behind`), and Valve package manifest unpacking.
@@ -100,6 +100,20 @@ Run the automated setup command to stage bridge packages, register the Steam com
 just setup
 # or: ./target/release/nucleon setup
 ```
+
+### Configuring Games in Steam
+
+> [!NOTE]
+> Modern Steam on macOS does not provide a global **Steam Settings -> Compatibility** tab. Instead, compatibility tools are configured per game in each game's properties:
+
+1. Restart Steam:
+   ```bash
+   pkill steam_osx && open -a /Applications/Steam.app
+   ```
+2. In your Steam Library, right-click any Windows game -> **Properties...** -> **Compatibility**.
+3. Check **"Force the use of a specific Steam Play compatibility tool"**.
+4. Select **"Nucleon (Game Porting Toolkit 4)"** from the dropdown menu.
+5. Alternatively, launch games directly via CLI: `nucleon launch <AppID>`.
 
 ### Inspecting Status
 
