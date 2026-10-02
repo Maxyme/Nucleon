@@ -27,16 +27,16 @@ fn is_wine_game_process_running(_runner_dir: &Path) -> bool {
         let text = String::from_utf8_lossy(&out.stdout);
         for line in text.lines() {
             let lower = line.to_lowercase();
-            if lower.contains("wine") && lower.contains(".exe") {
-                if !lower.contains("winedevice.exe")
-                    && !lower.contains("services.exe")
-                    && !lower.contains("plugplay.exe")
-                    && !lower.contains("svchost.exe")
-                    && !lower.contains("rpcss.exe")
-                    && !lower.contains("explorer.exe")
-                {
-                    return true;
-                }
+            if lower.contains("wine")
+                && lower.contains(".exe")
+                && !lower.contains("winedevice.exe")
+                && !lower.contains("services.exe")
+                && !lower.contains("plugplay.exe")
+                && !lower.contains("svchost.exe")
+                && !lower.contains("rpcss.exe")
+                && !lower.contains("explorer.exe")
+            {
+                return true;
             }
         }
     }

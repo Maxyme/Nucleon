@@ -86,7 +86,7 @@ pub fn check_window_presentation(target_pids: Option<&[i32]>) -> Result<Vec<Pres
         let is_wine = owner.to_lowercase().contains("wine");
         let matches_pid = pid_set.as_ref().map(|s| s.contains(&pid)).unwrap_or(true);
 
-        if (is_wine || matches_pid) && onscreen && layer >= 0 && layer <= 30 {
+        if (is_wine || matches_pid) && onscreen && (0..=30).contains(&layer) {
             presented.push(PresentedWindow {
                 window_id,
                 pid,

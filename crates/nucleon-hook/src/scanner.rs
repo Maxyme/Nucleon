@@ -37,7 +37,10 @@ pub fn find_image(substring: &str) -> Option<MachOImage> {
 }
 
 /// Matches an Array of Bytes (AOB) with ?? wildcards against memory
-pub fn aob_scan(base: *const u8, size: usize, pattern: &str) -> Option<*const u8> {
+///
+/// # Safety
+/// The caller must ensure that `base` points to at least `size` bytes of readable memory.
+pub unsafe fn aob_scan(base: *const u8, size: usize, pattern: &str) -> Option<*const u8> {
     let tokens: Vec<&str> = pattern.split_whitespace().collect();
     if tokens.is_empty() || size < tokens.len() {
         return None;
@@ -59,7 +62,7 @@ pub fn aob_scan(base: *const u8, size: usize, pattern: &str) -> Option<*const u8
     }
 
     let pat_len = bytes.len();
-    let slice = unsafe { std::slice::from_raw_parts(base, size) };
+    let slice = std::slice::from_raw_parts(base, size);
 
     for i in 0..=(size - pat_len) {
         let mut matched = true;
@@ -70,7 +73,7 @@ pub fn aob_scan(base: *const u8, size: usize, pattern: &str) -> Option<*const u8
             }
         }
         if matched {
-            return Some(unsafe { base.add(i) });
+            return Some(base.add(i));
         }
     }
 

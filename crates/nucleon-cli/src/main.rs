@@ -180,7 +180,7 @@ fn main() -> Result<()> {
         Commands::Launch { appid, hud, engine } => {
             println!("==> Launching game AppID {}...", appid);
             let mut cmd = Command::new("open");
-            cmd.arg(&format!("steam://run/{}", appid));
+            cmd.arg(format!("steam://run/{}", appid));
             if hud {
                 cmd.env("MTL_HUD_ENABLED", "1");
             }

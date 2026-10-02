@@ -5,6 +5,10 @@ use log::info;
 pub static mut ORIG_COMPAT_INIT: *mut c_void = std::ptr::null_mut();
 pub static mut ORIG_IS_ENABLED: *mut c_void = std::ptr::null_mut();
 
+/// Inline detour for CCompatManager::Init.
+///
+/// # Safety
+/// The caller must ensure that `this` points to a valid CCompatManager instance.
 pub unsafe extern "C" fn hook_compat_init(this: *mut c_void, arg1: *mut c_void) -> *mut c_void {
     let orig_fn: extern "C" fn(*mut c_void, *mut c_void) -> *mut c_void =
         std::mem::transmute(ORIG_COMPAT_INIT);
@@ -15,6 +19,10 @@ pub unsafe extern "C" fn hook_compat_init(this: *mut c_void, arg1: *mut c_void) 
     ret
 }
 
+/// Inline detour for CCompatManager::BIsEnabled.
+///
+/// # Safety
+/// The caller must ensure that `this` points to a valid CCompatManager instance.
 pub unsafe extern "C" fn hook_is_enabled(this: *mut c_void, appid: u32) -> bool {
     let orig_fn: extern "C" fn(*mut c_void, u32) -> bool =
         std::mem::transmute(ORIG_IS_ENABLED);
@@ -22,6 +30,10 @@ pub unsafe extern "C" fn hook_is_enabled(this: *mut c_void, appid: u32) -> bool 
     orig_fn(this, appid)
 }
 
+/// Force-enables the compatibility manager state bit.
+///
+/// # Safety
+/// The caller must ensure that `this` is null or points to a valid CCompatManager instance.
 pub unsafe fn force_enable_compat_manager(this: *mut c_void) {
     if this.is_null() {
         return;

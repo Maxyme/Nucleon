@@ -18,7 +18,11 @@ extern "C" {
     ) -> *mut c_void;
 }
 
-/// Safely hook a function pointer, returning the original trampoline pointer if successful.
+/// Hook a function pointer, returning the original trampoline pointer if successful.
+///
+/// # Safety
+/// The caller must ensure that `target` points to valid executable machine code
+/// and that `detour` has the compatible calling convention and signature as `target`.
 pub unsafe fn hook(target: *mut c_void, detour: *mut c_void) -> Result<*mut c_void, i32> {
     let mut origin: *mut c_void = std::ptr::null_mut();
     let rc = DobbyHook(target, detour, &mut origin);
