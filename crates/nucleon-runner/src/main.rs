@@ -72,12 +72,46 @@ fn main() -> Result<()> {
         .unwrap_or_else(|| paths::support_dir().join("default_prefix"));
     let pfx_dir = compat_data_path.join("pfx");
 
-    // Resolve runner
-    let runner_dir = if paths::current_runner().exists() {
-        paths::current_runner()
+    // Determine target executable and arguments
+    // Steam invokes: nucleon-runner run <exe_path> [game_args...]
+    let game_args: Vec<String> = if args.len() > 2 {
+        args[2..].to_vec()
     } else {
-        runner::assemble_runner(false)?
+        vec![]
     };
+
+    if game_args.is_empty() {
+        eprintln!("No game executable specified to run.");
+        std::process::exit(0);
+    }
+
+    let target_exe = PathBuf::from(&game_args[0]);
+
+    // Check for user engine override via environment variable NUCLEON_ENGINE
+    let requested_engine = match env::var("NUCLEON_ENGINE").unwrap_or_default().to_lowercase().as_str() {
+        "gptk" | "apple" => Some(nucleon_core::detector::TargetEngine::Gptk),
+        "staging" | "wine-staging" | "wine" => Some(nucleon_core::detector::TargetEngine::WineStaging),
+        _ => None,
+    };
+
+    let (engine, api_desc) = if let Some(eng) = requested_engine {
+        log::info!("Engine manually overridden via NUCLEON_ENGINE={:?}", eng);
+        (eng, format!("Manual Override ({:?})", eng))
+    } else {
+        let detection = nucleon_core::detector::detect_target_engine(&target_exe);
+        log::info!(
+            "Auto-detected graphics API: {:?} (found: {:?}) -> routing to {:?}",
+            detection.api,
+            detection.detected_dll,
+            detection.engine
+        );
+        (detection.engine, format!("{:?} (DLL: {:?})", detection.api, detection.detected_dll))
+    };
+
+    println!("==> Nucleon Engine Router: target '{}' [{}] -> engine {:?}", target_exe.display(), api_desc, engine);
+
+    // Resolve optimal runner for selected engine
+    let (runner_dir, active_engine) = runner::resolve_runner_for_engine(engine)?;
 
     let wine_bin = runner_dir.join("bin/wine");
     let wineserver_bin = runner_dir.join("bin/wineserver");
@@ -94,21 +128,8 @@ fn main() -> Result<()> {
     // Initialize prefix, registry, and bridge DLLs
     prefix::ensure_prefix(&pfx_dir, &runner_dir)?;
 
-    // Determine target executable and arguments
-    // Steam invokes: nucleon-runner run <exe_path> [game_args...]
-    let game_args: Vec<String> = if args.len() > 2 {
-        args[2..].to_vec()
-    } else {
-        vec![]
-    };
-
-    if game_args.is_empty() {
-        eprintln!("No game executable specified to run.");
-        std::process::exit(0);
-    }
-
     let enable_hud = env::var("MTL_HUD_ENABLED").map(|v| v == "1").unwrap_or(false);
-    let exec_env = runner::build_execution_env(&runner_dir, &pfx_dir, enable_hud);
+    let exec_env = runner::build_execution_env_for_engine(&runner_dir, &pfx_dir, active_engine, enable_hud);
 
     // Setup signal handler for prompt SIGTERM exit
     let term_flag = Arc::new(AtomicBool::new(false));
