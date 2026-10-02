@@ -24,6 +24,11 @@ enum Commands {
     },
     /// Inspect status of Nucleon, Steam patches, runner, and prefix
     Status,
+    /// Inspect Graphics API dependencies and recommended engine for an executable or game folder
+    Detect {
+        /// Path to Windows .exe binary or game folder
+        path: PathBuf,
+    },
     /// Launch a Windows game by Steam AppID
     Launch {
         /// Steam Application ID
@@ -31,6 +36,9 @@ enum Commands {
         /// Enable Apple Metal Performance HUD
         #[arg(long)]
         hud: bool,
+        /// Force specific engine (gptk or staging)
+        #[arg(short, long)]
+        engine: Option<String>,
     },
     /// Validate that a game window is actively displaying and presenting frames on macOS (0 screen capture)
     Validate {
@@ -131,9 +139,21 @@ fn main() -> Result<()> {
 
             let runner_cur = paths::current_runner();
             if runner_cur.exists() {
-                println!("  Active Runner:             ✓ {}", runner_cur.display());
+                println!("  Active Default Runner:     ✓ {}", runner_cur.display());
             } else {
-                println!("  Active Runner:             ✗ Not configured (run 'nucleon setup')");
+                println!("  Active Default Runner:     ✗ Not configured (run 'nucleon setup')");
+            }
+
+            println!("  Dual-Engine Runtimes:");
+            if let Some(gptk) = runner::find_gptk_runner() {
+                println!("    ● GPTK (DX11/12):        ✓ {}", gptk.display());
+            } else {
+                println!("    ○ GPTK (DX11/12):        ✗ Not found (run 'nucleon setup')");
+            }
+            if let Some(staging) = runner::find_wine_staging_runtime() {
+                println!("    ● Wine-Staging (DX9/10): ✓ {}", staging.display());
+            } else {
+                println!("    ○ Wine-Staging (DX9/10): ○ Optional (brew install --cask wine-staging)");
             }
 
             let bridge = paths::bridge_dir();
@@ -141,12 +161,31 @@ fn main() -> Result<()> {
             println!("  Bridge libraries staged:   {}", if has_bridge { "✓ Yes" } else { "✗ No" });
         }
 
-        Commands::Launch { appid, hud } => {
+        Commands::Detect { path } => {
+            println!("==> Analyzing binary / game directory: {}", path.display());
+            let info = nucleon_core::detector::detect_target_engine(&path);
+            println!("  Graphics API detected:     {:?}", info.api);
+            println!("  Detected library:          {}", info.detected_dll.as_deref().unwrap_or("None (heuristic)"));
+            println!("  Recommended Engine:        {:?}", info.engine);
+            match info.engine {
+                nucleon_core::detector::TargetEngine::Gptk => {
+                    println!("  Target Pipeline:           Apple Game Porting Toolkit (D3DMetal, Metal 4, MSync)");
+                }
+                nucleon_core::detector::TargetEngine::WineStaging => {
+                    println!("  Target Pipeline:           Wine-Staging (WineD3D / Legacy Stack)");
+                }
+            }
+        }
+
+        Commands::Launch { appid, hud, engine } => {
             println!("==> Launching game AppID {}...", appid);
             let mut cmd = Command::new("open");
             cmd.arg(&format!("steam://run/{}", appid));
             if hud {
                 cmd.env("MTL_HUD_ENABLED", "1");
+            }
+            if let Some(eng) = engine {
+                cmd.env("NUCLEON_ENGINE", eng);
             }
             cmd.status()?;
             println!("  ✓ Sent launch command to Steam");

@@ -6,3 +6,5 @@ pub mod vdf;
 pub mod signatures;
 pub mod validator;
 pub mod manifest;
+pub mod detector;
+

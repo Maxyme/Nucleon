@@ -3,6 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use anyhow::{Context, Result};
+use crate::detector::TargetEngine;
 use crate::paths;
 
 #[derive(Debug, Clone)]
@@ -32,17 +33,17 @@ pub fn discover_wine_candidates() -> Vec<PathBuf> {
     // 2. Existing notproton runner if present
     candidates.push(paths::home_dir().join("Library/Application Support/notproton/runners/gptk-4-beta2"));
 
-    // 3. System and Homebrew locations
+    // 3. Apple Game Porting Toolkit locations
     candidates.push(PathBuf::from("/Applications/Game Porting Toolkit.app/Contents/Resources/wine"));
-    candidates.push(PathBuf::from("/Applications/Wine Crossover.app/Contents/Resources/wine"));
-    candidates.push(PathBuf::from("/Applications/Wine Staging.app/Contents/Resources/wine"));
     candidates.push(PathBuf::from("/opt/homebrew/opt/game-porting-toolkit/Contents/Resources/wine"));
-    candidates.push(PathBuf::from("/opt/homebrew/opt/wine-crossover/Contents/Resources/wine"));
-    candidates.push(PathBuf::from("/opt/homebrew/opt/wine-crossover"));
     candidates.push(PathBuf::from("/opt/homebrew/opt/game-porting-toolkit"));
 
-    // 4. Heroic tools directory if present
-    candidates.push(paths::home_dir().join("Library/Application Support/heroic/tools/wine/Wine-Crossover-latest/Contents/Resources/wine"));
+    // 4. Wine Staging locations
+    candidates.push(PathBuf::from("/Applications/Wine Staging.app/Contents/Resources/wine"));
+    candidates.push(PathBuf::from("/Applications/Wine Staging.app"));
+    candidates.push(PathBuf::from("/opt/homebrew/opt/wine-staging/Contents/Resources/wine"));
+    candidates.push(PathBuf::from("/opt/homebrew/opt/wine-staging"));
+    candidates.push(PathBuf::from("/usr/local/opt/wine-staging"));
 
     candidates
 }
@@ -56,6 +57,71 @@ pub fn find_valid_wine_runtime() -> Option<PathBuf> {
         }
     }
     None
+}
+
+pub fn find_gptk_runner() -> Option<PathBuf> {
+    let gptk_beta = paths::runners_dir().join("gptk-4-beta2");
+    if gptk_beta.join("bin/wine").is_file() && gptk_beta.join("lib/external/D3DMetal.framework").is_dir() {
+        return Some(gptk_beta);
+    }
+    let gptk = paths::runners_dir().join("gptk-4");
+    if gptk.join("bin/wine").is_file() && gptk.join("lib/external/D3DMetal.framework").is_dir() {
+        return Some(gptk);
+    }
+    None
+}
+
+pub fn find_wine_staging_runtime() -> Option<PathBuf> {
+    // 1. Check staged runner in nucleon runners dir
+    let staging_staged = paths::runners_dir().join("wine-staging");
+    if staging_staged.join("bin/wine").is_file() {
+        return Some(staging_staged);
+    }
+
+    // 2. Check system/homebrew paths
+    let staging_candidates = [
+        PathBuf::from("/opt/homebrew/opt/wine-staging/Contents/Resources/wine"),
+        PathBuf::from("/opt/homebrew/opt/wine-staging"),
+        PathBuf::from("/Applications/Wine Staging.app/Contents/Resources/wine"),
+        PathBuf::from("/Applications/Wine Staging.app"),
+        PathBuf::from("/usr/local/opt/wine-staging"),
+    ];
+
+    for c in &staging_candidates {
+        if c.join("bin/wine").is_file() && c.join("bin/wineserver").is_file() {
+            return Some(c.clone());
+        }
+    }
+
+    None
+}
+
+/// Resolves the optimal runner for the requested TargetEngine.
+pub fn resolve_runner_for_engine(engine: TargetEngine) -> Result<(PathBuf, TargetEngine)> {
+    match engine {
+        TargetEngine::Gptk => {
+            if let Some(gptk) = find_gptk_runner() {
+                return Ok((gptk, TargetEngine::Gptk));
+            }
+            if let Some(staging) = find_wine_staging_runtime() {
+                log::warn!("Apple GPTK runner not found; falling back to Wine-Staging for DirectX 11/12");
+                return Ok((staging, TargetEngine::WineStaging));
+            }
+            let assembled = assemble_runner(false)?;
+            Ok((assembled, TargetEngine::Gptk))
+        }
+        TargetEngine::WineStaging => {
+            if let Some(staging) = find_wine_staging_runtime() {
+                return Ok((staging, TargetEngine::WineStaging));
+            }
+            if let Some(gptk) = find_gptk_runner() {
+                log::info!("Wine-Staging not found (install via 'brew install --cask wine-staging'); utilizing GPTK runtime for legacy/DX9 pipeline");
+                return Ok((gptk, TargetEngine::Gptk));
+            }
+            let assembled = assemble_runner(false)?;
+            Ok((assembled, TargetEngine::Gptk))
+        }
+    }
 }
 
 pub fn find_gptk_components() -> Result<Option<(PathBuf, PathBuf)>> {
@@ -176,43 +242,70 @@ pub fn build_execution_env(
     prefix_dir: &Path,
     enable_hud: bool,
 ) -> HashMap<String, String> {
+    build_execution_env_for_engine(runner_dir, prefix_dir, TargetEngine::Gptk, enable_hud)
+}
+
+pub fn build_execution_env_for_engine(
+    runner_dir: &Path,
+    prefix_dir: &Path,
+    engine: TargetEngine,
+    enable_hud: bool,
+) -> HashMap<String, String> {
     let mut env = HashMap::new();
 
     env.insert("WINEPREFIX".to_string(), prefix_dir.to_string_lossy().to_string());
     env.insert("WINELOADER".to_string(), runner_dir.join("bin/wine").to_string_lossy().to_string());
     env.insert("WINESERVER".to_string(), runner_dir.join("bin/wineserver").to_string_lossy().to_string());
-
-    // Apple Silicon & GPTK 4 features
-    env.insert("D3DM_MTL4".to_string(), "1".to_string());
-    env.insert("D3DM_ENABLE_METALFX".to_string(), "1".to_string());
-    env.insert("D3DM_SUPPORT_DXR".to_string(), "1".to_string());
     env.insert("ROSETTA_ADVERTISE_AVX".to_string(), "1".to_string());
     env.insert("WINEMSYNC".to_string(), "1".to_string());
     env.insert("WINEESYNC".to_string(), "1".to_string());
 
-    // DirectX / Metal DLL Overrides
-    env.insert(
-        "WINEDLLOVERRIDES".to_string(),
-        "d3d11,dxgi,d3d12,d3d10core,d3dcompiler_47=n,b;nvapi64,nvngx=n,b;steamclient,steamclient64,lsteamclient=n,b".to_string(),
-    );
+    match engine {
+        TargetEngine::Gptk => {
+            // Apple Silicon & GPTK 4 features
+            env.insert("D3DM_MTL4".to_string(), "1".to_string());
+            env.insert("D3DM_ENABLE_METALFX".to_string(), "1".to_string());
+            env.insert("D3DM_SUPPORT_DXR".to_string(), "1".to_string());
 
-    if enable_hud {
-        env.insert("MTL_HUD_ENABLED".to_string(), "1".to_string());
-    }
+            // DirectX 11 & 12 Metal DLL Overrides
+            env.insert(
+                "WINEDLLOVERRIDES".to_string(),
+                "d3d11,dxgi,d3d12,d3d10core,d3dcompiler_47=n,b;nvapi64,nvngx=n,b;steamclient,steamclient64,lsteamclient=n,b".to_string(),
+            );
 
-    // Dynamic linker paths
-    let lib_ext = runner_dir.join("lib/external");
-    let lib_dir = runner_dir.join("lib");
-    let lib_unix = runner_dir.join("lib/wine/x86_64-unix");
-    env.insert(
-        "DYLD_FALLBACK_LIBRARY_PATH".to_string(),
-        format!("{}:{}:{}", lib_ext.display(), lib_unix.display(), lib_dir.display()),
-    );
+            if enable_hud {
+                env.insert("MTL_HUD_ENABLED".to_string(), "1".to_string());
+            }
 
-    // Overlay shim for D3DMetal view & Metal 4 bridging
-    let overlay_shim = paths::support_dir().join("overlay-shim.dylib");
-    if overlay_shim.exists() {
-        env.insert("DYLD_INSERT_LIBRARIES".to_string(), overlay_shim.to_string_lossy().to_string());
+            // Dynamic linker paths including external D3DMetal
+            let lib_ext = runner_dir.join("lib/external");
+            let lib_dir = runner_dir.join("lib");
+            let lib_unix = runner_dir.join("lib/wine/x86_64-unix");
+            env.insert(
+                "DYLD_FALLBACK_LIBRARY_PATH".to_string(),
+                format!("{}:{}:{}", lib_ext.display(), lib_unix.display(), lib_dir.display()),
+            );
+
+            // Overlay shim for D3DMetal view & Metal 4 bridging
+            let overlay_shim = paths::support_dir().join("overlay-shim.dylib");
+            if overlay_shim.exists() {
+                env.insert("DYLD_INSERT_LIBRARIES".to_string(), overlay_shim.to_string_lossy().to_string());
+            }
+        }
+        TargetEngine::WineStaging => {
+            // Wine-Staging legacy overrides: map DX9, DX10 to built-in WineD3D / OpenGL
+            env.insert(
+                "WINEDLLOVERRIDES".to_string(),
+                "steamclient,steamclient64,lsteamclient=n,b;d3d9,d3d10,d3d10_1,d3d10core=b,n".to_string(),
+            );
+
+            let lib_dir = runner_dir.join("lib");
+            let lib_unix = runner_dir.join("lib/wine/x86_64-unix");
+            env.insert(
+                "DYLD_FALLBACK_LIBRARY_PATH".to_string(),
+                format!("{}:{}", lib_unix.display(), lib_dir.display()),
+            );
+        }
     }
 
     env

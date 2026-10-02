@@ -40,10 +40,32 @@ crates/
 
 ---
 
+## Dual-Engine Architecture & Automatic DirectX Routing
+
+Nucleon features an intelligent **Dual-Engine Router** that inspects target Windows binaries and automatically dispatches to the optimal translation engine:
+
+| DirectX / Graphics API | Imported DLLs | Dispatched Engine | Pipeline Characteristics |
+| :--- | :--- | :--- | :--- |
+| **DirectX 12** | `d3d12.dll`, `dxgi.dll` | **Apple GPTK 4** | Native `D3DMetal` HLSL-to-MSL translation, Metal 4, FastSync |
+| **DirectX 11** | `d3d11.dll`, `dxgi.dll` | **Apple GPTK 4** | Native `D3DMetal` Direct3D 11 to Metal hardware acceleration |
+| **DirectX 10** | `d3d10.dll`, `d3d10_1.dll`, `d3d10core.dll` | **Wine-Staging** | Full `wined3d` / DXVK pipeline (D3DMetal lacks DX10 support) |
+| **DirectX 9 & Older** | `d3d9.dll`, `d3d8.dll`, `ddraw.dll` | **Wine-Staging** | Mature upstream Wine legacy pipeline |
+| **Vulkan / OpenGL** | `vulkan-1.dll`, `opengl32.dll` | **Wine-Staging** | MoltenVK / native macOS OpenGL stack |
+
+### How It Works
+1. **PE Import Table Analysis**: When launching a title, `nucleon-runner` parses the Windows Portable Executable (PE) headers and Import Address Table (IAT) using the Rust `object` engine.
+2. **Dynamic Dispatch**:
+   - DX11/12 titles route to Apple GPTK with `D3DM_MTL4=1`, `WINEMSYNC=1`, and Apple's `D3DMetal.framework`.
+   - DX9/10 titles route to Wine-Staging with standard WineD3D legacy overrides.
+   - If Wine-Staging is not installed, Nucleon gracefully falls back to the available GPTK runner with legacy DLL configurations.
+3. **Manual Overrides**: You can override engine selection at any time using `--engine <gptk|staging>` or the `NUCLEON_ENGINE` environment variable.
+
+---
+
 ## Runtime & Engine Compatibility
 
 - **Apple Game Porting Toolkit (GPTK 4 / GPTK 2)**: Fully supported and recommended for DirectX 11 and DirectX 12 titles via `D3DMetal.framework`.
-- **Wine-Staging**: Supported for general DirectX 9/11 and Vulkan titles.
+- **Wine-Staging**: Supported for DirectX 9, DirectX 10, and general legacy Windows applications (`brew install --cask wine-staging`).
 - **Architecture**: Native Apple Silicon 64-bit translation. *Note: Experimental 32-bit support exists, though it has not been validated across titles.*
 
 ---
@@ -91,11 +113,22 @@ Check the status of your installation, active runner, and Steam integration:
 Launch any installed Steam game by its Application ID:
 
 ```bash
-# Launch game normally
+# Launch game normally (auto-detects DirectX version)
 ./target/release/nucleon launch <AppID>
 
 # Launch with Apple Metal Performance HUD enabled
 ./target/release/nucleon launch <AppID> --hud
+
+# Force a specific engine override (gptk or staging)
+./target/release/nucleon launch <AppID> --engine staging
+```
+
+### Inspecting Executable Graphics APIs
+
+To check which DirectX API and engine Nucleon will select for any `.exe` or game folder:
+
+```bash
+./target/release/nucleon detect /path/to/game.exe
 ```
 
 ### Validating Window Presentation
