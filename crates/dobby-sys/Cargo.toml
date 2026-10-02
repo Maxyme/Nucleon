@@ -1,0 +1,11 @@
+[package]
+name = "dobby-sys"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[build-dependencies]
+cmake = "0.1"
+
+[dependencies]
+libc = { workspace = true }

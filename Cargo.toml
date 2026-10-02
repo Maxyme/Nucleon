@@ -1,0 +1,41 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/dobby-sys",
+    "crates/overlay-shim",
+    "crates/nucleon-core",
+    "crates/nucleon-runner",
+    "crates/nucleon-hook",
+    "crates/nucleon-cli",
+]
+
+[workspace.package]
+version = "0.2.0"
+edition = "2021"
+authors = ["Maxime Jacques <mjacques@glowgfs.com>"]
+license = "MIT"
+repository = "https://github.com/Maxyme/Nucleon"
+
+[workspace.dependencies]
+anyhow = "1.0"
+thiserror = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+log = "0.4"
+env_logger = "0.11"
+clap = { version = "4.5", features = ["derive", "cargo"] }
+ctor = "0.2"
+libc = "0.2"
+object = "0.36"
+memchr = "2.7"
+regex = "1.10"
+tempfile = "3.10"
+sha2 = "0.10"
+hex = "0.4"
+prost = "0.13"
+prost-types = "0.13"
+objc2 = "0.5"
+objc2-foundation = "0.2"
+objc2-app-kit = "0.2"
+core-graphics = "0.23"
+core-foundation = "0.9"

@@ -1,0 +1,17 @@
+[package]
+name = "nucleon-runner"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "nucleon-runner"
+path = "src/main.rs"
+
+[dependencies]
+nucleon-core = { path = "../nucleon-core" }
+anyhow = { workspace = true }
+log = { workspace = true }
+env_logger = { workspace = true }
+libc = { workspace = true }
+ctrlc = "3.4"
