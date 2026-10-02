@@ -1,0 +1,19 @@
+# Rust build artifacts
+target/
+**/*.rs.bk
+
+# macOS system files
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Editor artifacts
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Logs and temporary files
+*.log
+*.tmp

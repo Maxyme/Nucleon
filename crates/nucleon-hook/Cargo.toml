@@ -1,0 +1,24 @@
+[package]
+name = "nucleon-hook"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+name = "nucleon"
+
+[dependencies]
+dobby-sys = { path = "../dobby-sys" }
+nucleon-core = { path = "../nucleon-core" }
+anyhow = { workspace = true }
+tempfile = { workspace = true }
+env_logger = { workspace = true }
+ctor = { workspace = true }
+libc = { workspace = true }
+object = { workspace = true }
+memchr = { workspace = true }
+regex = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+log = { workspace = true }
