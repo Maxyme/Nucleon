@@ -9,7 +9,7 @@ crate-type = ["cdylib"]
 name = "nucleon"
 
 [dependencies]
-dobby-sys = { path = "../dobby-sys" }
+frida-gum = { workspace = true }
 nucleon-core = { path = "../nucleon-core" }
 anyhow = { workspace = true }
 tempfile = { workspace = true }
