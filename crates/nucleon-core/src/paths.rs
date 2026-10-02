@@ -45,6 +45,10 @@ pub fn steam_info_plist() -> PathBuf {
     steam_app().join("Contents/Info.plist")
 }
 
+pub fn steam_data_dir() -> PathBuf {
+    home_dir().join("Library/Application Support/Steam")
+}
+
 pub fn steam_compat_tools_dir() -> PathBuf {
     home_dir().join("Library/Application Support/Steam/compatibilitytools.d/nucleon")
 }

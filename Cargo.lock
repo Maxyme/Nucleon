@@ -1078,6 +1078,8 @@ dependencies = [
  "env_logger",
  "log",
  "nucleon-core",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -1109,6 +1111,7 @@ dependencies = [
  "ctor",
  "env_logger",
  "frida-gum",
+ "frida-gum-sys",
  "libc",
  "log",
  "memchr",
@@ -1130,6 +1133,8 @@ dependencies = [
  "libc",
  "log",
  "nucleon-core",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

@@ -10,6 +10,8 @@ name = "nucleon"
 
 [dependencies]
 frida-gum = { workspace = true }
+frida-gum-sys = { workspace = true }
+
 nucleon-core = { path = "../nucleon-core" }
 anyhow = { workspace = true }
 tempfile = { workspace = true }

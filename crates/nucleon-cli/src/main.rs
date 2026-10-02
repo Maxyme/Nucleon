@@ -1,6 +1,9 @@
-use std::fs;
+use std::fs::{self, File};
+use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::path::PathBuf;
 use std::process::Command;
+use std::thread;
+use std::time::Duration;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use nucleon_core::{manifest, paths, runner, steam, validator};
@@ -49,6 +52,21 @@ enum Commands {
     Steam {
         #[command(subcommand)]
         action: SteamAction,
+    },
+    /// View Nucleon hook and runner logs
+    Logs {
+        /// Number of lines to display (default: 50)
+        #[arg(short = 'n', long, default_value_t = 50)]
+        lines: usize,
+        /// Show only hook logs
+        #[arg(long)]
+        hook: bool,
+        /// Show only runner logs
+        #[arg(long)]
+        runner: bool,
+        /// Follow log output continuously
+        #[arg(short, long)]
+        follow: bool,
     },
 }
 
@@ -100,7 +118,6 @@ fn main() -> Result<()> {
             if runner_src.exists() {
                 fs::copy(&runner_src, &runner_bin)?;
             } else {
-                // If built via cargo run, fallback to target directory
                 let target_runner = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/release/nucleon-runner");
                 if target_runner.exists() {
                     fs::copy(&target_runner, &runner_bin)?;
@@ -112,7 +129,13 @@ fn main() -> Result<()> {
                 println!("  ✓ Registered Steam compatibility tool: 'Nucleon (Game Porting Toolkit 4)'");
             }
 
-            // 5. Patch Steam.app if hook dylib is available
+            // 5. Restore any installed games that Steam may have unlinked
+            let restored = steam::sync_library_folders()?;
+            if !restored.is_empty() {
+                println!("  ✓ Restored {} game(s) in Steam library: {:?}", restored.len(), restored);
+            }
+
+            // 6. Patch Steam.app if hook dylib is available
             if let Some(hook_dylib) = find_hook_dylib() {
                 println!("==> Patching Steam client with {}...", hook_dylib.display());
                 steam::patch_steam(&hook_dylib)?;
@@ -121,16 +144,22 @@ fn main() -> Result<()> {
                 println!("  ! Run 'just build' or 'cargo build --release' to compile hook dylib before patching Steam");
             }
 
+            // 7. Patch SteamUI chunks to enable Install button and Compatibility settings
+            if let Ok(n) = steam::patch_steamui_chunks() {
+                if n > 0 {
+                    println!("  ✓ Patched {} SteamUI WebUI chunk(s) (enabled Install button & Steam Play UI)", n);
+                }
+            }
+
             println!("\n==============================================================================");
             println!("  Nucleon setup complete!");
             println!("==============================================================================");
             println!("To use Nucleon in Steam:");
             println!("  1. Restart Steam: pkill steam_osx && open -a /Applications/Steam.app");
-            println!("  2. In your Library, right-click the Windows game -> Properties... -> Compatibility");
-            println!("  3. Check 'Force the use of a specific Steam Play compatibility tool'");
-            println!("  4. Select 'Nucleon (Game Porting Toolkit 4)' from the dropdown");
-            println!("     (Note: Global Steam Settings -> Compatibility is no longer present on macOS;");
-            println!("      configure compatibility directly in each game's Compatibility properties)");
+            println!("  2. The 'Install' button is now enabled for all Windows games in your library.");
+            println!("  3. Clicking 'Install' begins downloading and routes the game via Nucleon.");
+            println!("  4. To configure a specific runner/engine, right-click the game -> Properties -> Compatibility,");
+            println!("     or use Steam Settings -> Compatibility.");
             println!("  5. Or launch directly from terminal: nucleon launch <AppID>");
         }
 
@@ -140,6 +169,19 @@ fn main() -> Result<()> {
             println!("  Steam.app installed:       {}", if steam_installed { "✓ Yes" } else { "✗ No" });
             println!("  Steam patched for Nucleon: {}", if steam::is_steam_patched() { "✓ Yes" } else { "✗ No" });
             println!("  Steam process running:     {}", if steam::is_steam_running() { "● Running" } else { "○ Stopped" });
+
+            let hook_log = paths::support_dir().join("nucleon-hook.log");
+            if hook_log.is_file() {
+                if let Ok(c) = fs::read_to_string(&hook_log) {
+                    if c.contains("All compatibility hooks and instrumentation installed successfully") {
+                        println!("  Hook Injection Status:     ✓ Active (all compat hooks installed)");
+                    } else if let Some(last) = c.lines().rev().find(|l| !l.trim().is_empty()) {
+                        println!("  Hook Injection Status:     ● {}", last.trim());
+                    }
+                }
+            } else {
+                println!("  Hook Injection Status:     ○ No hook log found yet (restart Steam to inject)");
+            }
 
             let runner_cur = paths::current_runner();
             if runner_cur.exists() {
@@ -183,6 +225,20 @@ fn main() -> Result<()> {
 
         Commands::Launch { appid, hud, engine } => {
             println!("==> Launching game AppID {}...", appid);
+
+            // Ensure Steam permissions are clean
+            let _ = steam::fix_steam_permissions();
+
+            // Persist launch overrides so nucleon-runner reads them even with running Steam
+            let override_file = paths::support_dir().join(format!("launch_override_{appid}.json"));
+            let mut ov = serde_json::json!({
+                "hud": hud,
+            });
+            if let Some(ref eng) = engine {
+                ov["engine"] = serde_json::Value::String(eng.clone());
+            }
+            let _ = fs::write(&override_file, ov.to_string());
+
             let mut cmd = Command::new("open");
             cmd.arg(format!("steam://run/{}", appid));
             if hud {
@@ -222,6 +278,68 @@ fn main() -> Result<()> {
                 println!("  ✓ Successfully restored original Steam.app");
             }
         },
+
+        Commands::Logs { lines, hook, runner, follow } => {
+            show_logs(lines, hook, runner, follow)?;
+        }
+    }
+
+    Ok(())
+}
+
+fn show_logs(lines: usize, show_hook: bool, show_runner: bool, follow: bool) -> Result<()> {
+    let hook_path = paths::support_dir().join("nucleon-hook.log");
+    let runner_path = paths::support_dir().join("nucleon-runner.log");
+
+    let targets: Vec<(&str, &PathBuf)> = if show_hook && !show_runner {
+        vec![("Hook Log", &hook_path)]
+    } else if show_runner && !show_hook {
+        vec![("Runner Log", &runner_path)]
+    } else {
+        vec![("Hook Log", &hook_path), ("Runner Log", &runner_path)]
+    };
+
+
+    for (title, path) in &targets {
+        println!("==> {} ({})", title, path.display());
+        if path.is_file() {
+            if let Ok(content) = fs::read_to_string(path) {
+                let all_lines: Vec<&str> = content.lines().collect();
+                let start = if all_lines.len() > lines { all_lines.len() - lines } else { 0 };
+                for line in &all_lines[start..] {
+                    println!("{line}");
+                }
+            }
+        } else {
+            println!("  (no log file exists yet)");
+        }
+        println!();
+    }
+
+    if follow {
+        println!("==> Following logs (press Ctrl+C to exit)...");
+        let active_path = if show_runner { &runner_path } else { &hook_path };
+        if !active_path.exists() {
+            let _ = fs::File::create(active_path);
+        }
+        let mut file = File::open(active_path)?;
+        let mut pos = file.seek(SeekFrom::End(0))?;
+
+        loop {
+            thread::sleep(Duration::from_millis(500));
+            let metadata = fs::metadata(active_path)?;
+            let len = metadata.len();
+            if len > pos {
+                file.seek(SeekFrom::Start(pos))?;
+                let mut reader = BufReader::new(&file);
+                let mut line = String::new();
+                while reader.read_line(&mut line)? > 0 {
+                    print!("{line}");
+                    line.clear();
+                }
+                pos = file.stream_position()?;
+            }
+        }
     }
 
     Ok(())
