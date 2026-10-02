@@ -1,5 +1,6 @@
 use std::ffi::c_void;
-use dobby_sys::hook;
+use frida_gum::interceptor::Interceptor;
+use frida_gum::{Gum, NativePointer};
 use log::info;
 
 pub static mut ORIG_COMPAT_INIT: *mut c_void = std::ptr::null_mut();
@@ -43,15 +44,30 @@ pub unsafe fn force_enable_compat_manager(this: *mut c_void) {
     *flag_ptr = true;
 }
 
-pub fn install_compat_hooks(init_addr: usize, is_enabled_addr: usize) -> Result<(), i32> {
+pub fn install_compat_hooks(init_addr: usize, is_enabled_addr: usize) -> Result<(), anyhow::Error> {
+    let gum = Gum::obtain();
+    let mut interceptor = Interceptor::obtain(&gum);
+
     unsafe {
         if init_addr != 0 {
-            ORIG_COMPAT_INIT = hook(init_addr as *mut c_void, hook_compat_init as *mut c_void)?;
-            info!("Hooked CCompatManager::Init at 0x{:x}", init_addr);
+            let orig = interceptor
+                .replace_fast(
+                    NativePointer(init_addr as *mut c_void),
+                    NativePointer(hook_compat_init as *mut c_void),
+                )
+                .map_err(|e| anyhow::anyhow!("Frida Gum hook compat_init failed: {e:?}"))?;
+            ORIG_COMPAT_INIT = orig.0;
+            info!("Hooked CCompatManager::Init at 0x{:x} via Frida Gum (trampoline at {:p})", init_addr, orig.0);
         }
         if is_enabled_addr != 0 {
-            ORIG_IS_ENABLED = hook(is_enabled_addr as *mut c_void, hook_is_enabled as *mut c_void)?;
-            info!("Hooked CCompatManager::BIsEnabled at 0x{:x}", is_enabled_addr);
+            let orig = interceptor
+                .replace_fast(
+                    NativePointer(is_enabled_addr as *mut c_void),
+                    NativePointer(hook_is_enabled as *mut c_void),
+                )
+                .map_err(|e| anyhow::anyhow!("Frida Gum hook is_enabled failed: {e:?}"))?;
+            ORIG_IS_ENABLED = orig.0;
+            info!("Hooked CCompatManager::BIsEnabled at 0x{:x} via Frida Gum (trampoline at {:p})", is_enabled_addr, orig.0);
         }
     }
     Ok(())

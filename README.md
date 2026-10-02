@@ -12,11 +12,10 @@ Nucleon consolidates all compatibility tooling, process orchestration, binary ho
 
 ```
 crates/
-├── dobby-sys/         # Rust FFI wrapper for Dobby inline hook engine
 ├── overlay-shim/      # Metal / QuartzCore frame presentation & HUD shim
 ├── nucleon-core/      # Shared runtime, prefix config, VDF generator, manifest fetcher, CG validator
 ├── nucleon-runner/    # Native Steam compatibility tool runner & process supervisor
-├── nucleon-hook/      # Universal Mach-O dylib injected into steam_osx (Dobby hooks & WebUI patching)
+├── nucleon-hook/      # Universal Mach-O dylib injected into steam_osx (Frida Gum hooks & WebUI patching)
 └── nucleon-cli/       # Primary user CLI (nucleon setup, status, launch, validate, steam)
 ```
 
@@ -32,7 +31,7 @@ crates/
   - Seamlessly handles Steam verbs (`run`, `waitforexitandrun`, `check-app-compatibility`) and intercepts legacy helper binaries (`iscriptevaluator.exe`).
   - Configures optimal Wine environment parameters (`D3DM_MTL4=1`, `WINEMSYNC=1`, `WINEDLLOVERRIDES`).
 - **`nucleon-hook` (`libnucleon.dylib`)**: Universal Mach-O library injected into `steam_osx`.
-  - Employs Dobby inline hooks to override Steam client compatibility checks (`CCompatManager::Init`, `CCompatManager::BIsEnabled`).
+  - Powered by **Frida Gum** (`frida-gum`) for robust inline function interception on macOS Apple Silicon and x86_64 (`CCompatManager::Init`, `CCompatManager::BIsEnabled`).
   - Interposes file descriptors (`open`/`openat`) to patch Steam CEF WebUI chunks in memory, exposing the native Compatibility settings tab.
   - Built as a universal fat binary (`arm64` + `x86_64`) with ad-hoc code signatures to run under both native ARM64 and Rosetta execution.
 - **`overlay-shim`**: Native Metal translation layer hooking `[CAMetalLayer nextDrawable]` to ensure stutter-free presentation and HUD telemetry.

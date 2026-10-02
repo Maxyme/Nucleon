@@ -1,5 +1,6 @@
 use std::ffi::{CStr, c_char, c_int, c_void};
-use dobby_sys::hook;
+use frida_gum::interceptor::Interceptor;
+use frida_gum::{Gum, NativePointer};
 use log::info;
 
 pub static mut ORIG_POSIX_SPAWN: *mut c_void = std::ptr::null_mut();
@@ -90,14 +91,30 @@ pub unsafe extern "C" fn hook_execve(
     orig(path, argv, clean.as_ptr())
 }
 
-pub fn install_spawn_hooks() -> Result<(), i32> {
+pub fn install_spawn_hooks() -> Result<(), anyhow::Error> {
+    let gum = Gum::obtain();
+    let mut interceptor = Interceptor::obtain(&gum);
+
     unsafe {
         let spawn_ptr = libc::posix_spawn as *mut c_void;
         let execve_ptr = libc::execve as *mut c_void;
 
-        ORIG_POSIX_SPAWN = hook(spawn_ptr, hook_posix_spawn as *mut c_void)?;
-        ORIG_EXECVE = hook(execve_ptr, hook_execve as *mut c_void)?;
-        info!("Installed posix_spawn and execve hooks to sanitize child environments");
+        let orig_spawn = interceptor
+            .replace_fast(
+                NativePointer(spawn_ptr),
+                NativePointer(hook_posix_spawn as *mut c_void),
+            )
+            .map_err(|e| anyhow::anyhow!("Frida Gum hook posix_spawn failed: {e:?}"))?;
+        ORIG_POSIX_SPAWN = orig_spawn.0;
+
+        let orig_exec = interceptor
+            .replace_fast(
+                NativePointer(execve_ptr),
+                NativePointer(hook_execve as *mut c_void),
+            )
+            .map_err(|e| anyhow::anyhow!("Frida Gum hook execve failed: {e:?}"))?;
+        ORIG_EXECVE = orig_exec.0;
+        info!("Installed posix_spawn and execve hooks to sanitize child environments via Frida Gum");
     }
     Ok(())
 }

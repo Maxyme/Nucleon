@@ -30,7 +30,7 @@ fn init() {
 
     // 1. Install spawn environment sanitization
     if let Err(e) = hooks::spawn::install_spawn_hooks() {
-        warn!("Failed to install spawn hooks: rc={}", e);
+        warn!("Failed to install spawn hooks: {e:#}");
     }
 
     // 2. Locate steamclient.dylib in memory
@@ -81,7 +81,7 @@ fn init() {
 
         if init_addr != 0 || is_enabled_addr != 0 {
             if let Err(e) = hooks::compat::install_compat_hooks(init_addr, is_enabled_addr) {
-                warn!("Failed to install compat hooks: rc={}", e);
+                warn!("Failed to install compat hooks: {e:#}");
             }
         }
     });
