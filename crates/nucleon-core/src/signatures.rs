@@ -43,18 +43,24 @@ pub fn find_latest_signature_db(dir: &Path) -> Result<Option<(PathBuf, Signature
 
     let mut latest: Option<(u64, PathBuf, SignatureDb)> = None;
 
-    for entry in fs::read_dir(dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        if path.extension().and_then(|s| s.to_str()) == Some("json") {
-            if let Ok(db) = load_signature_db(&path) {
-                let build = db.steam_build;
-                if latest.as_ref().map(|(b, _, _)| build > *b).unwrap_or(true) {
-                    latest = Some((build, path, db));
+    fn scan_dir(d: &Path, latest: &mut Option<(u64, PathBuf, SignatureDb)>) {
+        if let Ok(entries) = fs::read_dir(d) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    scan_dir(&path, latest);
+                } else if path.extension().and_then(|s| s.to_str()) == Some("json") {
+                    if let Ok(db) = load_signature_db(&path) {
+                        let build = db.steam_build;
+                        if latest.as_ref().map(|(b, _, _)| build > *b).unwrap_or(true) {
+                            *latest = Some((build, path, db));
+                        }
+                    }
                 }
             }
         }
     }
 
+    scan_dir(dir, &mut latest);
     Ok(latest.map(|(_, p, db)| (p, db)))
 }
