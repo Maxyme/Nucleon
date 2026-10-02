@@ -75,6 +75,7 @@ Nucleon features an intelligent **Dual-Engine Router** that inspects target Wind
 
 - macOS 14 (Sonoma) or macOS 15 (Sequoia) on Apple Silicon.
 - [Rust](https://rustup.rs/) (1.80+ recommended).
+- [just](https://github.com/casey/just) command runner (`brew install just`).
 - Xcode Command Line Tools (`xcode-select --install`).
 - Apple Game Porting Toolkit 4 DMG mounted or installed, or Wine-Staging.
 - Steam for macOS installed in `/Applications/Steam.app`.
@@ -88,7 +89,7 @@ To build all release binaries and the universal hook library:
 rustup target add x86_64-apple-darwin
 
 # Build release binaries and universal dylib
-make build
+just build
 ```
 
 ### Initial Setup
@@ -96,7 +97,8 @@ make build
 Run the automated setup command to stage bridge packages, register the Steam compatibility tool, and patch Steam:
 
 ```bash
-./target/release/nucleon setup
+just setup
+# or: ./target/release/nucleon setup
 ```
 
 ### Inspecting Status
