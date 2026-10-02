@@ -63,6 +63,10 @@ pub fn transform_js(content: &str) -> Option<String> {
     }
 }
 
+/// Interposes open() to inspect and transform Steam CEF WebUI chunks in memory.
+///
+/// # Safety
+/// The caller must ensure that `path` is null or points to a valid null-terminated C string.
 pub unsafe extern "C" fn hook_open(path: *const c_char, oflag: c_int, mode: libc::mode_t) -> c_int {
     if path.is_null() {
         return libc::open(path, oflag, mode as c_uint);
@@ -85,6 +89,10 @@ pub unsafe extern "C" fn hook_open(path: *const c_char, oflag: c_int, mode: libc
     libc::open(path, oflag, mode as c_uint)
 }
 
+/// Interposes openat() to inspect and transform Steam CEF WebUI chunks in memory.
+///
+/// # Safety
+/// The caller must ensure that `path` is null or points to a valid null-terminated C string.
 pub unsafe extern "C" fn hook_openat(dirfd: c_int, path: *const c_char, oflag: c_int, mode: libc::mode_t) -> c_int {
     if path.is_null() {
         return libc::openat(dirfd, path, oflag, mode as c_uint);

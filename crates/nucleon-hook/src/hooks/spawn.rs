@@ -28,6 +28,10 @@ unsafe fn sanitize_env(envp: *const *const c_char) -> Vec<*const c_char> {
     clean
 }
 
+/// Interposes posix_spawn to strip DYLD_INSERT_LIBRARIES from child helper processes.
+///
+/// # Safety
+/// The caller must provide valid pointers matching the POSIX posix_spawn specification.
 pub unsafe extern "C" fn hook_posix_spawn(
     pid: *mut libc::pid_t,
     path: *const c_char,
@@ -58,6 +62,10 @@ pub unsafe extern "C" fn hook_posix_spawn(
     orig(pid, path, file_actions, attrp, argv, clean.as_ptr())
 }
 
+/// Interposes execve to sanitize environment variables.
+///
+/// # Safety
+/// The caller must provide valid pointers matching the POSIX execve specification.
 pub unsafe extern "C" fn hook_execve(
     path: *const c_char,
     argv: *const *const c_char,
