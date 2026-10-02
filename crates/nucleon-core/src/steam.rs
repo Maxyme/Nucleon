@@ -44,6 +44,12 @@ pub fn patch_steam(hook_dylib: &Path) -> Result<()> {
             .with_context(|| format!("Failed to backup Info.plist to {}", backup.display()))?;
     }
 
+    // Remove legacy notproton.dylib if present from previous installations
+    let legacy_dylib = paths::steam_app().join("Contents/MacOS/notproton.dylib");
+    if legacy_dylib.exists() {
+        let _ = fs::remove_file(&legacy_dylib);
+    }
+
     // Deploy hook dylib into Steam app bundle MacOS dir
     let dst_dylib = paths::steam_app().join("Contents/MacOS/nucleon.dylib");
     fs::copy(hook_dylib, &dst_dylib)
@@ -115,6 +121,10 @@ pub fn restore_steam() -> Result<()> {
     if dst_dylib.exists() {
         let _ = fs::remove_file(&dst_dylib);
     }
+    let legacy_dylib = paths::steam_app().join("Contents/MacOS/notproton.dylib");
+    if legacy_dylib.exists() {
+        let _ = fs::remove_file(&legacy_dylib);
+    }
 
     sign_binary(&paths::steam_executable())?;
     sign_binary(&paths::steam_app())?;
@@ -147,6 +157,12 @@ pub fn refresh_launch_services(app_path: &Path) -> Result<()> {
 pub fn install_compatibility_tool(runner_bin: &Path) -> Result<()> {
     let tool_dir = paths::steam_compat_tools_dir();
     fs::create_dir_all(&tool_dir)?;
+
+    // Clean up legacy notproton compatibility tool directory if present
+    let legacy_tool_dir = paths::home_dir().join("Library/Application Support/Steam/compatibilitytools.d/notproton");
+    if legacy_tool_dir.exists() {
+        let _ = fs::remove_dir_all(&legacy_tool_dir);
+    }
 
     // Link/copy runner binary into compatibility tool directory
     let dst_runner = tool_dir.join("nucleon-runner");

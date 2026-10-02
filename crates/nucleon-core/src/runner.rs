@@ -188,7 +188,11 @@ pub fn assemble_runner(force: bool) -> Result<PathBuf> {
 
     if !force && target.join("bin/wine").is_file() && target.join("lib/external/D3DMetal.framework").is_dir() {
         let cur = paths::current_runner();
-        let _ = fs::remove_file(&cur);
+        if cur.is_symlink() || cur.is_file() {
+            let _ = fs::remove_file(&cur);
+        } else if cur.is_dir() {
+            let _ = fs::remove_dir_all(&cur);
+        }
         #[cfg(unix)]
         std::os::unix::fs::symlink(&target, &cur)?;
         return Ok(target);
@@ -230,7 +234,11 @@ pub fn assemble_runner(force: bool) -> Result<PathBuf> {
 
     // Link current runner
     let cur = paths::current_runner();
-    let _ = fs::remove_file(&cur);
+    if cur.is_symlink() || cur.is_file() {
+        let _ = fs::remove_file(&cur);
+    } else if cur.is_dir() {
+        let _ = fs::remove_dir_all(&cur);
+    }
     #[cfg(unix)]
     std::os::unix::fs::symlink(&target, &cur)?;
 
