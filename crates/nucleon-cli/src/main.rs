@@ -144,12 +144,12 @@ fn main() -> Result<()> {
                 println!("  ! Run 'just build' or 'cargo build --release' to compile hook dylib before patching Steam");
             }
 
-            // 7. Ensure pristine SteamUI chunks and clear CEF cache
+            // 7. Apply size-preserving SteamUI chunk patches and clear CEF cache
             if let Ok(n) = steam::patch_steamui_chunks() {
                 if n > 0 {
-                    println!("  ✓ Restored {} pristine SteamUI WebUI chunk(s) (in-memory dynamic patching active)", n);
+                    println!("  ✓ Patched {} SteamUI WebUI chunk(s) (size-preserving bypass active)", n);
                 } else {
-                    println!("  ✓ SteamUI WebUI compatibility configured (in-memory dynamic patching active)");
+                    println!("  ✓ SteamUI WebUI compatibility verified (size-preserving bypass active)");
                 }
             }
 
@@ -228,8 +228,11 @@ fn main() -> Result<()> {
         Commands::Launch { appid, hud, engine } => {
             println!("==> Launching game AppID {}...", appid);
 
-            // Ensure Steam permissions are clean
+            // Ensure Steam permissions, manifests, WebUI, and compat mappings are clean
             let _ = steam::fix_steam_permissions();
+            let _ = steam::sanitize_installed_app_manifests();
+            let _ = steam::patch_steamui_chunks();
+            let _ = steam::migrate_compat_mappings();
 
             // Persist launch overrides so nucleon-runner reads them even with running Steam
             let override_file = paths::support_dir().join(format!("launch_override_{appid}.json"));
