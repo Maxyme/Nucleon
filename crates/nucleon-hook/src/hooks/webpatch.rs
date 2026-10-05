@@ -1,6 +1,9 @@
+use std::cell::Cell;
+use std::collections::HashMap;
 use std::ffi::{CStr, c_char, c_int, c_uint, c_void};
 use std::fs;
 use std::io::{Seek, SeekFrom, Write};
+use std::sync::{LazyLock, RwLock};
 use frida_gum::interceptor::Interceptor;
 use frida_gum::NativePointer;
 use log::info;
@@ -37,6 +40,84 @@ pub static INTERPOSE_FOPEN: InterposeTuple = InterposeTuple {
 pub static mut ORIG_OPEN: *mut c_void = std::ptr::null_mut();
 pub static mut ORIG_OPENAT: *mut c_void = std::ptr::null_mut();
 pub static mut ORIG_FOPEN: *mut c_void = std::ptr::null_mut();
+
+thread_local! {
+    static IN_WEBPATCH: Cell<bool> = const { Cell::new(false) };
+}
+
+static CACHED_PATCHES: LazyLock<RwLock<HashMap<String, Option<Vec<u8>>>>> =
+    LazyLock::new(|| RwLock::new(HashMap::new()));
+
+unsafe fn call_orig_open(path: *const c_char, oflag: c_int, mode: libc::mode_t) -> c_int {
+    if !ORIG_OPEN.is_null() {
+        let orig: extern "C" fn(*const c_char, c_int, c_uint) -> c_int = std::mem::transmute(ORIG_OPEN);
+        orig(path, oflag, mode as c_uint)
+    } else {
+        let next = libc::dlsym(libc::RTLD_NEXT, c"open".as_ptr());
+        if !next.is_null() {
+            let orig: extern "C" fn(*const c_char, c_int, c_uint) -> c_int = std::mem::transmute(next);
+            orig(path, oflag, mode as c_uint)
+        } else {
+            libc::open(path, oflag, mode as c_uint)
+        }
+    }
+}
+
+unsafe fn call_orig_openat(dirfd: c_int, path: *const c_char, oflag: c_int, mode: libc::mode_t) -> c_int {
+    if !ORIG_OPENAT.is_null() {
+        let orig: extern "C" fn(c_int, *const c_char, c_int, c_uint) -> c_int = std::mem::transmute(ORIG_OPENAT);
+        orig(dirfd, path, oflag, mode as c_uint)
+    } else {
+        let next = libc::dlsym(libc::RTLD_NEXT, c"openat".as_ptr());
+        if !next.is_null() {
+            let orig: extern "C" fn(c_int, *const c_char, c_int, c_uint) -> c_int = std::mem::transmute(next);
+            orig(dirfd, path, oflag, mode as c_uint)
+        } else {
+            libc::openat(dirfd, path, oflag, mode as c_uint)
+        }
+    }
+}
+
+unsafe fn call_orig_fopen(path: *const c_char, mode: *const c_char) -> *mut libc::FILE {
+    if !ORIG_FOPEN.is_null() {
+        let orig: extern "C" fn(*const c_char, *const c_char) -> *mut libc::FILE = std::mem::transmute(ORIG_FOPEN);
+        orig(path, mode)
+    } else {
+        let next = libc::dlsym(libc::RTLD_NEXT, c"fopen".as_ptr());
+        if !next.is_null() {
+            let orig: extern "C" fn(*const c_char, *const c_char) -> *mut libc::FILE = std::mem::transmute(next);
+            orig(path, mode)
+        } else {
+            libc::fopen(path, mode)
+        }
+    }
+}
+
+fn get_patched_data(path: &str) -> Option<Vec<u8>> {
+    if let Ok(cache) = CACHED_PATCHES.read() {
+        if let Some(cached_opt) = cache.get(path) {
+            return cached_opt.clone();
+        }
+    }
+
+    let content = IN_WEBPATCH.with(|g| {
+        g.set(true);
+        let res = fs::read_to_string(path);
+        g.set(false);
+        res
+    }).ok();
+
+    let patched_bytes = match content {
+        Some(c) => transform_js(&c).map(String::into_bytes),
+        None => None,
+    };
+
+    if let Ok(mut cache) = CACHED_PATCHES.write() {
+        cache.insert(path.to_string(), patched_bytes.clone());
+    }
+
+    patched_bytes
+}
 
 pub fn should_patch_file(path: &str) -> bool {
     path.contains("steamui") && path.contains("/chunk~") && path.ends_with(".js")
@@ -169,29 +250,32 @@ pub fn transform_js(content: &str) -> Option<String> {
 /// The caller must ensure that `path` is null or points to a valid null-terminated C string.
 pub unsafe extern "C" fn hook_open(path: *const c_char, oflag: c_int, mode: libc::mode_t) -> c_int {
     if path.is_null() {
-        return libc::open(path, oflag, mode as c_uint);
+        return call_orig_open(path, oflag, mode);
+    }
+
+    if IN_WEBPATCH.with(|g| g.get()) {
+        return call_orig_open(path, oflag, mode);
     }
 
     let path_str = CStr::from_ptr(path).to_string_lossy();
     if should_patch_file(&path_str) {
-        if let Ok(content) = fs::read_to_string(path_str.as_ref()) {
-            if let Some(patched) = transform_js(&content) {
-                if let Ok(mut temp) = tempfile::tempfile() {
-                    if temp.write_all(patched.as_bytes()).is_ok() && temp.seek(SeekFrom::Start(0)).is_ok() {
-                        use std::os::unix::io::IntoRawFd;
-                        return temp.into_raw_fd();
-                    }
+        if let Some(patched_bytes) = get_patched_data(&path_str) {
+            let temp_res = IN_WEBPATCH.with(|g| {
+                g.set(true);
+                let res = tempfile::tempfile();
+                g.set(false);
+                res
+            });
+            if let Ok(mut temp) = temp_res {
+                if temp.write_all(&patched_bytes).is_ok() && temp.seek(SeekFrom::Start(0)).is_ok() {
+                    use std::os::unix::io::IntoRawFd;
+                    return temp.into_raw_fd();
                 }
             }
         }
     }
 
-    if !ORIG_OPEN.is_null() {
-        let orig: extern "C" fn(*const c_char, c_int, c_uint) -> c_int = std::mem::transmute(ORIG_OPEN);
-        orig(path, oflag, mode as c_uint)
-    } else {
-        libc::open(path, oflag, mode as c_uint)
-    }
+    call_orig_open(path, oflag, mode)
 }
 
 /// Interposes openat() to inspect and transform Steam CEF WebUI chunks in memory.
@@ -200,29 +284,32 @@ pub unsafe extern "C" fn hook_open(path: *const c_char, oflag: c_int, mode: libc
 /// The caller must ensure that `path` is null or points to a valid null-terminated C string.
 pub unsafe extern "C" fn hook_openat(dirfd: c_int, path: *const c_char, oflag: c_int, mode: libc::mode_t) -> c_int {
     if path.is_null() {
-        return libc::openat(dirfd, path, oflag, mode as c_uint);
+        return call_orig_openat(dirfd, path, oflag, mode);
+    }
+
+    if IN_WEBPATCH.with(|g| g.get()) {
+        return call_orig_openat(dirfd, path, oflag, mode);
     }
 
     let path_str = CStr::from_ptr(path).to_string_lossy();
     if should_patch_file(&path_str) {
-        if let Ok(content) = fs::read_to_string(path_str.as_ref()) {
-            if let Some(patched) = transform_js(&content) {
-                if let Ok(mut temp) = tempfile::tempfile() {
-                    if temp.write_all(patched.as_bytes()).is_ok() && temp.seek(SeekFrom::Start(0)).is_ok() {
-                        use std::os::unix::io::IntoRawFd;
-                        return temp.into_raw_fd();
-                    }
+        if let Some(patched_bytes) = get_patched_data(&path_str) {
+            let temp_res = IN_WEBPATCH.with(|g| {
+                g.set(true);
+                let res = tempfile::tempfile();
+                g.set(false);
+                res
+            });
+            if let Ok(mut temp) = temp_res {
+                if temp.write_all(&patched_bytes).is_ok() && temp.seek(SeekFrom::Start(0)).is_ok() {
+                    use std::os::unix::io::IntoRawFd;
+                    return temp.into_raw_fd();
                 }
             }
         }
     }
 
-    if !ORIG_OPENAT.is_null() {
-        let orig: extern "C" fn(c_int, *const c_char, c_int, c_uint) -> c_int = std::mem::transmute(ORIG_OPENAT);
-        orig(dirfd, path, oflag, mode as c_uint)
-    } else {
-        libc::openat(dirfd, path, oflag, mode as c_uint)
-    }
+    call_orig_openat(dirfd, path, oflag, mode)
 }
 
 /// Interposes fopen() to inspect and transform Steam CEF WebUI chunks in memory.
@@ -231,34 +318,37 @@ pub unsafe extern "C" fn hook_openat(dirfd: c_int, path: *const c_char, oflag: c
 /// The caller must ensure that `path` and `mode` are valid null-terminated C strings.
 pub unsafe extern "C" fn hook_fopen(path: *const c_char, mode: *const c_char) -> *mut libc::FILE {
     if path.is_null() || mode.is_null() {
-        return libc::fopen(path, mode);
+        return call_orig_fopen(path, mode);
+    }
+
+    if IN_WEBPATCH.with(|g| g.get()) {
+        return call_orig_fopen(path, mode);
     }
 
     let path_str = CStr::from_ptr(path).to_string_lossy();
     if should_patch_file(&path_str) {
-        if let Ok(content) = fs::read_to_string(path_str.as_ref()) {
-            if let Some(patched) = transform_js(&content) {
-                if let Ok(mut temp) = tempfile::tempfile() {
-                    if temp.write_all(patched.as_bytes()).is_ok() && temp.seek(SeekFrom::Start(0)).is_ok() {
-                        use std::os::unix::io::IntoRawFd;
-                        let fd = temp.into_raw_fd();
-                        let fp = libc::fdopen(fd, mode);
-                        if !fp.is_null() {
-                            return fp;
-                        }
-                        libc::close(fd);
+        if let Some(patched_bytes) = get_patched_data(&path_str) {
+            let temp_res = IN_WEBPATCH.with(|g| {
+                g.set(true);
+                let res = tempfile::tempfile();
+                g.set(false);
+                res
+            });
+            if let Ok(mut temp) = temp_res {
+                if temp.write_all(&patched_bytes).is_ok() && temp.seek(SeekFrom::Start(0)).is_ok() {
+                    use std::os::unix::io::IntoRawFd;
+                    let fd = temp.into_raw_fd();
+                    let fp = libc::fdopen(fd, mode);
+                    if !fp.is_null() {
+                        return fp;
                     }
+                    libc::close(fd);
                 }
             }
         }
     }
 
-    if !ORIG_FOPEN.is_null() {
-        let orig: extern "C" fn(*const c_char, *const c_char) -> *mut libc::FILE = std::mem::transmute(ORIG_FOPEN);
-        orig(path, mode)
-    } else {
-        libc::fopen(path, mode)
-    }
+    call_orig_fopen(path, mode)
 }
 
 pub fn install_webpatch_hooks() -> Result<(), anyhow::Error> {

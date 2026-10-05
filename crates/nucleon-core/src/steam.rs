@@ -432,164 +432,37 @@ pub fn clear_cef_cache() -> Result<()> {
     Ok(())
 }
 
-/// Patches Steam CEF WebUI chunks on disk to enable the Install button for Windows games
-/// on macOS and expose the Steam Play / Compatibility settings tab.
+/// Ensures Steam CEF WebUI chunks on disk remain in their pristine Valve state
+/// to prevent Steam's bootstrapper from detecting size mismatches and forcing update loops.
+/// WebUI compatibility patches are injected dynamically in memory via nucleon.dylib (webpatch).
 pub fn patch_steamui_chunks() -> Result<usize> {
     let steamui_dir = paths::steam_data_dir().join("Steam.AppBundle/Steam/Contents/MacOS/steamui");
     if !steamui_dir.is_dir() {
         return Ok(0);
     }
 
-    let mut patched_count = 0;
-    for entry in fs::read_dir(&steamui_dir)?.flatten() {
-        let path = entry.path();
-        let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
-        if name.starts_with("chunk~") && name.ends_with(".js") {
-            let bak = path.with_extension("js.bak");
-            // If backup exists, always read from pristine backup so updated patch sets apply cleanly
-            let content = if bak.exists() {
-                match fs::read_to_string(&bak) {
-                    Ok(c) => c,
-                    Err(_) => match fs::read_to_string(&path) {
-                        Ok(c) => c,
-                        Err(_) => continue,
-                    },
+    let mut restored_count = 0;
+    if let Ok(entries) = fs::read_dir(&steamui_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+            if name.starts_with("chunk~") && name.ends_with(".js.bak") {
+                let js_path = path.with_extension(""); // strips .bak -> .js
+                if let Ok(pristine) = fs::read_to_string(&path) {
+                    let _ = fs::write(&js_path, pristine);
                 }
-            } else {
-                match fs::read_to_string(&path) {
-                    Ok(c) => {
-                        let _ = fs::copy(&path, &bak);
-                        c
-                    }
-                    Err(_) => continue,
-                }
-            };
-
-            let mut modified = content.clone();
-            let mut changed = false;
-
-            // 1. Enable Install button in PlayBar (_e returns s.UM "Install" for u.Ul.KR)
-            let target_install_btn = "case u.Ul.jw:return s.UM;";
-            let repl_install_btn = "case u.Ul.jw:case u.Ul.KR:return s.UM;";
-            if modified.contains(target_install_btn) {
-                modified = modified.replace(target_install_btn, repl_install_btn);
-                changed = true;
-            }
-
-            // 2. Do not treat InvalidPlatform as permanently unavailable
-            let target_perm_unavail = "case D.Ul.pd:case D.Ul.K5:case D.Ul.KR:case D.Ul.Mu:return!0";
-            let repl_perm_unavail = "case D.Ul.pd:case D.Ul.K5:case D.Ul.Mu:return!0";
-            if modified.contains(target_perm_unavail) {
-                modified = modified.replace(target_perm_unavail, repl_perm_unavail);
-                changed = true;
-            }
-
-            // 3. Make is_available_on_current_platform return true
-            let target_avail_platform = "get is_available_on_current_platform(){return this.local_per_client_data&&this.local_per_client_data.is_available_on_current_platform}";
-            let repl_avail_platform = "get is_available_on_current_platform(){return true}";
-            if modified.contains(target_avail_platform) {
-                modified = modified.replace(target_avail_platform, repl_avail_platform);
-                changed = true;
-            }
-
-            // 4. Force is_invalid_os_type to false -> Enables Install button in Steam UI
-            let target_invalid_os = "get is_invalid_os_type(){return this.most_available_per_client_data.is_invalid_os_type}";
-            let repl_invalid_os = "get is_invalid_os_type(){return false}";
-            if modified.contains(target_invalid_os) {
-                modified = modified.replace(target_invalid_os, repl_invalid_os);
-                changed = true;
-            }
-
-            // 5. Replace InvalidPlatform status text with "Playable via Steam Play (Nucleon)"
-            let target_status_text = r##"(0,W.we)("#DisplayStatus_InvalidPlatform")"##;
-            let repl_status_text = r##""Playable via Steam Play (Nucleon)""##;
-            if modified.contains(target_status_text) {
-                modified = modified.replace(target_status_text, repl_status_text);
-                changed = true;
-            }
-
-            // 6. Do not exclude InvalidPlatform games from collection platform filter
-            let target_filter = "r&&e.BIsPerClientDataLocal(r)&&r.display_status==ze.Ul.KR&&(t=!1)";
-            let repl_filter = "false&&(t=!1)";
-            if modified.contains(target_filter) {
-                modified = modified.replace(target_filter, repl_filter);
-                changed = true;
-            }
-
-            // 7. Enable Compatibility tab in Game Properties
-            let target_compat = r##"(0,f.CI)()&&o.push({title:(0,A.we)("#AppProperties_CompatibilityPage")"##;
-            let repl_compat = r##"true&&o.push({title:(0,A.we)("#AppProperties_CompatibilityPage")"##;
-            if modified.contains(target_compat) {
-                modified = modified.replace(target_compat, repl_compat);
-                changed = true;
-            }
-
-            // 8. Always enable Compatibility tool force checkbox in Game Properties
-            let target_compat_enabled = "()=>u.rV.settings.bCompatEnabled";
-            let repl_compat_enabled = "()=>true";
-            if modified.contains(target_compat_enabled) {
-                modified = modified.replace(target_compat_enabled, repl_compat_enabled);
-                changed = true;
-            }
-
-            // 9. Compatibility tab in Steam Settings
-            let target_settings = "Compatibility:{visible:t&&(0,f.CI)()&&!(0,f.rf)()";
-            let repl_settings = "Compatibility:{visible:t&&true&&!(0,f.rf)()";
-            if modified.contains(target_settings) {
-                modified = modified.replace(target_settings, repl_settings);
-                changed = true;
-            }
-
-            // 10. Fallback global compat tool in Steam Settings dropdown
-            let target_tool_default = "const t=(0,c.t0)().strCompatTool,";
-            let repl_tool_default = r#"const t=(0,c.t0)().strCompatTool||(A.length?A[0].data:"nucleon"),"#;
-            if modified.contains(target_tool_default) {
-                modified = modified.replace(target_tool_default, repl_tool_default);
-                changed = true;
-            }
-
-            // 11. SteamPlay section in Steam Settings
-            if modified.contains("function ue(e){return(0,T.CI)()?") {
-                modified = modified.replace("function ue(e){return(0,T.CI)()?", "function ue(e){return true?");
-                changed = true;
-            }
-
-            // 12. Add Non-Steam EXE filter
-            let target_exe = r##"("#AddNonSteam_Filter_Exe_MacOS"),rFilePatterns:["*.app"]"##;
-            let repl_exe = r##"("#AddNonSteam_Filter_Exe_MacOS"),rFilePatterns:["*.app","*.exe"]"##;
-            if modified.contains(target_exe) {
-                modified = modified.replace(target_exe, repl_exe);
-                changed = true;
-            }
-
-            // 13. Allow .exe in image / executable filters
-            let target_img = r##"{strFileTypeName:"Image Files (*.tga,*.png)",rFilePatterns:["*.tga","*.png"]}"##;
-            let repl_img = r##"{strFileTypeName:"Image Files (*.tga,*.png,*.exe)",rFilePatterns:["*.tga","*.png","*.exe"]}"##;
-            if modified.contains(target_img) {
-                modified = modified.replace(target_img, repl_img);
-                changed = true;
-            }
-
-            // 14. Game list entry notice for Windows apps
-            let target_entry = r##"("#GameList_Entry_Invalid_OSType2")"##;
-            let repl_entry = r##""Enable Nucleon under Properties > Compatibility to install and run the Windows version.""##;
-            if modified.contains(target_entry) {
-                modified = modified.replace(target_entry, repl_entry);
-                changed = true;
-            }
-
-            if changed {
-                let perms = fs::metadata(&path)?.permissions();
-                let _ = fs::write(&path, modified);
-                let _ = fs::set_permissions(&path, perms);
-                log::info!("Patched SteamUI chunk on disk: {}", path.display());
-                patched_count += 1;
+                let _ = fs::remove_file(&path);
+                restored_count += 1;
             }
         }
     }
 
+    if restored_count > 0 {
+        log::info!("Restored {} pristine SteamUI WebUI chunk(s) on disk (in-memory dynamic patching active)", restored_count);
+    }
+
     let _ = clear_cef_cache();
-    Ok(patched_count)
+    Ok(restored_count)
 }
 
 

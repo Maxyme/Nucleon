@@ -144,10 +144,12 @@ fn main() -> Result<()> {
                 println!("  ! Run 'just build' or 'cargo build --release' to compile hook dylib before patching Steam");
             }
 
-            // 7. Patch SteamUI chunks to enable Install button and Compatibility settings
+            // 7. Ensure pristine SteamUI chunks and clear CEF cache
             if let Ok(n) = steam::patch_steamui_chunks() {
                 if n > 0 {
-                    println!("  ✓ Patched {} SteamUI WebUI chunk(s) (enabled Install button & Steam Play UI)", n);
+                    println!("  ✓ Restored {} pristine SteamUI WebUI chunk(s) (in-memory dynamic patching active)", n);
+                } else {
+                    println!("  ✓ SteamUI WebUI compatibility configured (in-memory dynamic patching active)");
                 }
             }
 
