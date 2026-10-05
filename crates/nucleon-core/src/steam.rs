@@ -221,6 +221,15 @@ pub fn migrate_compat_mappings() -> Result<()> {
                 log::info!("Injected global wildcard '0' -> 'nucleon' mapping into config.vdf");
             }
         }
+    } else if let Some(steam_idx) = updated.find("\"Steam\"") {
+        let after_steam = &updated[steam_idx..];
+        if let Some(brace_rel) = after_steam.find('{') {
+            let brace_idx = steam_idx + brace_rel;
+            let compat_block = "\n\t\t\t\t\"CompatToolMapping\"\n\t\t\t\t{\n\t\t\t\t\t\"0\"\n\t\t\t\t\t{\n\t\t\t\t\t\t\"name\"\t\t\"nucleon\"\n\t\t\t\t\t\t\"config\"\t\t\"\"\n\t\t\t\t\t\t\"priority\"\t\t\"250\"\n\t\t\t\t\t}\n\t\t\t\t}";
+            updated.insert_str(brace_idx + 1, compat_block);
+            modified = true;
+            log::info!("Created CompatToolMapping with global wildcard '0' -> 'nucleon' mapping in config.vdf");
+        }
     }
 
     if modified {
