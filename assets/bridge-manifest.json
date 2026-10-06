@@ -1,0 +1,62 @@
+[
+  {
+    "source": "steamclient64.dll",
+    "destination": "steamclient64.dll",
+    "required": true
+  },
+  {
+    "source": "tier0_s64.dll",
+    "destination": "tier0_s64.dll",
+    "required": true
+  },
+  {
+    "source": "vstdlib_s64.dll",
+    "destination": "vstdlib_s64.dll",
+    "required": false
+  },
+  {
+    "source": "tier0_s.dll",
+    "destination": "tier0_s.dll",
+    "required": false
+  },
+  {
+    "source": "vstdlib_s.dll",
+    "destination": "vstdlib_s.dll",
+    "required": false
+  },
+  {
+    "source": "legacycompat/steamclient.dll",
+    "destination": "steamclient.dll",
+    "required": false
+  },
+  {
+    "source": "legacycompat/Steam.dll",
+    "destination": "legacycompat/Steam.dll",
+    "required": false
+  },
+  {
+    "source": "legacycompat/SteamService.exe",
+    "destination": "legacycompat/SteamService.exe",
+    "required": false
+  },
+  {
+    "source": "legacycompat/iscriptevaluator.exe",
+    "destination": "legacycompat/iscriptevaluator.exe",
+    "required": false
+  },
+  {
+    "source": "legacycompat/steamclient.dll",
+    "destination": "legacycompat/steamclient.dll",
+    "required": false
+  },
+  {
+    "source": "steamclient64.dll",
+    "destination": "legacycompat/steamclient64.dll",
+    "required": false
+  },
+  {
+    "source": "GameOverlayRenderer64.dll",
+    "destination": "legacycompat/GameOverlayRenderer64.dll",
+    "required": false
+  }
+]

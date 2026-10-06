@@ -115,7 +115,7 @@ pub fn find_best_signature_db(
     Ok(dbs.last().cloned())
 }
 
-pub const DEFAULT_ARM64_TEMPLATE_JSON: &str = include_str!("../assets/template.json");
+pub const DEFAULT_ARM64_TEMPLATE_JSON: &str = include_str!("../../../assets/template.json");
 
 /// Extracts the ARM64 slice from a Mach-O binary (supporting Fat/Universal and single-arch binaries).
 pub fn extract_arm64_slice(dylib_bytes: &[u8]) -> Result<&[u8]> {

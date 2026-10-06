@@ -40,6 +40,9 @@ enum Commands {
         /// Select desired Wine runtime flavor or path for Steam (e.g. staging, crossover)
         #[arg(long)]
         wine: Option<String>,
+        /// Point to extracted Valve client bridge directory (or set NUCLEON_BRIDGE_PATH)
+        #[arg(long)]
+        bridge_path: Option<PathBuf>,
     },
     /// Inspect status of Nucleon, Steam patches, runner, and prefix
     Status,
@@ -183,6 +186,7 @@ fn main() -> Result<()> {
             fetch_vkd3d,
             vkd3d_path,
             wine,
+            bridge_path,
         } => {
             println!("==> Setting up Nucleon with Wine and GPTK 4...");
             paths::ensure_dirs()?;
@@ -262,7 +266,7 @@ fn main() -> Result<()> {
 
             // 3. Stage Valve bridge packages
             println!("==> Staging Valve bridge packages...");
-            manifest::fetch_and_stage_valve_packages()?;
+            manifest::fetch_and_stage_valve_packages(bridge_path.as_deref())?;
             println!("  ✓ Valve client bridge libraries staged");
 
             // 4. Register compatibility tool

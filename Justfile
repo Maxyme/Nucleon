@@ -29,6 +29,11 @@ build-hook:
 setup: build
     ./{{target_dir}}/nucleon setup
 
+# Stage Valve bridge from an extracted directory: just stage-bridge /path/to/extracted
+stage-bridge path: build
+    ./{{target_dir}}/nucleon setup --bridge-path {{path}}
+
+
 # Inspect Nucleon runtime status
 status:
     ./{{target_dir}}/nucleon status

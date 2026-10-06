@@ -105,6 +105,41 @@ just setup
 # or: ./target/release/nucleon setup
 ```
 
+### Staging Valve Client Bridge Libraries
+
+Nucleon requires Valve's Windows client bridge libraries (`steamclient64.dll`, `tier0_s64.dll`, etc.) to bridge communication between Windows games in Wine and the native macOS Steam client.
+
+Rather than bloating the codebase with in-process decompression crates, C build tools, or complex download scripts, Nucleon uses a declarative asset manifest ([`assets/bridge-manifest.json`](assets/bridge-manifest.json)) that maps expected DLLs to their final destinations.
+
+#### Step-by-Step Staging
+
+1. **Download official client packages**:
+   ```bash
+   curl -fSL -O https://client-update.akamai.steamstatic.com/bins_misc_ubuntu12.zip.3f92810725ee673827371a0470cd4f8c7ea8cfae
+   curl -fSL -O https://client-update.akamai.steamstatic.com/bins_win64.zip.36f5d9202e79ab2aa3e3c5902e84bbd799d31fc0
+   ```
+
+2. **Unpack into a temporary directory**:
+   ```bash
+   ditto -x -k bins_misc_ubuntu12.zip.* /tmp/valve-bridge/
+   ditto -x -k bins_win64.zip.* /tmp/valve-bridge/
+   ```
+
+3. **Stage into Nucleon**:
+   Pass the path to Nucleon, which scans the extracted files against `bridge-manifest.json` and copies all required and optional libraries into `~/Library/Application Support/nucleon/bridge/`:
+   ```bash
+   # Via just:
+   just stage-bridge /tmp/valve-bridge
+
+   # Or via CLI flag:
+   ./target/release/nucleon setup --bridge-path /tmp/valve-bridge
+
+   # Or via environment variable:
+   export NUCLEON_BRIDGE_PATH=/tmp/valve-bridge
+   just setup
+   ```
+
+
 ### Configuring Games in Steam
 
 > [!NOTE]
