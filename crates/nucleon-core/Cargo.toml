@@ -21,6 +21,7 @@ core-foundation = { workspace = true }
 overlay-shim = { path = "../overlay-shim" }
 libc = { workspace = true }
 plist = { workspace = true }
+keyvalues-parser = { workspace = true }
 
 [lints]
 workspace = true

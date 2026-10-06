@@ -1217,119 +1217,151 @@ pub fn patch_steamui_chunks() -> Result<usize> {
 }
 
 /// Parses and updates CompatToolMapping inside `config.vdf` content safely using balanced brace counting.
+/// Helper to recursively find a nested object by key in a KeyValues AST.
+fn find_child_obj_mut<'a>(
+    obj: &'a mut keyvalues_parser::Obj<'static>,
+    target_key: &str,
+) -> Option<&'a mut keyvalues_parser::Obj<'static>> {
+    if obj.contains_key(target_key) {
+        let values = obj.get_mut(target_key)?;
+        for val in values {
+            if let keyvalues_parser::Value::Obj(child_obj) = val {
+                return Some(child_obj);
+            }
+        }
+        return None;
+    }
+
+    for values in obj.values_mut() {
+        for val in values {
+            if let keyvalues_parser::Value::Obj(child_obj) = val {
+                if let Some(found) = find_child_obj_mut(child_obj, target_key) {
+                    return Some(found);
+                }
+            }
+        }
+    }
+
+    None
+}
+
 /// Ensures all target Windows AppIDs are mapped to "nucleon", while stripping native AppIDs and wildcard "0".
 pub fn update_compat_tool_mapping(
     content: &str,
     target_appids: &[String],
     native_appids: &std::collections::HashSet<String>,
 ) -> (String, bool) {
-    let mut updated = content.to_string();
+    let Ok(partial) = keyvalues_parser::parse(content) else {
+        return (content.to_string(), false);
+    };
+    let mut vdf = keyvalues_parser::Vdf::from(partial).into_owned();
     let mut modified = false;
 
-    let entry_re = regex::Regex::new(r#""(\d+)"\s*\{([^}]*)\}"#).unwrap();
-    let name_re = regex::Regex::new(r#""name"\s+"([^"]*)""#).unwrap();
-    let config_re = regex::Regex::new(r#""config"\s+"([^"]*)""#).unwrap();
-    let priority_re = regex::Regex::new(r#""priority"\s+"([^"]*)""#).unwrap();
+    // Locate CompatToolMapping or create it under Steam
+    let compat_obj = if vdf.key == "CompatToolMapping" {
+        vdf.value.get_mut_obj()
+    } else if let keyvalues_parser::Value::Obj(ref mut root_obj) = vdf.value {
+        if let Some(found) = find_child_obj_mut(root_obj, "CompatToolMapping") {
+            Some(found)
+        } else {
+            // CompatToolMapping not found, check if Steam exists
+            let steam_obj = if vdf.key == "Steam" {
+                vdf.value.get_mut_obj()
+            } else {
+                find_child_obj_mut(root_obj, "Steam")
+            };
 
-    let mut entries_map: std::collections::BTreeMap<String, (String, String, String)> =
-        std::collections::BTreeMap::new();
-
-    if let Some(compat_idx) = updated.find("\"CompatToolMapping\"") {
-        if let Some(open_rel) = updated[compat_idx..].find('{') {
-            let open_pos = compat_idx + open_rel;
-            let mut depth = 1;
-            let mut close_pos = None;
-            for (i, c) in updated[open_pos + 1..].char_indices() {
-                if c == '{' {
-                    depth += 1;
-                } else if c == '}' {
-                    depth -= 1;
-                    if depth == 0 {
-                        close_pos = Some(open_pos + 1 + i);
-                        break;
-                    }
-                }
+            if let Some(steam) = steam_obj {
+                steam.insert(
+                    std::borrow::Cow::Borrowed("CompatToolMapping"),
+                    vec![keyvalues_parser::Value::Obj(keyvalues_parser::Obj::new())],
+                );
+                modified = true;
+                steam
+                    .get_mut("CompatToolMapping")
+                    .and_then(|v| v.first_mut())
+                    .and_then(|v| v.get_mut_obj())
+            } else {
+                None
             }
+        }
+    } else {
+        None
+    };
 
-            if let Some(close_pos) = close_pos {
-                let inner = &updated[open_pos + 1..close_pos];
-                for cap in entry_re.captures_iter(inner) {
-                    let appid = cap[1].to_string();
-                    let body = &cap[2];
-                    if native_appids.contains(&appid) {
-                        modified = true;
-                        continue;
-                    }
-                    let mut name = name_re
-                        .captures(body)
-                        .and_then(|c| c.get(1))
-                        .map(|m| m.as_str().to_string())
-                        .unwrap_or_else(|| "nucleon".to_string());
-                    if !runner::is_kosmickrisp_installed() && name == "nucleon-kosmickrisp" {
-                        name = "nucleon".to_string();
-                        modified = true;
-                    }
-                    let config = config_re
-                        .captures(body)
-                        .and_then(|c| c.get(1))
-                        .map(|m| m.as_str().to_string())
-                        .unwrap_or_default();
-                    let priority = priority_re
-                        .captures(body)
-                        .and_then(|c| c.get(1))
-                        .map(|m| m.as_str().to_string())
-                        .unwrap_or_else(|| "250".to_string());
-                    entries_map.insert(appid, (name, config, priority));
-                }
+    let Some(compat) = compat_obj else {
+        return (content.to_string(), false);
+    };
 
-                for target_id in target_appids {
-                    if !entries_map.contains_key(target_id) {
-                        entries_map.insert(
-                            target_id.clone(),
-                            ("nucleon".to_string(), "".to_string(), "250".to_string()),
+    // 1. Remove native AppIDs and wildcard "0"
+    let to_remove: Vec<String> = compat
+        .keys()
+        .filter(|appid| native_appids.contains(appid.as_ref()))
+        .map(|k| k.to_string())
+        .collect();
+    for appid in to_remove {
+        compat.remove(appid.as_str());
+        modified = true;
+    }
+
+    // 2. Revert KosmicKrisp if not installed
+    if !runner::is_kosmickrisp_installed() {
+        for values in compat.values_mut() {
+            for val in values {
+                if let keyvalues_parser::Value::Obj(entry_obj) = val {
+                    let is_kosmickrisp = entry_obj
+                        .get("name")
+                        .and_then(|v| v.first())
+                        .and_then(|v| v.get_str())
+                        .map(|s| s == "nucleon-kosmickrisp")
+                        .unwrap_or(false);
+                    if is_kosmickrisp {
+                        entry_obj.insert(
+                            std::borrow::Cow::Borrowed("name"),
+                            vec![keyvalues_parser::Value::Str(std::borrow::Cow::Borrowed(
+                                "nucleon",
+                            ))],
                         );
                         modified = true;
                     }
                 }
-
-                let mut new_inner = String::new();
-                for (id, (name, config, priority)) in &entries_map {
-                    new_inner.push_str(&format!(
-                        "\n\t\t\t\t\t\"{id}\"\n\t\t\t\t\t{{\n\t\t\t\t\t\t\"name\"\t\t\"{name}\"\n\t\t\t\t\t\t\"config\"\t\t\"{config}\"\n\t\t\t\t\t\t\"priority\"\t\t\"{priority}\"\n\t\t\t\t\t}}"
-                    ));
-                }
-                new_inner.push_str("\n\t\t\t\t");
-
-                if new_inner != inner {
-                    updated.replace_range(open_pos + 1..close_pos, &new_inner);
-                    modified = true;
-                }
             }
         }
-    } else if let Some(steam_idx) = updated.find("\"Steam\"") {
-        if let Some(open_rel) = updated[steam_idx..].find('{') {
-            let open_pos = steam_idx + open_rel;
-            for target_id in target_appids {
-                entries_map.insert(
-                    target_id.clone(),
-                    ("nucleon".to_string(), "".to_string(), "250".to_string()),
-                );
-            }
-            let mut entries_str = String::new();
-            for (id, (name, config, priority)) in &entries_map {
-                entries_str.push_str(&format!(
-                    "\n\t\t\t\t\t\"{id}\"\n\t\t\t\t\t{{\n\t\t\t\t\t\t\"name\"\t\t\"{name}\"\n\t\t\t\t\t\t\"config\"\t\t\"{config}\"\n\t\t\t\t\t\t\"priority\"\t\t\"{priority}\"\n\t\t\t\t\t}}"
-                ));
-            }
-            entries_str.push_str("\n\t\t\t\t");
-            let compat_block =
-                format!("\n\t\t\t\t\"CompatToolMapping\"\n\t\t\t\t{{{entries_str}}}");
-            updated.insert_str(open_pos + 1, &compat_block);
+    }
+
+    // 3. Ensure target AppIDs are mapped
+    for target_id in target_appids {
+        if !compat.contains_key(target_id.as_str()) {
+            let mut entry_obj = keyvalues_parser::Obj::new();
+            entry_obj.insert(
+                std::borrow::Cow::Borrowed("name"),
+                vec![keyvalues_parser::Value::Str(std::borrow::Cow::Borrowed(
+                    "nucleon",
+                ))],
+            );
+            entry_obj.insert(
+                std::borrow::Cow::Borrowed("config"),
+                vec![keyvalues_parser::Value::Str(std::borrow::Cow::Borrowed(""))],
+            );
+            entry_obj.insert(
+                std::borrow::Cow::Borrowed("priority"),
+                vec![keyvalues_parser::Value::Str(std::borrow::Cow::Borrowed(
+                    "250",
+                ))],
+            );
+            compat.insert(
+                std::borrow::Cow::Owned(target_id.clone()),
+                vec![keyvalues_parser::Value::Obj(entry_obj)],
+            );
             modified = true;
         }
     }
 
-    (updated, modified)
+    if modified {
+        (vdf.to_string(), true)
+    } else {
+        (content.to_string(), false)
+    }
 }
 
 #[cfg(test)]
@@ -1393,7 +1425,9 @@ mod tests {
         // Windows apps 228980 and 690790 must be mapped to nucleon
         assert!(result.contains(r#""228980""#));
         assert!(result.contains(r#""690790""#));
-        assert!(result.contains(r#""name"		"nucleon""#));
+        assert!(
+            result.contains("\"name\"\t\"nucleon\"") || result.contains(r#""name"		"nucleon""#)
+        );
 
         // Verify balance of braces
         let mut depth = 0;
@@ -1458,7 +1492,9 @@ mod tests {
 
         // Windows game DiRT Rally 2.0 (690790) must be preserved
         assert!(result.contains(r#""690790""#));
-        assert!(result.contains(r#""name"		"nucleon""#));
+        assert!(
+            result.contains("\"name\"\t\"nucleon\"") || result.contains(r#""name"		"nucleon""#)
+        );
     }
 
     #[test]
@@ -1529,7 +1565,10 @@ mod tests {
 
         let (result, _) = update_compat_tool_mapping(sample, &target_appids, &native_appids);
         std::env::remove_var("KOSMICKRISP_FORCE");
-        assert!(result.contains(r#""name"		"nucleon-kosmickrisp""#));
+        assert!(
+            result.contains("\"name\"\t\"nucleon-kosmickrisp\"")
+                || result.contains(r#""name"		"nucleon-kosmickrisp""#)
+        );
     }
 
     #[test]
@@ -1564,7 +1603,9 @@ mod tests {
         let (result, modified) = update_compat_tool_mapping(sample, &target_appids, &native_appids);
         std::env::remove_var("KOSMICKRISP_DISABLE");
         assert!(modified);
-        assert!(result.contains(r#""name"		"nucleon""#));
+        assert!(
+            result.contains("\"name\"\t\"nucleon\"") || result.contains(r#""name"		"nucleon""#)
+        );
         assert!(!result.contains("nucleon-kosmickrisp"));
     }
 
@@ -1669,5 +1710,19 @@ mod tests {
 
         assert!(!is_plist_dyld_injected(&nonexistent, "nucleon.dylib"));
         assert!(!remove_plist_dyld_insert(&nonexistent).unwrap());
+    }
+
+    #[test]
+    fn test_parse_real_config_vdf() {
+        let path = paths::home_dir().join("Library/Application Support/Steam/config/config.vdf");
+        if path.exists() {
+            let content = fs::read_to_string(&path).unwrap();
+            let parsed = keyvalues_parser::parse(&content);
+            assert!(
+                parsed.is_ok(),
+                "Failed to parse real config.vdf: {:?}",
+                parsed.err()
+            );
+        }
     }
 }
