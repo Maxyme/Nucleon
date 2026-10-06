@@ -20,3 +20,6 @@ core-graphics = { workspace = true }
 core-foundation = { workspace = true }
 overlay-shim = { path = "../overlay-shim" }
 libc = { workspace = true }
+
+[lints]
+workspace = true

@@ -1,0 +1,82 @@
+{
+  "schema_version": 3,
+  "profile_version": 1,
+  "arch": "arm64",
+  "platform": "macos",
+  "steam_build": 0,
+  "steam_build_date": "",
+  "signatures": [
+    {
+      "name": "CCompatManager::Init",
+      "aob_hex": "?? ?? ?? D1 FC 6F 0B A9 FA 67 0C A9 F8 5F 0D A9 F6 57 0E A9 F4 4F 0F A9 FD 7B 10 A9 FD 03 04 91 F4 03 01 AA F3 03 00 AA ?? ?? ?? ?? 08 A9 40 F9 08 01 40 F9 ?? ?? ?? ?? 29 01 28 91 A8 03 1A F8 09 00 00 F9 F9 03 00 AA 3F 8F 00 F8 1F 08 00 F9",
+      "match_offset": 0,
+      "anchor": {
+        "kind": "string",
+        "value": "STEAM_COMPAT_TOOL_MAPPINGS"
+      }
+    },
+    {
+      "name": "CCompatManager::BIsCompatibilityToolEnabled",
+      "aob_hex": "FF 03 01 D1 F4 4F 02 A9 FD 7B 03 A9 ?? ?? ?? ?? F4 03 01 AA F3 03 00 AA E1 17 00 B9 ?? ?? ?? ?? 08 0D 40 F9 08 01 40 B9 E8 00 00 34 ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? 81 00 80 52 ?? ?? ?? ??",
+      "match_offset": 0,
+      "anchor": {
+        "kind": "string",
+        "value": "CCompatManager::BIsCompatibilityToolEnabled"
+      }
+    },
+    {
+      "name": "CCompatManager::GetOSListOverrideForApp.oslist_gate",
+      "aob_hex": "C0 FC FF B4 B3 00 00 B4 A8 3A 40 F9 1F 01 00 F1 C8 02 88 9A 68 02 00 F9 33 00 80 52",
+      "match_offset": 0,
+      "anchor": {
+        "kind": "insn_pair_in_fn",
+        "value": "pTool != nullptr"
+      }
+    },
+    {
+      "name": "CCompatManager::FindToolForTargetApp",
+      "aob_hex": "FF 83 01 D1 F6 57 03 A9 F4 4F 04 A9 FD 7B 05 A9 FD 43 01 91 A1 C3 1D B8 08 C0 5E 39 1F 05 00 71 ?? ?? ?? ?? F4 03 01 AA F3 03 00 AA ?? ?? ?? ?? 08 21 38 91 15 01 40 F9 16 07 82 52 A0 02 16 8B ?? ?? ?? ?? A0 02 16 8B E1 03 14 AA ?? ?? ?? ??",
+      "match_offset": 0,
+      "anchor": {
+        "kind": "string",
+        "value": "FindToolForTargetApp matched with itself - ignoring: %u %s"
+      }
+    },
+    {
+      "name": "CCompatManager::YldRegisterTool",
+      "aob_hex": "88 3E 40 F9 1F 01 00 F1 56 03 88 9A E0 03 16 AA ?? ?? ?? 94 E8 03 00 AA 89 22 40 F9 3F 01 00 F1 40 03 89 9A 88 00 00 34",
+      "match_offset": -168,
+      "anchor": {
+        "kind": "string",
+        "value": "CCompatManager::YldRegisterTool"
+      }
+    },
+    {
+      "name": "CCompatManager::InternalSpecifyCompatTool",
+      "aob_hex": "FF 43 02 D1 FA 67 04 A9 F8 5F 05 A9 F6 57 06 A9 F4 4F 07 A9 FD 7B 08 A9 FD 03 02 91 F5 03 04 AA F6 03 03 AA",
+      "match_offset": 0,
+      "anchor": {
+        "kind": "string",
+        "value": "CCompatManager::InternalSpecifyCompatTool"
+      }
+    },
+    {
+      "name": "CCompatManager::FindMapping",
+      "aob_hex": "FF 83 00 D1 FD 7B 01 A9 FD 43 00 91 A1 C3 1F B8 E1 00 00 34 00 60 0E 91 A1 13 00 D1",
+      "match_offset": 0,
+      "anchor": {
+        "kind": "string",
+        "value": "FindMapping: Invalid unAppID == k_nAppIdAll, use GetWildcardMapping()."
+      }
+    },
+    {
+      "name": "CCompatManager::GetWildcardMapping",
+      "aob_hex": "FF 43 01 D1 F6 57 02 A9 F4 4F 03 A9 FD 7B 04 A9 FD 03 01 91 E1 1F 00 B9 21 05 00 34",
+      "match_offset": 0,
+      "anchor": {
+        "kind": "string",
+        "value": "GetWildcardMapping: Invalid unAppID k_nAppIdAll"
+      }
+    }
+  ]
+}

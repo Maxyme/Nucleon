@@ -1,13 +1,11 @@
-use std::collections::HashSet;
-use core_graphics::display::kCGNullWindowID;
-use core_graphics::window::{
-    kCGWindowListOptionAll, CGWindowListCopyWindowInfo,
-};
-use core_foundation::base::TCFType;
-use core_foundation::string::CFString;
-use core_foundation::number::CFNumber;
-use core_foundation::dictionary::CFDictionary;
 use anyhow::{bail, Result};
+use core_foundation::base::TCFType;
+use core_foundation::dictionary::CFDictionary;
+use core_foundation::number::CFNumber;
+use core_foundation::string::CFString;
+use core_graphics::display::kCGNullWindowID;
+use core_graphics::window::{kCGWindowListOptionAll, CGWindowListCopyWindowInfo};
+use std::collections::HashSet;
 
 #[derive(Debug, Clone)]
 pub struct PresentedWindow {
@@ -24,25 +22,21 @@ pub struct PresentedWindow {
 pub fn check_window_presentation(target_pids: Option<&[i32]>) -> Result<Vec<PresentedWindow>> {
     let pid_set: Option<HashSet<i32>> = target_pids.map(|p| p.iter().copied().collect());
 
-    let window_list = unsafe {
-        CGWindowListCopyWindowInfo(kCGWindowListOptionAll, kCGNullWindowID)
-    };
+    let window_list =
+        unsafe { CGWindowListCopyWindowInfo(kCGWindowListOptionAll, kCGNullWindowID) };
 
     if window_list.is_null() {
         bail!("Failed to query WindowServer window list via CoreGraphics");
     }
 
-    let array: core_foundation::array::CFArray = unsafe {
-        core_foundation::array::CFArray::wrap_under_create_rule(window_list)
-    };
+    let array: core_foundation::array::CFArray =
+        unsafe { core_foundation::array::CFArray::wrap_under_create_rule(window_list) };
 
     let mut presented = Vec::new();
 
     for i in 0..array.len() {
         let dict_ptr = array.get(i).unwrap();
-        let dict: CFDictionary = unsafe {
-            CFDictionary::wrap_under_get_rule(*dict_ptr as *mut _)
-        };
+        let dict: CFDictionary = unsafe { CFDictionary::wrap_under_get_rule(*dict_ptr as *mut _) };
 
         let get_string = |key: &str| -> String {
             let cf_key = CFString::new(key);

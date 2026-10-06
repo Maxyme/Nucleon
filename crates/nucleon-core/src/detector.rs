@@ -1,11 +1,39 @@
+use object::Object;
 use std::fs;
 use std::path::Path;
-use object::Object;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TargetEngine {
     Gptk,
+    KosmicKrisp,
     WineStaging,
+}
+
+impl TargetEngine {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            TargetEngine::Gptk => "gptk",
+            TargetEngine::KosmicKrisp => "kosmickrisp",
+            TargetEngine::WineStaging => "staging",
+        }
+    }
+
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            TargetEngine::Gptk => "Apple Game Porting Toolkit 4 (D3DMetal, Metal 4, MSync)",
+            TargetEngine::KosmicKrisp => "Mesa KosmicKrisp (Vulkan 1.4 on Metal 4, NIR compiler)",
+            TargetEngine::WineStaging => "Wine-Staging (WineD3D / Legacy Stack)",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.to_lowercase().trim() {
+            "gptk" | "apple" | "d3dmetal" => Some(TargetEngine::Gptk),
+            "kosmickrisp" | "kk" | "kosmic" | "mesa" | "vulkan" => Some(TargetEngine::KosmicKrisp),
+            "staging" | "wine-staging" | "wine" => Some(TargetEngine::WineStaging),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -71,8 +99,17 @@ pub fn inspect_pe_bytes(data: &[u8]) -> Result<GraphicsApiInfo, anyhow::Error> {
     if imported_dlls.is_empty() {
         let text = String::from_utf8_lossy(data).to_lowercase();
         for dll in &[
-            "d3d12.dll", "d3d11.dll", "dxgi.dll", "d3d10.dll", "d3d10_1.dll",
-            "d3d10core.dll", "d3d9.dll", "d3d8.dll", "ddraw.dll", "vulkan-1.dll", "opengl32.dll"
+            "d3d12.dll",
+            "d3d11.dll",
+            "dxgi.dll",
+            "d3d10.dll",
+            "d3d10_1.dll",
+            "d3d10core.dll",
+            "d3d9.dll",
+            "d3d8.dll",
+            "ddraw.dll",
+            "vulkan-1.dll",
+            "opengl32.dll",
         ] {
             if text.contains(dll) {
                 imported_dlls.push(dll.to_string());
@@ -118,7 +155,10 @@ pub fn inspect_pe_bytes(data: &[u8]) -> Result<GraphicsApiInfo, anyhow::Error> {
     }
 
     // 5. DirectX 9 or older
-    if let Some(dll) = imported_dlls.iter().find(|d| d.contains("d3d9") || d.contains("d3d8") || d.contains("ddraw")) {
+    if let Some(dll) = imported_dlls
+        .iter()
+        .find(|d| d.contains("d3d9") || d.contains("d3d8") || d.contains("ddraw"))
+    {
         return Ok(GraphicsApiInfo {
             api: GraphicsApi::DirectX9OrOlder,
             engine: TargetEngine::WineStaging,
@@ -126,11 +166,11 @@ pub fn inspect_pe_bytes(data: &[u8]) -> Result<GraphicsApiInfo, anyhow::Error> {
         });
     }
 
-    // 6. Vulkan
+    // 6. Vulkan -> Route to Mesa KosmicKrisp (Vulkan 1.4 conformant driver on Metal 4)
     if imported_dlls.iter().any(|d| d.contains("vulkan-1")) {
         return Ok(GraphicsApiInfo {
             api: GraphicsApi::Vulkan,
-            engine: TargetEngine::WineStaging,
+            engine: TargetEngine::KosmicKrisp,
             detected_dll: Some("vulkan-1.dll".into()),
         });
     }
@@ -162,8 +202,15 @@ fn scan_directory_for_graphics_api(dir: &Path, depth: u32) -> Option<GraphicsApi
             if p.is_file() {
                 if let Some(ext) = p.extension().and_then(|e| e.to_str()) {
                     if ext.eq_ignore_ascii_case("exe") {
-                        let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("").to_lowercase();
-                        if !name.contains("unins") && !name.contains("crash") && !name.contains("report") {
+                        let name = p
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .unwrap_or("")
+                            .to_lowercase();
+                        if !name.contains("unins")
+                            && !name.contains("crash")
+                            && !name.contains("report")
+                        {
                             if let Ok(info) = inspect_pe_file(&p) {
                                 if info.api != GraphicsApi::Unknown {
                                     return Some(info);
@@ -173,7 +220,11 @@ fn scan_directory_for_graphics_api(dir: &Path, depth: u32) -> Option<GraphicsApi
                     }
                 }
             } else if p.is_dir() {
-                let dname = p.file_name().and_then(|n| n.to_str()).unwrap_or("").to_lowercase();
+                let dname = p
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("")
+                    .to_lowercase();
                 if dname == "binaries" || dname == "bin" || dname == "x64" || dname == "win64" {
                     if let Some(info) = scan_directory_for_graphics_api(&p, depth - 1) {
                         return Some(info);
@@ -216,11 +267,42 @@ mod tests {
         assert_eq!(info.api, GraphicsApi::DirectX9OrOlder);
         assert_eq!(info.engine, TargetEngine::WineStaging);
 
+        // Simulated binary containing vulkan-1.dll
+        let bytes_vk = b"MZ\x90\x00...SomeHeader...vulkan-1.dll\x00kernel32.dll\x00";
+        let info = inspect_pe_bytes(bytes_vk).unwrap();
+        assert_eq!(info.api, GraphicsApi::Vulkan);
+        assert_eq!(info.engine, TargetEngine::KosmicKrisp);
+
         // Simulated binary containing opengl32.dll
         let bytes_gl = b"MZ\x90\x00...SomeHeader...opengl32.dll\x00gdi32.dll\x00";
         let info = inspect_pe_bytes(bytes_gl).unwrap();
         assert_eq!(info.api, GraphicsApi::OpenGL);
         assert_eq!(info.engine, TargetEngine::WineStaging);
     }
-}
 
+    #[test]
+    fn test_target_engine_parsing() {
+        assert_eq!(TargetEngine::parse("gptk"), Some(TargetEngine::Gptk));
+        assert_eq!(TargetEngine::parse("apple"), Some(TargetEngine::Gptk));
+        assert_eq!(
+            TargetEngine::parse("kosmickrisp"),
+            Some(TargetEngine::KosmicKrisp)
+        );
+        assert_eq!(TargetEngine::parse("kk"), Some(TargetEngine::KosmicKrisp));
+        assert_eq!(
+            TargetEngine::parse("kosmic"),
+            Some(TargetEngine::KosmicKrisp)
+        );
+        assert_eq!(TargetEngine::parse("mesa"), Some(TargetEngine::KosmicKrisp));
+        assert_eq!(
+            TargetEngine::parse("vulkan"),
+            Some(TargetEngine::KosmicKrisp)
+        );
+        assert_eq!(
+            TargetEngine::parse("staging"),
+            Some(TargetEngine::WineStaging)
+        );
+        assert_eq!(TargetEngine::parse("wine"), Some(TargetEngine::WineStaging));
+        assert_eq!(TargetEngine::parse("unknown_engine"), None);
+    }
+}

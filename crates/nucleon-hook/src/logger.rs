@@ -1,8 +1,8 @@
+use log::{Level, Metadata, Record, SetLoggerError};
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Mutex;
-use log::{Level, Metadata, Record, SetLoggerError};
 
 struct HookFileLogger {
     file: Mutex<Option<File>>,

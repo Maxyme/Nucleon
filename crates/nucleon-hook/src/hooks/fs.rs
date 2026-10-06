@@ -1,7 +1,7 @@
-use std::ffi::{c_char, c_int, c_void};
 use frida_gum::interceptor::Interceptor;
 use frida_gum::NativePointer;
 use log::info;
+use std::ffi::{c_char, c_int, c_void};
 
 pub static mut ORIG_CHMOD: *mut c_void = std::ptr::null_mut();
 pub static mut ORIG_FCHMOD: *mut c_void = std::ptr::null_mut();

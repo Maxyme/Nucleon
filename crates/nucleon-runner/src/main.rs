@@ -1,3 +1,6 @@
+use anyhow::{bail, Result};
+use nucleon_core::{paths, prefix, runner};
+use serde::Deserialize;
 use std::env;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -7,9 +10,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
-use anyhow::{bail, Result};
-use nucleon_core::{paths, prefix, runner};
-use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
 struct LaunchOverride {
@@ -61,9 +61,7 @@ fn activate_frontmost_window() {
 
 fn is_wine_game_process_running(_runner_dir: &Path) -> bool {
     // Check processes for running .exe binaries excluding wineserver/services
-    let output = Command::new("ps")
-        .args(["-ww", "-eo", "pid,args"])
-        .output();
+    let output = Command::new("ps").args(["-ww", "-eo", "pid,args"]).output();
 
     if let Ok(out) = output {
         let text = String::from_utf8_lossy(&out.stdout);
@@ -149,11 +147,7 @@ fn main() -> Result<()> {
         .as_ref()
         .and_then(|o| o.engine.clone())
         .or_else(|| env::var("NUCLEON_ENGINE").ok())
-        .and_then(|s| match s.to_lowercase().as_str() {
-            "gptk" | "apple" => Some(nucleon_core::detector::TargetEngine::Gptk),
-            "staging" | "wine-staging" | "wine" => Some(nucleon_core::detector::TargetEngine::WineStaging),
-            _ => None,
-        });
+        .and_then(|s| nucleon_core::detector::TargetEngine::parse(&s));
 
     let (engine, api_desc) = if let Some(eng) = requested_engine {
         log_runner(&format!("Engine manually overridden -> {:?}", eng));
@@ -164,7 +158,10 @@ fn main() -> Result<()> {
             "Auto-detected graphics API: {:?} (found: {:?}) -> routing to {:?}",
             detection.api, detection.detected_dll, detection.engine
         ));
-        (detection.engine, format!("{:?} (DLL: {:?})", detection.api, detection.detected_dll))
+        (
+            detection.engine,
+            format!("{:?} (DLL: {:?})", detection.api, detection.detected_dll),
+        )
     };
 
     log_runner(&format!(
@@ -175,7 +172,30 @@ fn main() -> Result<()> {
     ));
 
     // Resolve optimal runner for selected engine
-    let (runner_dir, active_engine) = runner::resolve_runner_for_engine(engine)?;
+    let (mut runner_dir, active_engine) = runner::resolve_runner_for_engine(engine)?;
+
+    // If running under WineStaging, allow per-game NUCLEON_WINE launch override or NUCLEON_WINE_PATH
+    if active_engine == nucleon_core::detector::TargetEngine::WineStaging {
+        if let Ok(wine_override) = env::var("NUCLEON_WINE") {
+            if let Some(resolved) =
+                nucleon_core::wine::resolve_wine_runtime_by_query(&wine_override)
+            {
+                log_runner(&format!(
+                    "Per-game NUCLEON_WINE override matched: '{}' -> {}",
+                    resolved.name,
+                    resolved.root.display()
+                ));
+                runner_dir = resolved.root;
+            } else {
+                log_runner(&format!("Per-game NUCLEON_WINE='{}' could not be resolved, falling back to default runner", wine_override));
+            }
+        } else if let Ok(custom_wine) = env::var("NUCLEON_WINE_PATH") {
+            let wp = PathBuf::from(custom_wine);
+            if wp.join("bin/wine").is_file() {
+                runner_dir = wp;
+            }
+        }
+    }
 
     let wine_bin = runner_dir.join("bin/wine");
     let wineserver_bin = runner_dir.join("bin/wineserver");
@@ -192,16 +212,40 @@ fn main() -> Result<()> {
     // Initialize prefix, registry, and bridge DLLs
     prefix::ensure_prefix(&pfx_dir, &runner_dir)?;
 
+    // Stage VKD3D-Proton for KosmicKrisp Direct3D 12 translation
+    if active_engine == nucleon_core::detector::TargetEngine::KosmicKrisp {
+        if let Some(vkd3d) = nucleon_core::vkd3d::find_vkd3d_proton() {
+            if let Ok(staged) =
+                nucleon_core::vkd3d::stage_vkd3d_proton_into_prefix(&vkd3d, &pfx_dir)
+            {
+                log_runner(&format!(
+                    "VKD3D-Proton active ({} DLL(s) from {}): Direct3D 12 -> Vulkan 1.4 -> KosmicKrisp",
+                    staged,
+                    vkd3d.root.display()
+                ));
+            }
+        } else {
+            log_runner(
+                "VKD3D-Proton not installed. Point to an extracted path via 'nucleon vkd3d set-path <DIR>' or set VKD3D_PROTON_PATH to enable Direct3D 12 on KosmicKrisp."
+            );
+        }
+    }
+
     let enable_hud = launch_override
         .as_ref()
         .and_then(|o| o.hud)
-        .unwrap_or_else(|| env::var("MTL_HUD_ENABLED").map(|v| v == "1").unwrap_or(false));
+        .unwrap_or_else(|| {
+            env::var("MTL_HUD_ENABLED")
+                .map(|v| v == "1")
+                .unwrap_or(false)
+        });
 
     if enable_hud {
         log_runner("Metal Performance HUD enabled");
     }
 
-    let exec_env = runner::build_execution_env_for_engine(&runner_dir, &pfx_dir, active_engine, enable_hud);
+    let exec_env =
+        runner::build_execution_env_for_engine(&runner_dir, &pfx_dir, active_engine, enable_hud);
 
     // Setup signal handler for prompt SIGTERM exit
     let term_flag = Arc::new(AtomicBool::new(false));
@@ -209,7 +253,8 @@ fn main() -> Result<()> {
 
     ctrlc::set_handler(move || {
         term_clone.store(true, Ordering::SeqCst);
-    }).ok();
+    })
+    .ok();
 
     log_runner(&format!("Launching game with Wine: {:?}", game_args));
 

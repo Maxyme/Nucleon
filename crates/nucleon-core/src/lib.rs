@@ -1,10 +1,12 @@
-pub mod paths;
-pub mod steam;
-pub mod runner;
-pub mod prefix;
-pub mod vdf;
-pub mod signatures;
-pub mod validator;
-pub mod manifest;
 pub mod detector;
-
+pub mod guard;
+pub mod manifest;
+pub mod paths;
+pub mod prefix;
+pub mod runner;
+pub mod signatures;
+pub mod steam;
+pub mod validator;
+pub mod vdf;
+pub mod vkd3d;
+pub mod wine;

@@ -8,3 +8,6 @@ license.workspace = true
 cc = "1.0"
 
 [dependencies]
+
+[lints]
+workspace = true

@@ -1,9 +1,9 @@
+use crate::paths;
+use crate::runner;
+use anyhow::Result;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
-use anyhow::Result;
-use crate::paths;
-use crate::runner;
 
 pub fn ensure_prefix(prefix_dir: &Path, runner_dir: &Path) -> Result<()> {
     fs::create_dir_all(prefix_dir)?;
@@ -28,6 +28,10 @@ pub fn ensure_prefix(prefix_dir: &Path, runner_dir: &Path) -> Result<()> {
 
     configure_prefix_registry(prefix_dir, runner_dir)?;
     stage_bridge_libraries(prefix_dir)?;
+
+    if let Some(vkd3d) = crate::vkd3d::find_vkd3d_proton() {
+        let _ = crate::vkd3d::stage_vkd3d_proton_into_prefix(&vkd3d, prefix_dir);
+    }
 
     Ok(())
 }
@@ -73,51 +77,59 @@ pub fn stage_bridge_libraries(prefix_dir: &Path) -> Result<()> {
         fs::create_dir_all(d)?;
     }
 
-    // Also check notproton bridge directory if nucleon bridge doesn't have all files yet
-    let np_bridge = paths::home_dir().join("Library/Application Support/notproton/bridge");
+    if !bridge.is_dir() {
+        return Ok(());
+    }
 
-    let source_dirs = [bridge, np_bridge];
-
-    for src_dir in &source_dirs {
-        if !src_dir.is_dir() {
-            continue;
-        }
-
-        // Copy files to steam_dir and system directories
-        let files_to_stage = [
-            ("steamclient64.dll", vec![steam_dir.join("steamclient64.dll"), sys32.join("steamclient64.dll")]),
-            ("steamclient.dll", vec![steam_dir.join("steamclient.dll"), syswow64.join("steamclient.dll")]),
-            ("tier0_s64.dll", vec![steam_dir.join("tier0_s64.dll")]),
-            ("tier0_s.dll", vec![steam_dir.join("tier0_s.dll")]),
-            ("vstdlib_s64.dll", vec![steam_dir.join("vstdlib_s64.dll")]),
-            ("vstdlib_s.dll", vec![steam_dir.join("vstdlib_s.dll")]),
-            ("steam.exe", vec![steam_dir.join("steam.exe")]),
-            ("lsteamclient.dll", vec![
+    // Copy files to steam_dir and system directories
+    let files_to_stage = [
+        (
+            "steamclient64.dll",
+            vec![
+                steam_dir.join("steamclient64.dll"),
+                sys32.join("steamclient64.dll"),
+            ],
+        ),
+        (
+            "steamclient.dll",
+            vec![
+                steam_dir.join("steamclient.dll"),
+                syswow64.join("steamclient.dll"),
+            ],
+        ),
+        ("tier0_s64.dll", vec![steam_dir.join("tier0_s64.dll")]),
+        ("tier0_s.dll", vec![steam_dir.join("tier0_s.dll")]),
+        ("vstdlib_s64.dll", vec![steam_dir.join("vstdlib_s64.dll")]),
+        ("vstdlib_s.dll", vec![steam_dir.join("vstdlib_s.dll")]),
+        ("steam.exe", vec![steam_dir.join("steam.exe")]),
+        (
+            "lsteamclient.dll",
+            vec![
                 steam_dir.join("lsteamclient.dll"),
                 sys32.join("lsteamclient.dll"),
                 syswow64.join("lsteamclient.dll"),
-            ]),
-            ("lsteamclient.so", vec![steam_dir.join("lsteamclient.so")]),
-        ];
+            ],
+        ),
+        ("lsteamclient.so", vec![steam_dir.join("lsteamclient.so")]),
+    ];
 
-        for (name, targets) in files_to_stage {
-            let src_file = src_dir.join(name);
-            if src_file.is_file() {
-                for tgt in targets {
-                    let _ = fs::copy(&src_file, &tgt);
-                }
+    for (name, targets) in files_to_stage {
+        let src_file = bridge.join(name);
+        if src_file.is_file() {
+            for tgt in targets {
+                let _ = fs::copy(&src_file, &tgt);
             }
         }
+    }
 
-        // Copy legacycompat files
-        let legacy_src = src_dir.join("legacycompat");
-        if legacy_src.is_dir() {
-            if let Ok(entries) = fs::read_dir(&legacy_src) {
-                for e in entries.flatten() {
-                    let p = e.path();
-                    if p.is_file() {
-                        let _ = fs::copy(&p, legacy_dir.join(e.file_name()));
-                    }
+    // Copy legacycompat files
+    let legacy_src = bridge.join("legacycompat");
+    if legacy_src.is_dir() {
+        if let Ok(entries) = fs::read_dir(&legacy_src) {
+            for e in entries.flatten() {
+                let p = e.path();
+                if p.is_file() {
+                    let _ = fs::copy(&p, legacy_dir.join(e.file_name()));
                 }
             }
         }

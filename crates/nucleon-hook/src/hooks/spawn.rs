@@ -1,6 +1,6 @@
-use std::ffi::{CStr, c_char, c_int, c_void};
 use frida_gum::interceptor::Interceptor;
 use frida_gum::NativePointer;
+use std::ffi::{c_char, c_int, c_void, CStr};
 
 use log::info;
 
@@ -108,11 +108,8 @@ pub unsafe extern "C" fn hook_execve(
     argv: *const *const c_char,
     envp: *const *const c_char,
 ) -> c_int {
-    let orig: extern "C" fn(
-        *const c_char,
-        *const *const c_char,
-        *const *const c_char,
-    ) -> c_int = std::mem::transmute(ORIG_EXECVE);
+    let orig: extern "C" fn(*const c_char, *const *const c_char, *const *const c_char) -> c_int =
+        std::mem::transmute(ORIG_EXECVE);
 
     if path.is_null() {
         return orig(path, argv, envp);
@@ -130,7 +127,6 @@ pub unsafe extern "C" fn hook_execve(
 pub fn install_spawn_hooks() -> Result<(), anyhow::Error> {
     let gum = crate::get_gum();
     let mut interceptor = Interceptor::obtain(gum);
-
 
     unsafe {
         let spawn_ptr = libc::posix_spawn as *mut c_void;
@@ -164,4 +160,3 @@ pub fn install_spawn_hooks() -> Result<(), anyhow::Error> {
     }
     Ok(())
 }
-

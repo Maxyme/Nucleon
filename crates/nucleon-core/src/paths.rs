@@ -1,7 +1,7 @@
+use anyhow::{Context, Result};
 use std::env;
 use std::fs;
 use std::path::PathBuf;
-use anyhow::{Context, Result};
 
 pub fn home_dir() -> PathBuf {
     env::var_os("HOME")
@@ -53,18 +53,59 @@ pub fn steam_compat_tools_dir() -> PathBuf {
     home_dir().join("Library/Application Support/Steam/compatibilitytools.d/nucleon")
 }
 
+pub fn steam_kosmickrisp_compat_tools_dir() -> PathBuf {
+    home_dir().join("Library/Application Support/Steam/compatibilitytools.d/nucleon-kosmickrisp")
+}
+
 pub fn steam_compat_data_dir() -> PathBuf {
     home_dir().join("Library/Application Support/Steam/steamapps/compatdata")
+}
+
+pub fn kosmickrisp_dir() -> PathBuf {
+    support_dir().join("drivers/kosmickrisp")
+}
+
+pub fn kosmickrisp_shim_dir() -> PathBuf {
+    support_dir().join("shims/kosmickrisp")
+}
+
+pub fn vkd3d_proton_dir() -> PathBuf {
+    support_dir().join("vkd3d-proton")
+}
+
+pub fn launch_agents_dir() -> PathBuf {
+    home_dir().join("Library/LaunchAgents")
+}
+
+pub fn steam_guard_plist() -> PathBuf {
+    launch_agents_dir().join("com.nucleon.steam-guard.plist")
+}
+
+pub fn guard_bin() -> PathBuf {
+    support_dir().join("bin/nucleon")
+}
+
+pub fn guard_log() -> PathBuf {
+    support_dir().join("guard.log")
+}
+
+pub fn guard_state() -> PathBuf {
+    support_dir().join("guard-state.json")
 }
 
 pub fn ensure_dirs() -> Result<()> {
     for d in &[
         support_dir(),
+        support_dir().join("bin"),
         runners_dir(),
         bridge_dir(),
         downloads_dir(),
         signatures_dir(),
         steam_compat_tools_dir(),
+        kosmickrisp_dir(),
+        kosmickrisp_shim_dir(),
+        vkd3d_proton_dir(),
+        launch_agents_dir(),
     ] {
         fs::create_dir_all(d)
             .with_context(|| format!("Failed to create directory: {}", d.display()))?;

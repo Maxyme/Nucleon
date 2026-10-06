@@ -34,3 +34,13 @@ core-foundation = "0.9"
 frida-gum = { version = "0.17", default-features = false, features = ["auto-download"] }
 frida-gum-sys = { version = "0.17", default-features = false }
 
+[workspace.lints.rust]
+unsafe_code = "allow"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+correctness = { level = "deny", priority = -1 }
+suspicious = { level = "warn", priority = -1 }
+complexity = { level = "warn", priority = -1 }
+perf = { level = "warn", priority = -1 }
+style = { level = "warn", priority = -1 }

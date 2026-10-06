@@ -12,20 +12,29 @@ fn main() {
 
     let status = Command::new("clang")
         .args([
-            "-arch", "arm64",
-            "-arch", "x86_64",
+            "-arch",
+            "arm64",
+            "-arch",
+            "x86_64",
             "-mmacosx-version-min=15.0",
             "-dynamiclib",
             "-O2",
             "-Wall",
             "-Wextra",
-            "-install_name", "@rpath/overlay-shim.dylib",
-            "-framework", "Metal",
-            "-framework", "QuartzCore",
-            "-framework", "CoreGraphics",
-            "-framework", "CoreFoundation",
-            "-framework", "AppKit",
-            "-o", target_dylib.to_str().unwrap(),
+            "-install_name",
+            "@rpath/overlay-shim.dylib",
+            "-framework",
+            "Metal",
+            "-framework",
+            "QuartzCore",
+            "-framework",
+            "CoreGraphics",
+            "-framework",
+            "CoreFoundation",
+            "-framework",
+            "AppKit",
+            "-o",
+            target_dylib.to_str().unwrap(),
             src.to_str().unwrap(),
         ])
         .status();
@@ -35,19 +44,27 @@ fn main() {
             // Fallback to native arch only if universal fails
             let fallback_status = Command::new("clang")
                 .args([
-                    "-arch", "arm64",
+                    "-arch",
+                    "arm64",
                     "-mmacosx-version-min=15.0",
                     "-dynamiclib",
                     "-O2",
                     "-Wall",
                     "-Wextra",
-                    "-install_name", "@rpath/overlay-shim.dylib",
-                    "-framework", "Metal",
-                    "-framework", "QuartzCore",
-                    "-framework", "CoreGraphics",
-                    "-framework", "CoreFoundation",
-                    "-framework", "AppKit",
-                    "-o", target_dylib.to_str().unwrap(),
+                    "-install_name",
+                    "@rpath/overlay-shim.dylib",
+                    "-framework",
+                    "Metal",
+                    "-framework",
+                    "QuartzCore",
+                    "-framework",
+                    "CoreGraphics",
+                    "-framework",
+                    "CoreFoundation",
+                    "-framework",
+                    "AppKit",
+                    "-o",
+                    target_dylib.to_str().unwrap(),
                     src.to_str().unwrap(),
                 ])
                 .status();
@@ -61,5 +78,8 @@ fn main() {
         .status();
 
     // Export output dylib path
-    println!("cargo:rustc-env=OVERLAY_SHIM_DYLIB={}", target_dylib.display());
+    println!(
+        "cargo:rustc-env=OVERLAY_SHIM_DYLIB={}",
+        target_dylib.display()
+    );
 }
