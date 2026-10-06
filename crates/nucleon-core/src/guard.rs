@@ -167,37 +167,10 @@ pub fn heal_steam(hook_source: Option<&Path>) -> Result<HealResult> {
     // 2. Check Info.plist DYLD_INSERT_LIBRARIES injection
     if !steam::is_steam_patched() {
         let plist = paths::steam_info_plist();
-        let plist_str = plist.to_str().unwrap();
-        let dylib_str = hook_dest.to_str().unwrap();
-
-        let _ = Command::new("/usr/libexec/PlistBuddy")
-            .args(["-c", "Add :LSEnvironment dict", plist_str])
-            .output();
-
-        let set_res = Command::new("/usr/libexec/PlistBuddy")
-            .args([
-                "-c",
-                &format!("Set :LSEnvironment:DYLD_INSERT_LIBRARIES {}", dylib_str),
-                plist_str,
-            ])
-            .output();
-
-        if let Ok(res) = set_res {
-            if !res.status.success() {
-                let _ = Command::new("/usr/libexec/PlistBuddy")
-                    .args([
-                        "-c",
-                        &format!(
-                            "Add :LSEnvironment:DYLD_INSERT_LIBRARIES string {}",
-                            dylib_str
-                        ),
-                        plist_str,
-                    ])
-                    .status();
-            }
+        if steam::inject_plist_dyld_insert(&plist, &hook_dest)? {
+            result.plist_fixed = true;
+            needs_resign = true;
         }
-        result.plist_fixed = true;
-        needs_resign = true;
     }
 
     // 3. Check ad-hoc codesign validity

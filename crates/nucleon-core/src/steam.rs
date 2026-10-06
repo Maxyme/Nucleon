@@ -31,13 +31,107 @@ pub fn is_steam_installed() -> bool {
 }
 
 pub fn is_steam_patched() -> bool {
-    let plist = paths::steam_info_plist();
-    if !plist.exists() {
+    is_plist_dyld_injected(&paths::steam_info_plist(), "nucleon.dylib")
+}
+
+pub fn is_plist_dyld_injected(plist_path: &Path, needle: &str) -> bool {
+    if !plist_path.exists() {
         return false;
     }
-    let content = fs::read_to_string(&plist).unwrap_or_default();
-    content.contains("LSEnvironment")
-        && (content.contains("DYLD_INSERT_LIBRARIES") || content.contains("nucleon.dylib"))
+    let Ok(value) = plist::Value::from_file(plist_path) else {
+        return false;
+    };
+    value
+        .as_dictionary()
+        .and_then(|dict| dict.get("LSEnvironment"))
+        .and_then(|ls_env| ls_env.as_dictionary())
+        .and_then(|ls_dict| ls_dict.get("DYLD_INSERT_LIBRARIES"))
+        .and_then(|val| val.as_string())
+        .map(|s| s.contains(needle))
+        .unwrap_or(false)
+}
+
+pub fn inject_plist_dyld_insert(plist_path: &Path, dylib_path: &Path) -> Result<bool> {
+    let mut root = plist::Value::from_file(plist_path)
+        .with_context(|| format!("Failed to read plist at {}", plist_path.display()))?;
+
+    let dict = root
+        .as_dictionary_mut()
+        .context("Root of Info.plist is not a dictionary")?;
+
+    let dylib_str = dylib_path
+        .to_str()
+        .context("Invalid non-UTF8 path for dylib")?;
+
+    if !dict.contains_key("LSEnvironment") {
+        dict.insert(
+            "LSEnvironment".to_string(),
+            plist::Value::Dictionary(plist::Dictionary::new()),
+        );
+    }
+
+    let ls_dict = dict
+        .get_mut("LSEnvironment")
+        .and_then(|v| v.as_dictionary_mut())
+        .context("LSEnvironment is not a dictionary")?;
+
+    if let Some(current) = ls_dict
+        .get("DYLD_INSERT_LIBRARIES")
+        .and_then(|v| v.as_string())
+    {
+        if current == dylib_str {
+            return Ok(false);
+        }
+    }
+
+    ls_dict.insert(
+        "DYLD_INSERT_LIBRARIES".to_string(),
+        plist::Value::String(dylib_str.to_string()),
+    );
+
+    root.to_file_xml(plist_path)
+        .with_context(|| format!("Failed to write plist to {}", plist_path.display()))?;
+
+    Ok(true)
+}
+
+pub fn remove_plist_dyld_insert(plist_path: &Path) -> Result<bool> {
+    if !plist_path.exists() {
+        return Ok(false);
+    }
+
+    let mut root = plist::Value::from_file(plist_path)
+        .with_context(|| format!("Failed to read plist at {}", plist_path.display()))?;
+
+    let dict = root
+        .as_dictionary_mut()
+        .context("Root of Info.plist is not a dictionary")?;
+
+    let mut modified = false;
+    let mut remove_ls_env = false;
+
+    if let Some(ls_dict) = dict
+        .get_mut("LSEnvironment")
+        .and_then(|v| v.as_dictionary_mut())
+    {
+        if ls_dict.remove("DYLD_INSERT_LIBRARIES").is_some() {
+            modified = true;
+        }
+        if ls_dict.is_empty() {
+            remove_ls_env = true;
+        }
+    }
+
+    if remove_ls_env {
+        dict.remove("LSEnvironment");
+    }
+
+    if modified {
+        root.to_file_xml(plist_path)
+            .with_context(|| format!("Failed to write plist to {}", plist_path.display()))?;
+    }
+
+    Ok(modified)
 }
 
 pub fn patch_steam(hook_dylib: &Path) -> Result<()> {
@@ -55,38 +149,8 @@ pub fn patch_steam(hook_dylib: &Path) -> Result<()> {
     fs::copy(hook_dylib, &dst_dylib)
         .with_context(|| format!("Failed to copy hook dylib to {}", dst_dylib.display()))?;
 
-    // Use /usr/libexec/PlistBuddy to inject LSEnvironment
-    let plist_str = plist.to_str().unwrap();
-    let dylib_str = dst_dylib.to_str().unwrap();
-
-    // Ensure LSEnvironment dictionary exists
-    let _ = Command::new("/usr/libexec/PlistBuddy")
-        .args(["-c", "Add :LSEnvironment dict", plist_str])
-        .output();
-
-    // Set or add DYLD_INSERT_LIBRARIES
-    let set_res = Command::new("/usr/libexec/PlistBuddy")
-        .args([
-            "-c",
-            &format!("Set :LSEnvironment:DYLD_INSERT_LIBRARIES {}", dylib_str),
-            plist_str,
-        ])
-        .output();
-
-    if let Ok(res) = set_res {
-        if !res.status.success() {
-            let _ = Command::new("/usr/libexec/PlistBuddy")
-                .args([
-                    "-c",
-                    &format!(
-                        "Add :LSEnvironment:DYLD_INSERT_LIBRARIES string {}",
-                        dylib_str
-                    ),
-                    plist_str,
-                ])
-                .status();
-        }
-    }
+    // Inject DYLD_INSERT_LIBRARIES into Info.plist
+    inject_plist_dyld_insert(&plist, &dst_dylib)?;
 
     // Ad-hoc re-sign binaries
     sign_binary(&dst_dylib)?;
@@ -113,13 +177,7 @@ pub fn restore_steam() -> Result<()> {
             let _ = fs::remove_file(&old_backup);
         } else {
             // Remove LSEnvironment:DYLD_INSERT_LIBRARIES
-            let _ = Command::new("/usr/libexec/PlistBuddy")
-                .args([
-                    "-c",
-                    "Delete :LSEnvironment:DYLD_INSERT_LIBRARIES",
-                    plist.to_str().unwrap(),
-                ])
-                .status();
+            remove_plist_dyld_insert(&plist)?;
         }
     }
 
@@ -1508,5 +1566,108 @@ mod tests {
         assert!(modified);
         assert!(result.contains(r#""name"		"nucleon""#));
         assert!(!result.contains("nucleon-kosmickrisp"));
+    }
+
+    #[test]
+    fn test_plist_dyld_injection_lifecycle() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let plist_path = temp_dir.path().join("Info.plist");
+        let dylib_path = temp_dir.path().join("nucleon.dylib");
+
+        let initial_plist = r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleName</key>
+	<string>Steam</string>
+	<key>LSEnvironment</key>
+	<dict>
+		<key>LC_ALL</key>
+		<string>en_US.UTF-8</string>
+	</dict>
+</dict>
+</plist>"#;
+        fs::write(&plist_path, initial_plist).unwrap();
+
+        assert!(!is_plist_dyld_injected(&plist_path, "nucleon.dylib"));
+
+        // First injection should modify
+        assert!(inject_plist_dyld_insert(&plist_path, &dylib_path).unwrap());
+        assert!(is_plist_dyld_injected(&plist_path, "nucleon.dylib"));
+
+        // Idempotent injection should return false (no change)
+        assert!(!inject_plist_dyld_insert(&plist_path, &dylib_path).unwrap());
+
+        // Verify other keys in LSEnvironment are preserved
+        let root = plist::Value::from_file(&plist_path).unwrap();
+        let dict = root.as_dictionary().unwrap();
+        let ls_dict = dict.get("LSEnvironment").unwrap().as_dictionary().unwrap();
+        assert_eq!(
+            ls_dict.get("LC_ALL").unwrap().as_string(),
+            Some("en_US.UTF-8")
+        );
+        assert_eq!(
+            ls_dict.get("DYLD_INSERT_LIBRARIES").unwrap().as_string(),
+            dylib_path.to_str()
+        );
+
+        // Remove DYLD_INSERT_LIBRARIES
+        assert!(remove_plist_dyld_insert(&plist_path).unwrap());
+        assert!(!is_plist_dyld_injected(&plist_path, "nucleon.dylib"));
+
+        // Second removal is idempotent
+        assert!(!remove_plist_dyld_insert(&plist_path).unwrap());
+
+        // LC_ALL still preserved, LSEnvironment dict still exists because not empty
+        let root_after = plist::Value::from_file(&plist_path).unwrap();
+        let dict_after = root_after.as_dictionary().unwrap();
+        let ls_dict_after = dict_after
+            .get("LSEnvironment")
+            .unwrap()
+            .as_dictionary()
+            .unwrap();
+        assert_eq!(
+            ls_dict_after.get("LC_ALL").unwrap().as_string(),
+            Some("en_US.UTF-8")
+        );
+        assert!(!ls_dict_after.contains_key("DYLD_INSERT_LIBRARIES"));
+    }
+
+    #[test]
+    fn test_plist_dyld_injection_creates_ls_environment_and_cleans_up() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let plist_path = temp_dir.path().join("Info.plist");
+        let dylib_path = temp_dir.path().join("nucleon.dylib");
+
+        let initial_plist = r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleName</key>
+	<string>Steam</string>
+</dict>
+</plist>"#;
+        fs::write(&plist_path, initial_plist).unwrap();
+
+        assert!(!is_plist_dyld_injected(&plist_path, "nucleon.dylib"));
+        assert!(inject_plist_dyld_insert(&plist_path, &dylib_path).unwrap());
+        assert!(is_plist_dyld_injected(&plist_path, "nucleon.dylib"));
+
+        // Removing when LSEnvironment had only DYLD_INSERT_LIBRARIES cleans up empty dict
+        assert!(remove_plist_dyld_insert(&plist_path).unwrap());
+        assert!(!is_plist_dyld_injected(&plist_path, "nucleon.dylib"));
+
+        let root_after = plist::Value::from_file(&plist_path).unwrap();
+        let dict_after = root_after.as_dictionary().unwrap();
+        assert!(!dict_after.contains_key("LSEnvironment"));
+    }
+
+    #[test]
+    fn test_plist_dyld_nonexistent_file() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let nonexistent = temp_dir.path().join("does_not_exist.plist");
+
+        assert!(!is_plist_dyld_injected(&nonexistent, "nucleon.dylib"));
+        assert!(!remove_plist_dyld_insert(&nonexistent).unwrap());
     }
 }
