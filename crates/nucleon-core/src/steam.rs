@@ -300,10 +300,13 @@ pub fn is_wine_runtime_tool_registered(tool_id: &str) -> bool {
         .is_file()
 }
 
+pub fn extract_vdf_display_name(content: &str) -> Option<&str> {
+    content.split("\"display_name\"").nth(1)?.split('"').nth(1)
+}
+
 pub fn registered_wine_tools() -> Vec<(String, String)> {
     let base = paths::home_dir().join("Library/Application Support/Steam/compatibilitytools.d");
     let mut tools = Vec::new();
-    let display_re = regex::Regex::new(r#""display_name"\s+"([^"]+)""#).unwrap();
     if let Ok(entries) = fs::read_dir(&base) {
         for entry in entries.flatten() {
             let path = entry.path();
@@ -313,11 +316,9 @@ pub fn registered_wine_tools() -> Vec<(String, String)> {
                     let folder_name = entry.file_name().to_string_lossy().to_string();
                     if folder_name.starts_with("nucleon-wine") {
                         if let Ok(content) = fs::read_to_string(&vdf_path) {
-                            let display_name = display_re
-                                .captures(&content)
-                                .and_then(|c| c.get(1))
-                                .map(|m| m.as_str().to_string())
-                                .unwrap_or_else(|| folder_name.clone());
+                            let display_name = extract_vdf_display_name(&content)
+                                .unwrap_or(&folder_name)
+                                .to_string();
                             tools.push((folder_name, display_name));
                         }
                     }
@@ -2179,5 +2180,28 @@ mod tests {
         assert!(!tool2.exists());
         assert!(!tool3.exists());
         assert!(other.exists(), "Other tools must not be deleted");
+    }
+
+    #[test]
+    fn test_extract_vdf_display_name() {
+        let sample = r#""compatibilitytools"
+{
+  "compat_tools"
+  {
+    "nucleon-wine"
+    {
+      "install_path" "."
+      "display_name" "Nucleon (Wine 9.0)"
+      "from_oslist" "windows"
+      "to_oslist" "macos"
+    }
+  }
+}
+"#;
+        assert_eq!(extract_vdf_display_name(sample), Some("Nucleon (Wine 9.0)"));
+
+        // Fallback test with non-standard whitespace / formatting
+        let flat = "\"display_name\"\t\"Custom Wine Tool\"";
+        assert_eq!(extract_vdf_display_name(flat), Some("Custom Wine Tool"));
     }
 }

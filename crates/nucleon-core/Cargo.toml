@@ -13,7 +13,6 @@ log = { workspace = true }
 tempfile = { workspace = true }
 object = { workspace = true }
 memchr = { workspace = true }
-regex = { workspace = true }
 core-graphics = { workspace = true }
 core-foundation = { workspace = true }
 overlay-shim = { path = "../overlay-shim" }
