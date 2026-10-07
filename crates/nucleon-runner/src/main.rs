@@ -192,7 +192,9 @@ fn main() -> Result<()> {
     // Initialize prefix, registry, and bridge DLLs
     prefix::ensure_prefix(&pfx_dir, &runner_dir)?;
 
-    // Stage VKD3D-Proton for KosmicKrisp Direct3D 12 translation
+    // Stage or unstage VKD3D-Proton based on active engine:
+    // KosmicKrisp: stages VKD3D-Proton (Direct3D 12 -> Vulkan 1.4 -> KosmicKrisp)
+    // Other engines (e.g. GPTK): unstages VKD3D-Proton to use native D3DMetal without DLL override conflicts
     if active_engine == nucleon_core::detector::TargetEngine::KosmicKrisp {
         if let Some(vkd3d) = nucleon_core::vkd3d::find_vkd3d_proton() {
             if let Ok(staged) =
@@ -208,6 +210,15 @@ fn main() -> Result<()> {
             log_runner(
                 "VKD3D-Proton not installed. Point to an extracted path via 'nucleon vkd3d set-path <DIR>' or set VKD3D_PROTON_PATH to enable Direct3D 12 on KosmicKrisp."
             );
+        }
+    } else if let Ok(removed) =
+        nucleon_core::vkd3d::unstage_vkd3d_proton_from_prefix(&pfx_dir, Some(&runner_dir))
+    {
+        if removed > 0 {
+            log_runner(&format!(
+                "Unstaged {} VKD3D-Proton DLL(s) from prefix (restored builtin D3D12 for {:?})",
+                removed, active_engine
+            ));
         }
     }
 

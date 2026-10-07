@@ -278,6 +278,66 @@ pub fn stage_vkd3d_proton_into_prefix(
     Ok(staged_count)
 }
 
+fn restore_d3d12_in_dir(dst_dir: &Path, runner_dir: Option<&Path>, subdirs: &[&str]) -> usize {
+    let mut count = 0;
+
+    let dst_core = dst_dir.join("d3d12core.dll");
+    if (dst_core.exists() || dst_core.is_symlink()) && fs::remove_file(&dst_core).is_ok() {
+        count += 1;
+    }
+
+    let dst_d3d12 = dst_dir.join("d3d12.dll");
+    let builtin = runner_dir.and_then(|r| {
+        subdirs
+            .iter()
+            .map(|sub| r.join(sub).join("d3d12.dll"))
+            .find(|p| p.is_file())
+    });
+
+    if let Some(src) = builtin {
+        let need_copy = fs::metadata(&dst_d3d12)
+            .and_then(|d| fs::metadata(&src).map(|s| d.len() != s.len()))
+            .unwrap_or(true);
+        if need_copy {
+            let _ = fs::remove_file(&dst_d3d12);
+            if fs::copy(&src, &dst_d3d12).is_ok() {
+                count += 1;
+            }
+        }
+    }
+
+    count
+}
+
+/// Unstages VKD3D-Proton DLLs from a Wine prefix's system32 and syswow64 directories.
+///
+/// If a `runner_dir` is provided and contains Wine's builtin `d3d12.dll` (e.g. from
+/// Apple GPTK / D3DMetal), it restores the builtin DLL into the prefix.
+pub fn unstage_vkd3d_proton_from_prefix(
+    prefix_dir: &Path,
+    runner_dir: Option<&Path>,
+) -> Result<usize> {
+    let pfx = prefix_dir.join("drive_c/windows");
+    let count = restore_d3d12_in_dir(
+        &pfx.join("system32"),
+        runner_dir,
+        &["lib/wine/x86_64-windows", "lib64/wine/x86_64-windows"],
+    ) + restore_d3d12_in_dir(
+        &pfx.join("syswow64"),
+        runner_dir,
+        &["lib/wine/i386-windows", "lib/wine/x86-windows"],
+    );
+
+    if count > 0 {
+        log::info!(
+            "Unstaged/restored {count} DirectX 12 DLL(s) in Wine prefix at {}",
+            prefix_dir.display()
+        );
+    }
+
+    Ok(count)
+}
+
 /// Fetches VKD3D-Proton from official GitHub releases into the target directory.
 /// Does not commit any files to source code; stores purely in runtime support directory.
 pub fn fetch_vkd3d_proton(
@@ -495,5 +555,42 @@ mod tests {
         assert!(found.is_some());
         assert_eq!(found.unwrap().root, dir.path());
         std::env::remove_var("VKD3D_PROTON_PATH");
+    }
+
+    #[test]
+    fn test_unstage_vkd3d_proton_restores_builtin_runner_dll() {
+        // Setup VKD3D bundle
+        let vkd3d_dir = tempdir().unwrap();
+        let x64_dir = vkd3d_dir.path().join("x64");
+        fs::create_dir_all(&x64_dir).unwrap();
+        fs::write(x64_dir.join("d3d12.dll"), "vkd3d-d3d12").unwrap();
+        fs::write(x64_dir.join("d3d12core.dll"), "vkd3d-d3d12core").unwrap();
+        let bundle = inspect_candidate_dir(vkd3d_dir.path()).unwrap();
+
+        // Setup prefix and stage VKD3D
+        let pfx_dir = tempdir().unwrap();
+        stage_vkd3d_proton_into_prefix(&bundle, pfx_dir.path()).unwrap();
+
+        let sys32 = pfx_dir.path().join("drive_c/windows/system32");
+        assert!(sys32.join("d3d12.dll").is_file());
+        assert!(sys32.join("d3d12core.dll").is_file());
+
+        // Setup mock GPTK runner with builtin D3DMetal d3d12.dll
+        let runner_dir = tempdir().unwrap();
+        let runner_wine_dlls = runner_dir.path().join("lib/wine/x86_64-windows");
+        fs::create_dir_all(&runner_wine_dlls).unwrap();
+        fs::write(runner_wine_dlls.join("d3d12.dll"), "apple-gptk-d3dmetal").unwrap();
+
+        // Unstage VKD3D with runner provided
+        let cleaned =
+            unstage_vkd3d_proton_from_prefix(pfx_dir.path(), Some(runner_dir.path())).unwrap();
+        assert!(cleaned > 0);
+
+        // Verify d3d12core.dll was removed and d3d12.dll was restored to GPTK builtin
+        assert!(!sys32.join("d3d12core.dll").exists());
+        assert_eq!(
+            fs::read_to_string(sys32.join("d3d12.dll")).unwrap(),
+            "apple-gptk-d3dmetal"
+        );
     }
 }

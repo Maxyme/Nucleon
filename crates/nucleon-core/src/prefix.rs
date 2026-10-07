@@ -29,10 +29,6 @@ pub fn ensure_prefix(prefix_dir: &Path, runner_dir: &Path) -> Result<()> {
     configure_prefix_registry(prefix_dir, runner_dir)?;
     stage_bridge_libraries(prefix_dir)?;
 
-    if let Some(vkd3d) = crate::vkd3d::find_vkd3d_proton() {
-        let _ = crate::vkd3d::stage_vkd3d_proton_into_prefix(&vkd3d, prefix_dir);
-    }
-
     Ok(())
 }
 
