@@ -30,6 +30,7 @@ core-graphics = "0.23"
 core-foundation = "0.9"
 plist = "1.7"
 keyvalues-parser = "0.2"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 frida-gum = { version = "0.17", default-features = false, features = ["auto-download"] }
 frida-gum-sys = { version = "0.17", default-features = false }
 

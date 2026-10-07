@@ -18,7 +18,7 @@ impl log::Log for HookFileLogger {
             return;
         }
 
-        let timestamp = current_timestamp();
+        let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
         let log_line = format!(
             "{} [nucleon-hook] {:<5} [{}] {}\n",
             timestamp,
@@ -43,26 +43,6 @@ impl log::Log for HookFileLogger {
             if let Some(ref mut f) = *guard {
                 let _ = f.flush();
             }
-        }
-    }
-}
-
-fn current_timestamp() -> String {
-    unsafe {
-        let t = libc::time(std::ptr::null_mut());
-        let mut tm: libc::tm = std::mem::zeroed();
-        libc::localtime_r(&t, &mut tm);
-        let mut buf = [0u8; 64];
-        let len = libc::strftime(
-            buf.as_mut_ptr() as *mut libc::c_char,
-            buf.len(),
-            c"%Y-%m-%d %H:%M:%S".as_ptr(),
-            &tm,
-        );
-        if len > 0 {
-            String::from_utf8_lossy(&buf[..len as usize]).to_string()
-        } else {
-            String::new()
         }
     }
 }

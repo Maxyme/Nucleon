@@ -22,6 +22,7 @@ object = { workspace = true }
 memchr = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+chrono = { workspace = true }
 log = { workspace = true }
 
 [lints]

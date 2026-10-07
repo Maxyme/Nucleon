@@ -17,28 +17,8 @@ struct LaunchOverride {
     engine: Option<String>,
 }
 
-fn current_timestamp() -> String {
-    unsafe {
-        let t = libc::time(std::ptr::null_mut());
-        let mut tm: libc::tm = std::mem::zeroed();
-        libc::localtime_r(&t, &mut tm);
-        let mut buf = [0u8; 64];
-        let len = libc::strftime(
-            buf.as_mut_ptr() as *mut libc::c_char,
-            buf.len(),
-            c"%Y-%m-%d %H:%M:%S".as_ptr(),
-            &tm,
-        );
-        if len > 0 {
-            String::from_utf8_lossy(&buf[..len as usize]).to_string()
-        } else {
-            String::new()
-        }
-    }
-}
-
 fn log_runner(msg: &str) {
-    let ts = current_timestamp();
+    let ts = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
     let line = format!("{ts} [nucleon-runner] {msg}\n");
     print!("{line}");
     let log_path = paths::support_dir().join("nucleon-runner.log");

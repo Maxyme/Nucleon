@@ -44,9 +44,6 @@ fn init() {
         if let Err(e) = hooks::fs::install_fs_hooks() {
             warn!("Failed to install fs hooks in Steam Helper: {e:#}");
         }
-        if let Err(e) = hooks::webpatch::install_webpatch_hooks() {
-            warn!("Failed to install webpatch hooks in Steam Helper: {e:#}");
-        }
         return;
     }
 
@@ -84,12 +81,7 @@ fn init() {
         warn!("Failed to install fs hooks: {e:#}");
     }
 
-    // 3. Install WebUI webpatch hooks (enables Install button and Compatibility settings)
-    if let Err(e) = hooks::webpatch::install_webpatch_hooks() {
-        warn!("Failed to install webpatch hooks: {e:#}");
-    }
-
-    // 3b. Verify or heal WebUI chunk patches asynchronously before CEF renders
+    // 3. Verify or heal WebUI chunk patches asynchronously before CEF renders
     std::thread::spawn(|| {
         if !nucleon_core::steam::are_steamui_chunks_patched() {
             info!("Unpatched WebUI chunks detected on launch; applying self-healing patches...");
