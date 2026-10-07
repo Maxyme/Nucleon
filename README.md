@@ -154,6 +154,25 @@ Rather than bloating the codebase with in-process decompression crates, C build 
 4. Select **"Nucleon (Game Porting Toolkit 4)"** from the dropdown menu.
 5. Alternatively, launch games directly via CLI: `nucleon launch <AppID>`.
 
+### Removing Nucleon from Steam UI
+
+To unregister Nucleon and completely remove all compatibility tools and UI patches from Steam:
+
+```bash
+just unregister
+# or: ./target/release/nucleon steam unregister
+```
+
+This performs a comprehensive reset:
+- **Compatibility Tool Bundles**: Removes all `nucleon*` folders from `~/Library/Application Support/Steam/compatibilitytools.d/`.
+- **Per-Game Mappings**: Cleans any titles mapped to Nucleon in `~/Library/Application Support/Steam/config/config.vdf`.
+- **WebUI Chunk Patches**: Reverts JavaScript chunk modifications in `steamui/` and flushes the CEF cache.
+- **Steam.app Bundle**: Restores the stock `Info.plist`, deletes `nucleon.dylib`, and re-signs Steam.
+- **Background Guard**: Unloads and removes the `com.nucleon.steam-guard` LaunchAgent daemon.
+
+After running unregister, restart Steam (`pkill steam_osx && open -a /Applications/Steam.app`) to refresh the interface.
+
+
 ### Inspecting Status
 
 Check the status of your installation, active runner, and Steam integration:

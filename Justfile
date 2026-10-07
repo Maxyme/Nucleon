@@ -33,6 +33,10 @@ setup: build
 stage-bridge path: build
     ./{{target_dir}}/nucleon setup --bridge-path {{path}}
 
+# Remove Nucleon from Steam UI, compatibility tools, and game mappings
+unregister: build
+    ./{{target_dir}}/nucleon unregister
+
 
 # Inspect Nucleon runtime status
 status:

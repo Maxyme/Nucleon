@@ -1364,6 +1364,372 @@ pub fn update_compat_tool_mapping(
     }
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct UnregisterSummary {
+    pub tools_removed: Vec<String>,
+    pub mappings_cleaned: bool,
+    pub webui_chunks_restored: usize,
+    pub steam_restored: bool,
+    pub launchagent_uninstalled: bool,
+}
+
+/// Removes all Nucleon compatibility tool bundles from the specified base directory.
+pub fn remove_compatibility_tools_in(base: &Path) -> Result<Vec<String>> {
+    let mut removed = Vec::new();
+    if base.is_dir() {
+        if let Ok(entries) = fs::read_dir(base) {
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().to_string();
+                if name == "nucleon" || name.starts_with("nucleon-") || name == "notproton" {
+                    if let Ok(()) = fs::remove_dir_all(entry.path()) {
+                        log::info!("Removed Steam compatibility tool bundle: {}", name);
+                        removed.push(name);
+                    }
+                }
+            }
+        }
+    }
+    removed.sort();
+    Ok(removed)
+}
+
+/// Removes all Nucleon compatibility tools from ~/Library/Application Support/Steam/compatibilitytools.d.
+pub fn remove_compatibility_tools() -> Result<Vec<String>> {
+    let base = paths::home_dir().join("Library/Application Support/Steam/compatibilitytools.d");
+    remove_compatibility_tools_in(&base)
+}
+
+/// Removes any AppID mappings in `content` whose tool name starts with `nucleon` or is `notproton`.
+pub fn unmap_all_nucleon_compat_mappings(content: &str) -> (String, bool) {
+    let Ok(partial) = keyvalues_parser::parse(content) else {
+        return (content.to_string(), false);
+    };
+    let mut vdf = keyvalues_parser::Vdf::from(partial).into_owned();
+    let mut modified = false;
+
+    let compat_obj = if vdf.key == "CompatToolMapping" {
+        vdf.value.get_mut_obj()
+    } else if let keyvalues_parser::Value::Obj(ref mut root_obj) = vdf.value {
+        find_child_obj_mut(root_obj, "CompatToolMapping")
+    } else {
+        None
+    };
+
+    let Some(compat) = compat_obj else {
+        return (content.to_string(), false);
+    };
+
+    let to_remove: Vec<String> = compat
+        .iter()
+        .filter(|(_appid, values)| {
+            values.iter().any(|val| {
+                if let keyvalues_parser::Value::Obj(entry_obj) = val {
+                    entry_obj
+                        .get("name")
+                        .and_then(|v| v.first())
+                        .and_then(|v| v.get_str())
+                        .map(|s| s == "nucleon" || s.starts_with("nucleon-") || s == "notproton")
+                        .unwrap_or(false)
+                } else {
+                    false
+                }
+            })
+        })
+        .map(|(k, _)| k.to_string())
+        .collect();
+
+    for appid in to_remove {
+        compat.remove(appid.as_str());
+        modified = true;
+    }
+
+    if modified {
+        (vdf.to_string(), true)
+    } else {
+        (content.to_string(), false)
+    }
+}
+
+/// Removes all Nucleon mappings from Steam's config.vdf on disk.
+pub fn remove_nucleon_compat_mappings() -> Result<bool> {
+    let config_path = paths::steam_data_dir().join("config/config.vdf");
+    if !config_path.is_file() {
+        return Ok(false);
+    }
+    let content = fs::read_to_string(&config_path)?;
+    let (new_content, modified) = unmap_all_nucleon_compat_mappings(&content);
+    if modified {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if let Ok(meta) = fs::metadata(&config_path) {
+                let mut perms = meta.permissions();
+                perms.set_mode(0o644);
+                let _ = fs::set_permissions(&config_path, perms);
+            }
+        }
+        fs::write(&config_path, new_content)?;
+    }
+    Ok(modified)
+}
+
+/// Reverts modified Steam WebUI chunks in the specified steamui directory and flushes CEF cache.
+pub fn restore_steamui_chunks_in(steamui_dir: &Path) -> Result<usize> {
+    if !steamui_dir.is_dir() {
+        return Ok(0);
+    }
+
+    let package_manifest = paths::steam_data_dir()
+        .join("Steam.AppBundle/Steam/Contents/MacOS/package/steam_client_osx.installed");
+    let mut expected_sizes: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
+    if let Ok(manifest_content) = fs::read_to_string(&package_manifest) {
+        for line in manifest_content.lines() {
+            let parts: Vec<&str> = line.split(',').collect();
+            if parts.len() >= 2 {
+                let filename = parts[0].trim().trim_start_matches("steamui/");
+                if let Some(size_part) = parts[1].split(';').next() {
+                    if let Ok(sz) = size_part.trim().parse::<usize>() {
+                        expected_sizes.insert(filename.to_string(), sz);
+                    }
+                }
+            }
+        }
+    }
+
+    let mut restored_count = 0;
+
+    if let Ok(entries) = fs::read_dir(steamui_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+            if !name.starts_with("chunk~") || !name.ends_with(".js") || name.ends_with(".bak") {
+                continue;
+            }
+
+            let raw_bytes = match fs::read(&path) {
+                Ok(b) => b,
+                Err(_) => continue,
+            };
+
+            let expected_size = expected_sizes.get(name).copied().unwrap_or(raw_bytes.len());
+
+            let content = match String::from_utf8(raw_bytes) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+
+            let is_patched = content.contains("\"Playable via Steam Play (Nucleon)\"")
+                || content.contains("get is_invalid_os_type(){return false}")
+                || content.contains("Enable Nucleon under Properties")
+                || content.contains("case u.Ul.jw:case u.Ul.KR:return s.UM;");
+
+            if !is_patched {
+                continue;
+            }
+
+            let mut modified = content;
+            let mut changed = false;
+
+            // 1. Revert Install button
+            let repl_install_btn = "case u.Ul.jw:case u.Ul.KR:return s.UM;";
+            let target_install_btn = "case u.Ul.jw:return s.UM;";
+            if modified.contains(repl_install_btn) {
+                modified = modified.replace(repl_install_btn, target_install_btn);
+                changed = true;
+            }
+
+            // 2. Revert InvalidPlatform permanence
+            let repl_perm_unavail = "case D.Ul.pd:case D.Ul.K5:case D.Ul.Mu:return!0";
+            let target_perm_unavail =
+                "case D.Ul.pd:case D.Ul.K5:case D.Ul.KR:case D.Ul.Mu:return!0";
+            if modified.contains(repl_perm_unavail) {
+                modified = modified.replace(repl_perm_unavail, target_perm_unavail);
+                changed = true;
+            }
+
+            // 3. Revert is_available_on_current_platform
+            let repl_avail_platform = "get is_available_on_current_platform(){return true}";
+            let target_avail_platform = "get is_available_on_current_platform(){return this.local_per_client_data&&this.local_per_client_data.is_available_on_current_platform}";
+            if modified.contains(repl_avail_platform) {
+                modified = modified.replace(repl_avail_platform, target_avail_platform);
+                changed = true;
+            }
+
+            // 4. Revert is_invalid_os_type
+            let repl_invalid_os = "get is_invalid_os_type(){return false}";
+            let target_invalid_os =
+                "get is_invalid_os_type(){return this.most_available_per_client_data.is_invalid_os_type}";
+            if modified.contains(repl_invalid_os) {
+                modified = modified.replace(repl_invalid_os, target_invalid_os);
+                changed = true;
+            }
+
+            // 5. Revert status text
+            let repl_status_text = r##""Playable via Steam Play (Nucleon)""##;
+            let target_status_text = r##"(0,W.we)("#DisplayStatus_InvalidPlatform")"##;
+            if modified.contains(repl_status_text) {
+                modified = modified.replace(repl_status_text, target_status_text);
+                changed = true;
+            }
+
+            // 6. Revert collection filter
+            let repl_filter = "false&&(t=!1)";
+            let target_filter = "r&&e.BIsPerClientDataLocal(r)&&r.display_status==ze.Ul.KR&&(t=!1)";
+            if modified.contains(repl_filter) {
+                modified = modified.replace(repl_filter, target_filter);
+                changed = true;
+            }
+
+            // 7. Revert Compatibility tab in Game Properties
+            let repl_compat =
+                r##"true&&o.push({title:(0,A.we)("#AppProperties_CompatibilityPage")"##;
+            let target_compat =
+                r##"(0,f.CI)()&&o.push({title:(0,A.we)("#AppProperties_CompatibilityPage")"##;
+            if modified.contains(repl_compat) {
+                modified = modified.replace(repl_compat, target_compat);
+                changed = true;
+            }
+
+            // 8. Revert settings compatibility
+            let repl_settings = "Compatibility:{visible:t&&true&&!(0,f.rf)()";
+            let target_settings = "Compatibility:{visible:t&&(0,f.CI)()&&!(0,f.rf)()";
+            if modified.contains(repl_settings) {
+                modified = modified.replace(repl_settings, target_settings);
+                changed = true;
+            }
+
+            // 9. Revert global compat tool default
+            let repl_tool_default =
+                r#"const t=(0,c.t0)().strCompatTool||(A.length?A[0].data:"nucleon"),"#;
+            let target_tool_default = "const t=(0,c.t0)().strCompatTool,";
+            if modified.contains(repl_tool_default) {
+                modified = modified.replace(repl_tool_default, target_tool_default);
+                changed = true;
+            }
+
+            // 10. Revert SteamPlay section
+            if modified.contains("function ue(e){return true?") {
+                modified = modified.replace(
+                    "function ue(e){return true?",
+                    "function ue(e){return(0,T.CI)()?",
+                );
+                changed = true;
+            }
+
+            // 11. Revert Non-Steam EXE filter
+            let repl_exe = r##"("#AddNonSteam_Filter_Exe_MacOS"),rFilePatterns:["*.app","*.exe"]"##;
+            let target_exe = r##"("#AddNonSteam_Filter_Exe_MacOS"),rFilePatterns:["*.app"]"##;
+            if modified.contains(repl_exe) {
+                modified = modified.replace(repl_exe, target_exe);
+                changed = true;
+            }
+
+            // 12. Revert image / executable filters
+            let repl_img = r##"{strFileTypeName:"Image Files (*.tga,*.png,*.exe)",rFilePatterns:["*.tga","*.png","*.exe"]}"##;
+            let target_img = r##"{strFileTypeName:"Image Files (*.tga,*.png)",rFilePatterns:["*.tga","*.png"]}"##;
+            if modified.contains(repl_img) {
+                modified = modified.replace(repl_img, target_img);
+                changed = true;
+            }
+
+            // 13. Revert game list entry notice
+            let repl_entry1 = "\"Enable Nucleon under Properties > Compatibility to install and run the Windows version.\"";
+            let repl_entry2 = "(0,h.we)\"Enable Nucleon under Properties > Compatibility to install and run the Windows version.\"";
+            let target_entry = r##"(0,h.we)("#GameList_Entry_Invalid_OSType2")"##;
+            if modified.contains(repl_entry2) {
+                modified = modified.replace(repl_entry2, target_entry);
+                changed = true;
+            } else if modified.contains(repl_entry1) {
+                modified = modified.replace(repl_entry1, target_entry);
+                changed = true;
+            }
+
+            if changed {
+                // Strip padding comment before recalculating
+                if let Some(pos) = modified.rfind("/*") {
+                    if modified[pos..].ends_with("*/") && modified[pos..].contains('*') {
+                        modified.truncate(pos);
+                    }
+                }
+
+                // Exact-size padding: ensure modified.len() == expected_size
+                let new_len = modified.len();
+                if new_len < expected_size {
+                    let diff = expected_size - new_len;
+                    if diff >= 4 {
+                        let pad = format!("/*{}*/", "*".repeat(diff - 4));
+                        modified.push_str(&pad);
+                    } else {
+                        modified.push_str(&" ".repeat(diff));
+                    }
+                }
+
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    if let Ok(meta) = fs::metadata(&path) {
+                        let mut perms = meta.permissions();
+                        perms.set_mode(0o755);
+                        let _ = fs::set_permissions(&path, perms);
+                    }
+                }
+
+                let _ = fs::write(&path, modified);
+                restored_count += 1;
+            }
+        }
+    }
+
+    let _ = clear_cef_cache();
+    Ok(restored_count)
+}
+
+/// Reverts all Steam WebUI chunk modifications on disk and clears CEF cache.
+pub fn restore_steamui_chunks() -> Result<usize> {
+    let steamui_dir = paths::steam_data_dir().join("Steam.AppBundle/Steam/Contents/MacOS/steamui");
+    restore_steamui_chunks_in(&steamui_dir)
+}
+
+/// Completely unregisters and removes Nucleon from the Steam UI:
+/// 1. Deletes all compatibility tool bundles from ~/Library/Application Support/Steam/compatibilitytools.d/
+/// 2. Cleans any Nucleon game mappings from Steam's config.vdf
+/// 3. Reverts Steam WebUI chunk patches and purges CEF cache
+/// 4. Restores Steam.app Info.plist and removes hook dylib (if injected)
+/// 5. Uninstalls Steam Update Guard LaunchAgent (if installed)
+pub fn unregister_from_steam_ui() -> Result<UnregisterSummary> {
+    // 1. Remove compatibility tool bundles
+    let tools_removed = remove_compatibility_tools()?;
+
+    // 2. Remove Nucleon game mappings from config.vdf
+    let mappings_cleaned = remove_nucleon_compat_mappings()?;
+
+    // 3. Restore WebUI chunk patches and clear CEF cache
+    let webui_chunks_restored = restore_steamui_chunks()?;
+
+    let mut summary = UnregisterSummary {
+        tools_removed,
+        mappings_cleaned,
+        webui_chunks_restored,
+        ..Default::default()
+    };
+
+    // 4. Restore Steam.app Info.plist and remove hook dylib
+    if is_steam_patched() {
+        let _ = restore_steam();
+        summary.steam_restored = true;
+    }
+
+    // 5. If LaunchAgent is installed/loaded, uninstall it so it doesn't re-patch
+    if (crate::guard::is_launchagent_loaded() || crate::guard::is_launchagent_installed())
+        && crate::guard::uninstall_launchagent().is_ok()
+    {
+        summary.launchagent_uninstalled = true;
+    }
+
+    Ok(summary)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1724,5 +2090,94 @@ mod tests {
                 parsed.err()
             );
         }
+    }
+
+    #[test]
+    fn test_unmap_all_nucleon_compat_mappings() {
+        let sample = r#""InstallConfigStore"
+{
+	"Software"
+	{
+		"Valve"
+		{
+			"Steam"
+			{
+				"CompatToolMapping"
+				{
+					"730"
+					{
+						"name"		"proton_experimental"
+						"config"		""
+						"priority"		"250"
+					}
+					"12345"
+					{
+						"name"		"nucleon"
+						"config"		""
+						"priority"		"250"
+					}
+					"67890"
+					{
+						"name"		"nucleon-kosmickrisp"
+						"config"		""
+						"priority"		"250"
+					}
+					"11111"
+					{
+						"name"		"nucleon-wine"
+						"config"		""
+						"priority"		"250"
+					}
+				}
+			}
+		}
+	}
+}
+"#;
+        let (result, modified) = unmap_all_nucleon_compat_mappings(sample);
+        assert!(modified);
+        assert!(
+            result.contains("\"730\""),
+            "Proton mapping must be preserved"
+        );
+        assert!(
+            !result.contains("\"12345\""),
+            "Nucleon mapping must be removed"
+        );
+        assert!(
+            !result.contains("\"67890\""),
+            "KosmicKrisp mapping must be removed"
+        );
+        assert!(
+            !result.contains("\"11111\""),
+            "Wine mapping must be removed"
+        );
+    }
+
+    #[test]
+    fn test_remove_compatibility_tools_in() {
+        let temp = tempfile::tempdir().unwrap();
+        let base = temp.path();
+
+        let tool1 = base.join("nucleon");
+        let tool2 = base.join("nucleon-kosmickrisp");
+        let tool3 = base.join("nucleon-wine");
+        let other = base.join("custom-tool");
+
+        fs::create_dir_all(&tool1).unwrap();
+        fs::create_dir_all(&tool2).unwrap();
+        fs::create_dir_all(&tool3).unwrap();
+        fs::create_dir_all(&other).unwrap();
+
+        let removed = remove_compatibility_tools_in(base).unwrap();
+        assert_eq!(
+            removed,
+            vec!["nucleon", "nucleon-kosmickrisp", "nucleon-wine"]
+        );
+
+        assert!(!tool1.exists());
+        assert!(!tool2.exists());
+        assert!(!tool3.exists());
+        assert!(other.exists(), "Other tools must not be deleted");
     }
 }

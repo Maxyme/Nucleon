@@ -82,11 +82,13 @@ enum Commands {
         /// Steam Application ID
         appid: u32,
     },
-    /// Steam patch management
+    /// Steam patch and UI integration management
     Steam {
         #[command(subcommand)]
         action: SteamAction,
     },
+    /// Remove Nucleon from Steam UI, compatibility tools, and game mappings
+    Unregister,
     /// View Nucleon hook and runner logs
     Logs {
         /// Number of lines to display (default: 50)
@@ -132,6 +134,8 @@ enum SteamAction {
     Patch,
     /// Restore original Steam.app Info.plist
     Restore,
+    /// Remove Nucleon compatibility tools, game mappings, and WebUI patches from Steam UI
+    Unregister,
 }
 
 #[derive(Subcommand)]
@@ -945,7 +949,14 @@ fn main() -> Result<()> {
                 steam::restore_steam()?;
                 println!("  ✓ Successfully restored original Steam.app");
             }
+            SteamAction::Unregister => {
+                handle_unregister_from_steam()?;
+            }
         },
+
+        Commands::Unregister => {
+            handle_unregister_from_steam()?;
+        }
 
         Commands::Logs {
             lines,
@@ -957,6 +968,48 @@ fn main() -> Result<()> {
         }
     }
 
+    Ok(())
+}
+
+fn handle_unregister_from_steam() -> Result<()> {
+    println!("==> Removing Nucleon from Steam UI...");
+    let summary = steam::unregister_from_steam_ui()?;
+
+    if summary.tools_removed.is_empty() {
+        println!("  ○ No compatibility tool bundles found in compatibilitytools.d");
+    } else {
+        println!(
+            "  ✓ Removed {} compatibility tool bundle(s): {}",
+            summary.tools_removed.len(),
+            summary.tools_removed.join(", ")
+        );
+    }
+
+    if summary.mappings_cleaned {
+        println!("  ✓ Cleaned Nucleon game mappings from config.vdf");
+    } else {
+        println!("  ○ No Nucleon game mappings found in config.vdf");
+    }
+
+    if summary.webui_chunks_restored > 0 {
+        println!(
+            "  ✓ Restored {} WebUI chunk(s) and cleared CEF cache",
+            summary.webui_chunks_restored
+        );
+    } else {
+        println!("  ○ WebUI chunks already clean");
+    }
+
+    if summary.steam_restored {
+        println!("  ✓ Restored Steam.app Info.plist and removed hook dylib");
+    }
+
+    if summary.launchagent_uninstalled {
+        println!("  ✓ Unloaded and removed Steam Update Guard LaunchAgent");
+    }
+
+    println!("\n✓ Nucleon successfully removed from Steam UI.");
+    println!("  Restart Steam (pkill steam_osx && open -a /Applications/Steam.app) to refresh.");
     Ok(())
 }
 
