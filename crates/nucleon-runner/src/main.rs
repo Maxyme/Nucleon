@@ -646,7 +646,7 @@ mod tests {
     #[test]
     fn test_is_wine_game_process_line_ignores_self_and_nucleon() {
         let my_pid = 85020;
-        let line_self = "85020 /Users/testuser/Library/Application Support/Steam/compatibilitytools.d/nucleon-wine/nucleon-runner waitforexitandrun /Users/testuser/Library/Application Support/Steam/steamapps/common/DiRT Rally 2.0/dirtrally2.exe -novr";
+        let line_self = "85020 ~/Library/Application Support/Steam/compatibilitytools.d/nucleon-wine/nucleon-runner waitforexitandrun ~/Library/Application Support/Steam/steamapps/common/DiRT Rally 2.0/dirtrally2.exe -novr";
         assert!(!is_wine_game_process_line(
             line_self,
             my_pid,
@@ -655,7 +655,7 @@ mod tests {
         ));
 
         // Even with a different PID, nucleon-runner itself must be ignored
-        let line_other_runner = "16271 /Users/testuser/Library/Application Support/Steam/compatibilitytools.d/nucleon/nucleon-runner waitforexitandrun /Users/testuser/Library/Application Support/Steam/steamapps/common/DiRT Rally 2.0/dirtrally2.exe -novr";
+        let line_other_runner = "16271 ~/Library/Application Support/Steam/compatibilitytools.d/nucleon/nucleon-runner waitforexitandrun ~/Library/Application Support/Steam/steamapps/common/DiRT Rally 2.0/dirtrally2.exe -novr";
         assert!(!is_wine_game_process_line(
             line_other_runner,
             my_pid,
