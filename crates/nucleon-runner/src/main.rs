@@ -39,23 +39,170 @@ fn activate_frontmost_window() {
         .status();
 }
 
-fn is_wine_game_process_running(_runner_dir: &Path) -> bool {
-    // Check processes for running .exe binaries excluding wineserver/services
+fn set_runner_lib_env(cmd: &mut Command, runner_dir: &Path) {
+    let lib_dir = runner_dir.join("lib");
+    let lib_unix = runner_dir.join("lib/wine/x86_64-unix");
+    if lib_dir.is_dir() || lib_unix.is_dir() {
+        cmd.env(
+            "DYLD_FALLBACK_LIBRARY_PATH",
+            format!("{}:{}", lib_unix.display(), lib_dir.display()),
+        );
+    }
+}
+
+fn wait_wineserver(wineserver_bin: &Path, pfx_dir: &Path, timeout_ms: u64) {
+    if !wineserver_bin.is_file() {
+        return;
+    }
+    let mut cmd = Command::new(wineserver_bin);
+    cmd.arg("-w");
+    cmd.env("WINEPREFIX", pfx_dir);
+    if let Some(runner_dir) = wineserver_bin.parent().and_then(|p| p.parent()) {
+        set_runner_lib_env(&mut cmd, runner_dir);
+    }
+
+    if let Ok(mut child) = cmd.spawn() {
+        let start = std::time::Instant::now();
+        let timeout = Duration::from_millis(timeout_ms);
+        loop {
+            match child.try_wait() {
+                Ok(Some(_)) => break,
+                Ok(None) => {
+                    if start.elapsed() >= timeout {
+                        let _ = child.kill();
+                        break;
+                    }
+                    thread::sleep(Duration::from_millis(50));
+                }
+                Err(_) => break,
+            }
+        }
+    }
+}
+
+fn terminate_wine_prefix(runner_dir: &Path, pfx_dir: &Path, child_id: u32) {
+    let wineserver_bin = runner_dir.join("bin/wineserver");
+
+    // 1. Tell wineserver to cleanly terminate all processes under this prefix
+    if wineserver_bin.is_file() {
+        let mut cmd = Command::new(&wineserver_bin);
+        cmd.arg("-k");
+        cmd.env("WINEPREFIX", pfx_dir);
+        set_runner_lib_env(&mut cmd, runner_dir);
+        let _ = cmd.status();
+    }
+
+    // 2. Send SIGTERM to the primary child process if still alive
+    unsafe {
+        libc::kill(child_id as i32, libc::SIGTERM);
+    }
+
+    // 3. Find and terminate any remaining processes associated with this runner or prefix
+    let runner_dir_str = runner_dir.to_string_lossy().to_lowercase();
+    let pfx_str = pfx_dir.to_string_lossy().to_lowercase();
+    let my_pid = std::process::id();
+
+    if let Ok(out) = Command::new("ps").args(["-ww", "-eo", "pid,args"]).output() {
+        let text = String::from_utf8_lossy(&out.stdout);
+        for line in text.lines() {
+            let trimmed = line.trim();
+            let mut parts = trimmed.split_whitespace();
+            if let Some(pid_str) = parts.next() {
+                if let Ok(pid) = pid_str.parse::<i32>() {
+                    if pid as u32 == my_pid {
+                        continue;
+                    }
+                    let lower = trimmed.to_lowercase();
+                    if lower.contains("nucleon-runner") || lower.contains("bin/nucleon") {
+                        continue;
+                    }
+                    if lower.contains(&runner_dir_str) || lower.contains(&pfx_str) {
+                        unsafe {
+                            libc::kill(pid, libc::SIGTERM);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Brief grace period for processes to exit
+    thread::sleep(Duration::from_millis(300));
+
+    // Force SIGKILL on child if still around
+    unsafe {
+        libc::kill(child_id as i32, libc::SIGKILL);
+    }
+
+    // Wait briefly for wineserver socket cleanup (at most 1000ms)
+    wait_wineserver(&wineserver_bin, pfx_dir, 1000);
+}
+
+fn is_wine_game_process_line(
+    line: &str,
+    my_pid: u32,
+    runner_dir_str: &str,
+    target_name: &str,
+) -> bool {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+
+    let mut parts = trimmed.split_whitespace();
+    let pid_str = parts.next().unwrap_or("");
+    if let Ok(pid) = pid_str.parse::<u32>() {
+        if pid == my_pid {
+            return false;
+        }
+    }
+
+    let args_part = trimmed[pid_str.len()..].trim().to_lowercase();
+
+    // Ignore nucleon-runner and nucleon CLI
+    if args_part.contains("nucleon-runner") || args_part.contains("bin/nucleon") {
+        return false;
+    }
+
+    // Exclude Wine infrastructure and services
+    if args_part.contains("wineserver")
+        || args_part.contains("winedevice.exe")
+        || args_part.contains("services.exe")
+        || args_part.contains("plugplay.exe")
+        || args_part.contains("svchost.exe")
+        || args_part.contains("rpcss.exe")
+        || args_part.contains("explorer.exe")
+        || args_part.contains("conhost.exe")
+    {
+        return false;
+    }
+
+    let matches_runner = args_part.contains(runner_dir_str)
+        || args_part.contains("wine64-preloader")
+        || args_part.contains("wine-preloader")
+        || args_part.contains("wine64")
+        || args_part.contains("/wine");
+
+    let matches_target = !target_name.is_empty() && args_part.contains(target_name);
+
+    (matches_runner || matches_target) && args_part.contains(".exe")
+}
+
+fn is_wine_game_process_running(runner_dir: &Path, target_exe: &Path) -> bool {
+    let my_pid = std::process::id();
+    let target_name = target_exe
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    let runner_dir_str = runner_dir.to_string_lossy().to_lowercase();
+
     let output = Command::new("ps").args(["-ww", "-eo", "pid,args"]).output();
 
     if let Ok(out) = output {
         let text = String::from_utf8_lossy(&out.stdout);
         for line in text.lines() {
-            let lower = line.to_lowercase();
-            if lower.contains("wine")
-                && lower.contains(".exe")
-                && !lower.contains("winedevice.exe")
-                && !lower.contains("services.exe")
-                && !lower.contains("plugplay.exe")
-                && !lower.contains("svchost.exe")
-                && !lower.contains("rpcss.exe")
-                && !lower.contains("explorer.exe")
-            {
+            if is_wine_game_process_line(line, my_pid, &runner_dir_str, &target_name) {
                 return true;
             }
         }
@@ -92,6 +239,7 @@ fn main() -> Result<()> {
         .map(PathBuf::from)
         .unwrap_or_else(|| paths::support_dir().join("default_prefix"));
     let pfx_dir = compat_data_path.join("pfx");
+    env::set_var("WINEPREFIX", &pfx_dir);
 
     // Determine target executable and arguments
     // Steam invokes: nucleon-runner run <exe_path> [game_args...]
@@ -186,7 +334,7 @@ fn main() -> Result<()> {
 
     // Wait for previous instance if requested
     if verb == "waitforexitandrun" {
-        let _ = Command::new(&wineserver_bin).arg("-w").status();
+        wait_wineserver(&wineserver_bin, &pfx_dir, 5000);
     }
 
     // Initialize prefix, registry, and bridge DLLs
@@ -296,33 +444,119 @@ fn main() -> Result<()> {
     });
 
     // Supervision watchdog
+    let mut primary_exited = false;
+    let mut exit_code = 0;
+
     loop {
         if term_flag.load(Ordering::SeqCst) {
-            log_runner("SIGTERM received, killing Wine processes cleanly");
-            let _ = child.kill();
-            let _ = Command::new(&wineserver_bin).arg("-k").status();
-            let _ = Command::new(&wineserver_bin).arg("-w").status();
+            log_runner("Termination signal received, stopping Wine processes cleanly");
+            terminate_wine_prefix(&runner_dir, &pfx_dir, child.id());
             std::process::exit(0);
         }
 
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                log_runner(&format!("Wine primary process exited with: {:?}", status));
-                // Check if any background Wine game processes are still running
-                if !is_wine_game_process_running(&runner_dir) {
-                    let _ = Command::new(&wineserver_bin).arg("-w").status();
-                    std::process::exit(status.code().unwrap_or(0));
+        if !primary_exited {
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    primary_exited = true;
+                    exit_code = status.code().unwrap_or(0);
+                    log_runner(&format!("Wine primary process exited with: {:?}", status));
+                    if !is_wine_game_process_running(&runner_dir, &target_exe) {
+                        wait_wineserver(&wineserver_bin, &pfx_dir, 2000);
+                        break;
+                    }
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    log_runner(&format!("Error waiting on Wine process: {}", e));
+                    exit_code = 1;
+                    break;
                 }
             }
-            Ok(None) => {
-                thread::sleep(Duration::from_millis(500));
-            }
-            Err(e) => {
-                log_runner(&format!("Error waiting on Wine process: {}", e));
+        } else {
+            // Check if any background Wine game processes are still running
+            if !is_wine_game_process_running(&runner_dir, &target_exe) {
+                log_runner("All Wine game processes have terminated, exiting cleanly");
+                wait_wineserver(&wineserver_bin, &pfx_dir, 2000);
                 break;
             }
         }
+
+        thread::sleep(Duration::from_millis(500));
     }
 
-    Ok(())
+    std::process::exit(exit_code);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_is_wine_game_process_line_ignores_self_and_nucleon() {
+        let my_pid = 85020;
+        let line_self = "85020 /Users/testuser/Library/Application Support/Steam/compatibilitytools.d/nucleon-wine/nucleon-runner waitforexitandrun /Users/testuser/Library/Application Support/Steam/steamapps/common/DiRT Rally 2.0/dirtrally2.exe -novr";
+        assert!(!is_wine_game_process_line(
+            line_self,
+            my_pid,
+            "/wine",
+            "dirtrally2.exe"
+        ));
+
+        // Even with a different PID, nucleon-runner itself must be ignored
+        let line_other_runner = "16271 /Users/testuser/Library/Application Support/Steam/compatibilitytools.d/nucleon/nucleon-runner waitforexitandrun /Users/testuser/Library/Application Support/Steam/steamapps/common/DiRT Rally 2.0/dirtrally2.exe -novr";
+        assert!(!is_wine_game_process_line(
+            line_other_runner,
+            my_pid,
+            "/wine",
+            "dirtrally2.exe"
+        ));
+    }
+
+    #[test]
+    fn test_is_wine_game_process_line_ignores_wine_services() {
+        let my_pid = 99999;
+        let line_services = "12345 /opt/wine/bin/wine64 C:\\windows\\system32\\services.exe";
+        assert!(!is_wine_game_process_line(
+            line_services,
+            my_pid,
+            "/opt/wine",
+            "dirtrally2.exe"
+        ));
+
+        let line_winedevice = "12346 /opt/wine/bin/wine64 C:\\windows\\system32\\winedevice.exe";
+        assert!(!is_wine_game_process_line(
+            line_winedevice,
+            my_pid,
+            "/opt/wine",
+            "dirtrally2.exe"
+        ));
+
+        let line_wineserver = "12347 /opt/wine/bin/wineserver -p";
+        assert!(!is_wine_game_process_line(
+            line_wineserver,
+            my_pid,
+            "/opt/wine",
+            "dirtrally2.exe"
+        ));
+    }
+
+    #[test]
+    fn test_is_wine_game_process_line_detects_actual_game() {
+        let my_pid = 99999;
+        let line_game = "12348 /opt/wine/bin/wine64-preloader /opt/wine/bin/wine64 Z:\\games\\DiRT Rally 2.0\\dirtrally2.exe -novr";
+        assert!(is_wine_game_process_line(
+            line_game,
+            my_pid,
+            "/opt/wine",
+            "dirtrally2.exe"
+        ));
+
+        let line_other_game = "12349 /opt/wine/bin/wine64 Z:\\games\\other\\launcher.exe";
+        assert!(is_wine_game_process_line(
+            line_other_game,
+            my_pid,
+            "/opt/wine",
+            ""
+        ));
+    }
 }

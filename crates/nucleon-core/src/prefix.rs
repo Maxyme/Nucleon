@@ -23,7 +23,10 @@ pub fn ensure_prefix(prefix_dir: &Path, runner_dir: &Path) -> Result<()> {
 
         // Wait for wineserver to settle
         let wineserver = runner_dir.join("bin/wineserver");
-        let _ = Command::new(&wineserver).arg("-w").status();
+        let _ = Command::new(&wineserver)
+            .arg("-w")
+            .env("WINEPREFIX", prefix_dir)
+            .status();
     }
 
     configure_prefix_registry(prefix_dir, runner_dir)?;
@@ -56,7 +59,10 @@ pub fn configure_prefix_registry(prefix_dir: &Path, runner_dir: &Path) -> Result
     let _ = cmd.status();
 
     let wineserver = runner_dir.join("bin/wineserver");
-    let _ = Command::new(&wineserver).arg("-w").status();
+    let _ = Command::new(&wineserver)
+        .arg("-w")
+        .env("WINEPREFIX", prefix_dir)
+        .status();
 
     let _ = fs::remove_file(&reg_file);
     Ok(())

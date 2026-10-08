@@ -17,6 +17,7 @@ chrono = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 ctrlc = "3.4"
+libc = { workspace = true }
 
 [lints]
 workspace = true
