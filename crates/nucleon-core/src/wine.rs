@@ -1,8 +1,16 @@
 use crate::paths;
 use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CustomWineRecord {
+    pub id: String,
+    pub name: String,
+    pub path: PathBuf,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WineRuntime {
@@ -108,6 +116,28 @@ pub fn custom_wine_path_file() -> PathBuf {
     paths::support_dir().join("custom_wine_path.txt")
 }
 
+pub fn custom_wines_file() -> PathBuf {
+    paths::support_dir().join("custom_wines.json")
+}
+
+pub fn load_custom_wines() -> Vec<CustomWineRecord> {
+    let file = custom_wines_file();
+    if !file.is_file() {
+        return Vec::new();
+    }
+    match fs::read_to_string(&file) {
+        Ok(content) => serde_json::from_str(&content).unwrap_or_default(),
+        Err(_) => Vec::new(),
+    }
+}
+
+pub fn save_custom_wines(records: &[CustomWineRecord]) -> Result<()> {
+    paths::ensure_dirs()?;
+    let json = serde_json::to_string_pretty(records)?;
+    fs::write(custom_wines_file(), json)?;
+    Ok(())
+}
+
 /// Discovers all available Wine runtimes on the system, including Heroic, Homebrew,
 /// CrossOver, Whisky, system installations, and custom paths.
 pub fn discover_wine_runtimes() -> Vec<WineRuntime> {
@@ -126,7 +156,16 @@ pub fn discover_wine_runtimes() -> Vec<WineRuntime> {
         }
     }
 
-    // 2. Custom path persisted via `nucleon wine set-path <path>`
+    // 2. Custom runtimes persisted via `custom_wines.json`
+    for record in load_custom_wines() {
+        if let Some(rt) = inspect_wine_dir(&record.path, Some(&record.id), Some(&record.name)) {
+            if seen_roots.insert(rt.root.clone()) {
+                runtimes.push(rt);
+            }
+        }
+    }
+
+    // 2b. Legacy custom path persisted via `custom_wine_path.txt`
     let custom_file = custom_wine_path_file();
     if custom_file.is_file() {
         if let Ok(content) = fs::read_to_string(&custom_file) {
@@ -199,25 +238,75 @@ pub fn discover_wine_runtimes() -> Vec<WineRuntime> {
         }
     }
 
-    // 6. Check Nucleon runners directory
-    let staged_staging = paths::runners_dir().join("wine-staging");
-    if let Some(rt) = inspect_wine_dir(
-        &staged_staging,
-        Some("staged"),
-        Some("Nucleon Wine-Staging"),
-    ) {
-        if seen_roots.insert(rt.root.clone()) {
-            runtimes.push(rt);
+    // 6. Check all Nucleon runners in runners directory
+    let runners_dir = paths::runners_dir();
+    if let Ok(entries) = fs::read_dir(&runners_dir) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.is_dir() {
+                let id_override = if p.file_name().and_then(|n| n.to_str()) == Some("wine-staging")
+                {
+                    Some("staged")
+                } else {
+                    None
+                };
+                if let Some(rt) = inspect_wine_dir(&p, id_override, None) {
+                    if seen_roots.insert(rt.root.clone()) {
+                        runtimes.push(rt);
+                    }
+                }
+            }
         }
     }
 
-    runtimes.sort_by_key(|r| match r.id.as_str() {
-        "custom" => 0,
-        "staging" => 1,
-        "brew-staging" => 2,
-        "crossover" => 3,
-        "staging-dxmt" => 4,
-        _ => 5,
+    // 7. Check Game Porting Toolkit installations
+    let gptk_candidates = [
+        (
+            PathBuf::from("/Applications/Game Porting Toolkit.app/Contents/Resources/wine"),
+            "gptk-app",
+            "Game Porting Toolkit App",
+        ),
+        (
+            PathBuf::from("/Applications/Game Porting Toolkit.app"),
+            "gptk-app",
+            "Game Porting Toolkit App",
+        ),
+        (
+            PathBuf::from("/opt/homebrew/opt/game-porting-toolkit/Contents/Resources/wine"),
+            "brew-gptk",
+            "Homebrew Game Porting Toolkit",
+        ),
+        (
+            PathBuf::from("/opt/homebrew/opt/game-porting-toolkit"),
+            "brew-gptk",
+            "Homebrew Game Porting Toolkit",
+        ),
+    ];
+    for (cand, id, name) in &gptk_candidates {
+        if let Some(rt) = inspect_wine_dir(cand, Some(id), Some(name)) {
+            if seen_roots.insert(rt.root.clone()) {
+                runtimes.push(rt);
+            }
+        }
+    }
+
+    let custom_ids: std::collections::HashSet<String> =
+        load_custom_wines().into_iter().map(|r| r.id).collect();
+
+    runtimes.sort_by_key(|r| {
+        if r.id == "custom" || custom_ids.contains(&r.id) {
+            0
+        } else {
+            match r.id.as_str() {
+                "staging" => 1,
+                "brew-staging" => 2,
+                "crossover" => 3,
+                "staging-dxmt" => 4,
+                "staged" => 5,
+                "brew-gptk" | "gptk-app" => 6,
+                _ => 7,
+            }
+        }
     });
 
     runtimes
@@ -228,6 +317,16 @@ pub fn find_primary_wine_runtime() -> Option<WineRuntime> {
     let runtimes = discover_wine_runtimes();
     if runtimes.is_empty() {
         return None;
+    }
+
+    // Prefer custom runtime if configured
+    let custom_ids: std::collections::HashSet<String> =
+        load_custom_wines().into_iter().map(|r| r.id).collect();
+    if let Some(custom) = runtimes
+        .iter()
+        .find(|r| r.id == "custom" || custom_ids.contains(&r.id))
+    {
+        return Some(custom.clone());
     }
 
     // Prefer staging if available, else first detected
@@ -241,23 +340,88 @@ pub fn find_primary_wine_runtime() -> Option<WineRuntime> {
     Some(runtimes[0].clone())
 }
 
+/// Registers a custom named Wine runtime and validates it.
+pub fn add_custom_wine(name_or_id: &str, path: &Path) -> Result<WineRuntime> {
+    let canonical = path
+        .canonicalize()
+        .with_context(|| format!("Path does not exist: {}", path.display()))?;
+
+    let trimmed = name_or_id.trim();
+    if trimmed.is_empty() {
+        anyhow::bail!("Custom Wine runtime name cannot be empty");
+    }
+
+    let slug = trimmed.to_lowercase().replace([' ', '_'], "-");
+
+    let runtime = inspect_wine_dir(&canonical, Some(&slug), Some(trimmed))
+        .context("Specified path does not contain a valid Wine runtime (bin/wine not found)")?;
+
+    let mut records = load_custom_wines();
+    if let Some(existing) = records.iter_mut().find(|r| r.id == slug) {
+        existing.name = trimmed.to_string();
+        existing.path = canonical.clone();
+    } else {
+        records.push(CustomWineRecord {
+            id: slug,
+            name: trimmed.to_string(),
+            path: canonical.clone(),
+        });
+    }
+
+    save_custom_wines(&records)?;
+    log::info!(
+        "Registered custom Wine runtime '{}' at {}",
+        trimmed,
+        runtime.root.display()
+    );
+    Ok(runtime)
+}
+
+/// Unregisters a custom named Wine runtime by name or ID.
+pub fn remove_custom_wine(name_or_id: &str) -> Result<bool> {
+    let trimmed = name_or_id.trim().to_lowercase();
+    let mut records = load_custom_wines();
+    let initial_len = records.len();
+    records.retain(|r| r.id.to_lowercase() != trimmed && r.name.to_lowercase() != trimmed);
+
+    if records.len() < initial_len {
+        save_custom_wines(&records)?;
+
+        // If the removed wine was the active selection, reset to primary
+        let sel_file = active_wine_selection_file();
+        if sel_file.is_file() {
+            if let Ok(active_id) = fs::read_to_string(&sel_file) {
+                if active_id.trim().to_lowercase() == trimmed {
+                    let _ = clear_active_wine();
+                }
+            }
+        }
+
+        Ok(true)
+    } else {
+        let legacy_file = custom_wine_path_file();
+        if trimmed == "custom" && legacy_file.is_file() {
+            let _ = fs::remove_file(legacy_file);
+            return Ok(true);
+        }
+        Ok(false)
+    }
+}
+
 /// Sets a custom Wine runtime path and validates it.
 pub fn set_custom_wine_path(path: &Path) -> Result<WineRuntime> {
     let canonical = path
         .canonicalize()
         .with_context(|| format!("Path does not exist: {}", path.display()))?;
 
-    let runtime = inspect_wine_dir(&canonical, Some("custom"), Some("Custom Wine"))
-        .context("Specified path does not contain a valid Wine runtime (bin/wine not found)")?;
+    let runtime = add_custom_wine("custom", &canonical)?;
 
     paths::ensure_dirs()?;
-    fs::write(
+    let _ = fs::write(
         custom_wine_path_file(),
         canonical.to_string_lossy().as_bytes(),
-    )
-    .with_context(|| format!("Failed to write {}", custom_wine_path_file().display()))?;
+    );
 
-    log::info!("Registered custom Wine runtime at {}", canonical.display());
     Ok(runtime)
 }
 
@@ -322,11 +486,13 @@ pub fn get_active_wine_runtime() -> Option<WineRuntime> {
         }
     }
 
-    // 2. Environment variable: NUCLEON_WINE_PATH
-    if let Ok(path_str) = std::env::var("NUCLEON_WINE_PATH") {
-        let p = PathBuf::from(path_str);
-        if let Some(rt) = inspect_wine_dir(&p, Some("env-wine"), Some("Custom Env Wine")) {
-            return Some(rt);
+    // 2. Environment variable: NUCLEON_WINE_PATH or WINE_PATH
+    for var in &["NUCLEON_WINE_PATH", "WINE_PATH"] {
+        if let Ok(path_str) = std::env::var(var) {
+            let p = PathBuf::from(path_str);
+            if let Some(rt) = inspect_wine_dir(&p, Some("env-wine"), Some("Custom Env Wine")) {
+                return Some(rt);
+            }
         }
     }
 
@@ -404,6 +570,7 @@ pub fn clear_active_wine() -> Result<()> {
 
 /// Clears any configured custom Wine path.
 pub fn clear_custom_wine_path() -> Result<()> {
+    let _ = remove_custom_wine("custom");
     let custom_file = custom_wine_path_file();
     if custom_file.is_file() {
         let _ = fs::remove_file(&custom_file);
@@ -461,5 +628,25 @@ mod tests {
         let rt = resolve_wine_runtime_by_query(path_str);
         assert!(rt.is_some());
         assert_eq!(rt.unwrap().root, dir.path());
+    }
+
+    #[test]
+    fn test_custom_wine_record_serialization() {
+        let records = vec![
+            CustomWineRecord {
+                id: "crossover-24".to_string(),
+                name: "CrossOver 24".to_string(),
+                path: PathBuf::from("/Applications/CrossOver.app"),
+            },
+            CustomWineRecord {
+                id: "proton-ge".to_string(),
+                name: "Proton-GE".to_string(),
+                path: PathBuf::from("/opt/proton-ge"),
+            },
+        ];
+
+        let json = serde_json::to_string(&records).unwrap();
+        let deserialized: Vec<CustomWineRecord> = serde_json::from_str(&json).unwrap();
+        assert_eq!(records, deserialized);
     }
 }

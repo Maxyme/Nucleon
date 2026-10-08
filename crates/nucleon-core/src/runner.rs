@@ -15,56 +15,19 @@ pub struct RunnerInfo {
     pub has_gptk: bool,
 }
 
-pub fn discover_wine_candidates() -> Vec<PathBuf> {
-    let mut candidates = Vec::new();
-
-    // 1. Existing nucleon runners
-    let runners_dir = paths::runners_dir();
-    if let Ok(entries) = fs::read_dir(&runners_dir) {
-        for entry in entries.flatten() {
-            let p = entry.path();
-            if p.is_dir() {
-                candidates.push(p.clone());
-                candidates.push(p.join("Contents/Resources/wine"));
+pub fn find_gptk_runner() -> Option<PathBuf> {
+    // 1. Check explicit environment variables
+    for var in &["NUCLEON_GPTK_RUNNER", "NUCLEON_GPTK_PATH"] {
+        if let Ok(p) = std::env::var(var) {
+            let pb = PathBuf::from(p);
+            if pb.join("bin/wine").is_file() && pb.join("lib/external/D3DMetal.framework").is_dir()
+            {
+                return Some(pb);
             }
         }
     }
 
-    // 2. Apple Game Porting Toolkit locations
-    candidates.push(PathBuf::from(
-        "/Applications/Game Porting Toolkit.app/Contents/Resources/wine",
-    ));
-    candidates.push(PathBuf::from(
-        "/opt/homebrew/opt/game-porting-toolkit/Contents/Resources/wine",
-    ));
-    candidates.push(PathBuf::from("/opt/homebrew/opt/game-porting-toolkit"));
-
-    // 4. Wine Staging locations
-    candidates.push(PathBuf::from(
-        "/Applications/Wine Staging.app/Contents/Resources/wine",
-    ));
-    candidates.push(PathBuf::from("/Applications/Wine Staging.app"));
-    candidates.push(PathBuf::from(
-        "/opt/homebrew/opt/wine-staging/Contents/Resources/wine",
-    ));
-    candidates.push(PathBuf::from("/opt/homebrew/opt/wine-staging"));
-    candidates.push(PathBuf::from("/usr/local/opt/wine-staging"));
-
-    candidates
-}
-
-pub fn find_valid_wine_runtime() -> Option<PathBuf> {
-    for c in discover_wine_candidates() {
-        let wine = c.join("bin/wine");
-        let server = c.join("bin/wineserver");
-        if wine.is_file() && server.is_file() {
-            return Some(c);
-        }
-    }
-    None
-}
-
-pub fn find_gptk_runner() -> Option<PathBuf> {
+    // 2. Check staged/assembled runners
     let gptk_beta = paths::runners_dir().join("gptk-4-beta2");
     if gptk_beta.join("bin/wine").is_file()
         && gptk_beta.join("lib/external/D3DMetal.framework").is_dir()
@@ -75,45 +38,19 @@ pub fn find_gptk_runner() -> Option<PathBuf> {
     if gptk.join("bin/wine").is_file() && gptk.join("lib/external/D3DMetal.framework").is_dir() {
         return Some(gptk);
     }
+
+    // 3. Check current runner symlink
+    let cur = paths::current_runner();
+    if cur.join("bin/wine").is_file() && cur.join("lib/external/D3DMetal.framework").is_dir() {
+        return Some(cur);
+    }
+
     None
 }
 
+/// Returns the path to the active or default Wine runtime.
 pub fn find_wine_staging_runtime() -> Option<PathBuf> {
-    // 1. Explicit NUCLEON_WINE_PATH env var
-    if let Ok(p) = std::env::var("NUCLEON_WINE_PATH") {
-        let pb = PathBuf::from(p);
-        if pb.join("bin/wine").is_file() && pb.join("bin/wineserver").is_file() {
-            return Some(pb);
-        }
-    }
-
-    // 2. Desired/active Wine runtime (Heroic, Homebrew, Whisky, CrossOver, custom, etc.)
-    if let Some(active) = crate::wine::get_active_wine_runtime() {
-        return Some(active.root);
-    }
-
-    // 3. Staged runner in nucleon runners dir
-    let staging_staged = paths::runners_dir().join("wine-staging");
-    if staging_staged.join("bin/wine").is_file() {
-        return Some(staging_staged);
-    }
-
-    // 4. Check system/homebrew paths
-    let staging_candidates = [
-        PathBuf::from("/opt/homebrew/opt/wine-staging/Contents/Resources/wine"),
-        PathBuf::from("/opt/homebrew/opt/wine-staging"),
-        PathBuf::from("/Applications/Wine Staging.app/Contents/Resources/wine"),
-        PathBuf::from("/Applications/Wine Staging.app"),
-        PathBuf::from("/usr/local/opt/wine-staging"),
-    ];
-
-    for c in &staging_candidates {
-        if c.join("bin/wine").is_file() && c.join("bin/wineserver").is_file() {
-            return Some(c.clone());
-        }
-    }
-
-    None
+    crate::wine::get_active_wine_runtime().map(|r| r.root)
 }
 
 /// Locates the Mesa KosmicKrisp Vulkan ICD manifest on macOS.
@@ -245,7 +182,7 @@ pub fn resolve_runner_for_engine(engine: TargetEngine) -> Result<(PathBuf, Targe
                 );
                 return Ok((staging, TargetEngine::WineStaging));
             }
-            let assembled = assemble_runner(false)?;
+            let assembled = assemble_runner(false, None, None)?;
             Ok((assembled, TargetEngine::Gptk))
         }
         TargetEngine::KosmicKrisp => {
@@ -256,7 +193,7 @@ pub fn resolve_runner_for_engine(engine: TargetEngine) -> Result<(PathBuf, Targe
             if let Some(staging) = find_wine_staging_runtime() {
                 return Ok((staging, TargetEngine::KosmicKrisp));
             }
-            let assembled = assemble_runner(false)?;
+            let assembled = assemble_runner(false, None, None)?;
             Ok((assembled, TargetEngine::KosmicKrisp))
         }
         TargetEngine::WineStaging => {
@@ -267,75 +204,172 @@ pub fn resolve_runner_for_engine(engine: TargetEngine) -> Result<(PathBuf, Targe
                 log::info!("Wine-Staging not found (install via 'brew install --cask wine-staging'); utilizing GPTK runtime for legacy/DX9 pipeline");
                 return Ok((gptk, TargetEngine::Gptk));
             }
-            let assembled = assemble_runner(false)?;
+            let assembled = assemble_runner(false, None, None)?;
             Ok((assembled, TargetEngine::Gptk))
         }
     }
 }
 
-pub fn find_gptk_components() -> Result<Option<(PathBuf, PathBuf)>> {
-    // 1. Check existing runner
-    let cur = paths::current_runner();
-    let fw = cur.join("lib/external/D3DMetal.framework");
-    let shared = cur.join("lib/external/libd3dshared.dylib");
-    if fw.is_dir() && shared.is_file() {
-        return Ok(Some((fw, shared)));
+/// Inspects a directory or bundle to locate Apple GPTK components (`D3DMetal.framework` and `libd3dshared.dylib`).
+pub fn inspect_gptk_dir(dir: &Path) -> Option<(PathBuf, PathBuf)> {
+    if !dir.exists() {
+        return None;
     }
 
-    // 2. Check /Volumes for mounted GPTK DMGs
-    if let Ok(entries) = fs::read_dir("/Volumes") {
-        for entry in entries.flatten() {
-            let p = entry.path();
-            let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            if name.contains("Evaluation") || name.contains("Game") || name.contains("GPTK") {
-                let vol_fw = p.join("redist/lib/external/D3DMetal.framework");
-                let vol_shared = p.join("redist/lib/external/libd3dshared.dylib");
-                if vol_fw.is_dir() && vol_shared.is_file() {
-                    return Ok(Some((vol_fw, vol_shared)));
+    if dir.is_dir() && dir.file_name().and_then(|n| n.to_str()) == Some("D3DMetal.framework") {
+        if let Some(parent) = dir.parent() {
+            for sub in &[
+                "libd3dshared.dylib",
+                "lib/external/libd3dshared.dylib",
+                "lib/libd3dshared.dylib",
+            ] {
+                let shared = parent.join(sub);
+                if shared.is_file() {
+                    return Some((dir.to_path_buf(), shared));
                 }
             }
         }
     }
 
-    // 3. Check Downloads for DMG and mount if found
-    let downloads = paths::home_dir().join("Downloads");
-    if let Ok(entries) = fs::read_dir(&downloads) {
-        for entry in entries.flatten() {
-            let p = entry.path();
-            let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            if name.ends_with(".dmg")
-                && (name.contains("Evaluation")
-                    || name.contains("Porting")
-                    || name.contains("GPTK"))
-            {
-                if let Ok(output) = Command::new("hdiutil")
-                    .args(["attach", "-nobrowse", "-readonly", p.to_str().unwrap()])
-                    .output()
-                {
-                    let out_str = String::from_utf8_lossy(&output.stdout);
-                    for line in out_str.lines() {
-                        if let Some(idx) = line.find("/Volumes/") {
-                            let mount = PathBuf::from(&line[idx..]);
-                            let vol_fw = mount.join("redist/lib/external/D3DMetal.framework");
-                            let vol_shared = mount.join("redist/lib/external/libd3dshared.dylib");
-                            if vol_fw.is_dir() && vol_shared.is_file() {
-                                return Ok(Some((vol_fw, vol_shared)));
-                            }
-                        }
-                    }
-                }
+    let candidates = [
+        (
+            "lib/external/D3DMetal.framework",
+            "lib/external/libd3dshared.dylib",
+        ),
+        (
+            "redist/lib/external/D3DMetal.framework",
+            "redist/lib/external/libd3dshared.dylib",
+        ),
+        (
+            "Contents/Resources/wine/lib/external/D3DMetal.framework",
+            "Contents/Resources/wine/lib/external/libd3dshared.dylib",
+        ),
+        ("D3DMetal.framework", "libd3dshared.dylib"),
+        ("lib/D3DMetal.framework", "lib/libd3dshared.dylib"),
+        (
+            "redist/lib/D3DMetal.framework",
+            "redist/lib/libd3dshared.dylib",
+        ),
+    ];
+
+    for (fw_rel, shared_rel) in &candidates {
+        let fw = dir.join(fw_rel);
+        let shared = dir.join(shared_rel);
+        if fw.is_dir() && shared.is_file() {
+            return Some((fw, shared));
+        }
+    }
+
+    None
+}
+
+pub fn custom_gptk_path_file() -> PathBuf {
+    paths::support_dir().join("custom_gptk_path.txt")
+}
+
+/// Sets a custom Apple GPTK components path and validates it.
+/// The user is expected to have exported the components to a directory.
+pub fn set_custom_gptk_path(path: &Path) -> Result<(PathBuf, PathBuf)> {
+    let canonical = path
+        .canonicalize()
+        .with_context(|| format!("Path does not exist: {}", path.display()))?;
+
+    if !canonical.is_dir() {
+        anyhow::bail!(
+            "Specified GPTK path is not a directory: {}. Please export Apple GPTK components to a directory containing D3DMetal.framework and libd3dshared.dylib.",
+            canonical.display()
+        );
+    }
+
+    let components = inspect_gptk_dir(&canonical).context(
+        "Specified directory does not contain valid Apple GPTK components (D3DMetal.framework and libd3dshared.dylib not found)",
+    )?;
+
+    paths::ensure_dirs()?;
+    fs::write(
+        custom_gptk_path_file(),
+        canonical.to_string_lossy().as_bytes(),
+    )
+    .with_context(|| format!("Failed to write {}", custom_gptk_path_file().display()))?;
+
+    log::info!("Registered custom GPTK path at {}", canonical.display());
+    Ok(components)
+}
+
+/// Clears any configured custom Apple GPTK path.
+pub fn clear_custom_gptk_path() -> Result<()> {
+    let custom_file = custom_gptk_path_file();
+    if custom_file.is_file() {
+        let _ = fs::remove_file(&custom_file);
+    }
+    Ok(())
+}
+
+pub fn find_gptk_components(custom_path: Option<&Path>) -> Result<Option<(PathBuf, PathBuf)>> {
+    // 1. Explicitly provided custom path
+    if let Some(p) = custom_path {
+        if let Some(comps) = inspect_gptk_dir(p) {
+            return Ok(Some(comps));
+        }
+        anyhow::bail!(
+            "Specified custom GPTK path does not contain valid components: {}. Please point to the directory containing D3DMetal.framework and libd3dshared.dylib.",
+            p.display()
+        );
+    }
+
+    // 2. Explicit environment variables
+    for var in &["NUCLEON_GPTK_PATH", "GPTK_PATH"] {
+        if let Ok(val) = std::env::var(var) {
+            let p = PathBuf::from(val);
+            if let Some(comps) = inspect_gptk_dir(&p) {
+                return Ok(Some(comps));
             }
+        }
+    }
+
+    // 3. Persisted custom path
+    let custom_file = custom_gptk_path_file();
+    if custom_file.is_file() {
+        if let Ok(content) = fs::read_to_string(&custom_file) {
+            let p = PathBuf::from(content.trim());
+            if let Some(comps) = inspect_gptk_dir(&p) {
+                return Ok(Some(comps));
+            }
+        }
+    }
+
+    // 4. Check existing runner
+    let cur = paths::current_runner();
+    if let Some(comps) = inspect_gptk_dir(&cur) {
+        return Ok(Some(comps));
+    }
+
+    // 5. Check well-known installed locations
+    let well_known = [
+        PathBuf::from("/Applications/Game Porting Toolkit.app"),
+        PathBuf::from("/opt/homebrew/opt/game-porting-toolkit"),
+        PathBuf::from("/usr/local/opt/game-porting-toolkit"),
+    ];
+    for p in &well_known {
+        if let Some(comps) = inspect_gptk_dir(p) {
+            return Ok(Some(comps));
         }
     }
 
     Ok(None)
 }
 
-pub fn assemble_runner(force: bool) -> Result<PathBuf> {
+pub fn assemble_runner(
+    force: bool,
+    custom_wine: Option<&Path>,
+    custom_gptk: Option<&Path>,
+) -> Result<PathBuf> {
     paths::ensure_dirs()?;
     let target = paths::runners_dir().join("gptk-4-beta2");
 
+    let has_explicit = custom_wine.is_some() || custom_gptk.is_some();
     if !force
+        && !has_explicit
         && target.join("bin/wine").is_file()
         && target.join("lib/external/D3DMetal.framework").is_dir()
     {
@@ -350,8 +384,21 @@ pub fn assemble_runner(force: bool) -> Result<PathBuf> {
         return Ok(target);
     }
 
-    let wine_src = find_valid_wine_runtime()
-        .context("No compatible Wine runtime found. Install Game Porting Toolkit via Homebrew: brew tap gcenx/wine && brew install --cask --no-quarantine game-porting-toolkit")?;
+    let wine_src = if let Some(custom) = custom_wine {
+        if let Some(rt) = crate::wine::inspect_wine_dir(custom, Some("custom"), Some("Custom Wine"))
+        {
+            rt.root
+        } else {
+            anyhow::bail!(
+                "Specified custom Wine path is not a valid Wine runtime (bin/wine not found): {}",
+                custom.display()
+            );
+        }
+    } else {
+        crate::wine::get_active_wine_runtime()
+            .map(|r| r.root)
+            .context("No compatible Wine runtime found. Install Game Porting Toolkit via Homebrew: brew tap gcenx/wine && brew install --cask --no-quarantine game-porting-toolkit")?
+    };
 
     fs::create_dir_all(&target)?;
 
@@ -367,8 +414,8 @@ pub fn assemble_runner(force: bool) -> Result<PathBuf> {
         .status()?;
 
     // Install GPTK 4 D3DMetal components
-    let (d3dm_fw, d3d_shared) = find_gptk_components()?
-        .context("Could not find Apple Game Porting Toolkit 4 components (D3DMetal.framework). Please download the GPTK 4 DMG from developer.apple.com/games and place it in ~/Downloads")?;
+    let (d3dm_fw, d3d_shared) = find_gptk_components(custom_gptk)?
+        .context("Could not find Apple Game Porting Toolkit components (D3DMetal.framework). Please export the GPTK components to a directory and configure via 'nucleon gptk set-path <DIR>', --gptk-path, or NUCLEON_GPTK_PATH.")?;
 
     let ext_dir = target.join("lib/external");
     fs::create_dir_all(&ext_dir)?;
@@ -601,5 +648,47 @@ mod tests {
         let found = find_kosmickrisp_icd();
         assert_eq!(found, Some(icd_file.clone()));
         std::env::remove_var("VK_DRIVER_FILES");
+    }
+
+    #[test]
+    fn test_inspect_gptk_dir_flat() {
+        let dir = tempdir().unwrap();
+        let fw_dir = dir.path().join("D3DMetal.framework");
+        fs::create_dir_all(&fw_dir).unwrap();
+        let shared = dir.path().join("libd3dshared.dylib");
+        fs::write(&shared, "fake").unwrap();
+
+        let comps = inspect_gptk_dir(dir.path());
+        assert!(comps.is_some());
+        let (fw, sh) = comps.unwrap();
+        assert_eq!(fw, fw_dir);
+        assert_eq!(sh, shared);
+    }
+
+    #[test]
+    fn test_inspect_gptk_dir_redist() {
+        let dir = tempdir().unwrap();
+        let fw_dir = dir.path().join("redist/lib/external/D3DMetal.framework");
+        fs::create_dir_all(&fw_dir).unwrap();
+        let shared = dir.path().join("redist/lib/external/libd3dshared.dylib");
+        fs::write(&shared, "fake").unwrap();
+
+        let comps = inspect_gptk_dir(dir.path());
+        assert!(comps.is_some());
+        let (fw, sh) = comps.unwrap();
+        assert_eq!(fw, fw_dir);
+        assert_eq!(sh, shared);
+    }
+
+    #[test]
+    fn test_set_custom_gptk_path_rejects_file() {
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("dummy.dmg");
+        fs::write(&file_path, "not a directory").unwrap();
+
+        let result = set_custom_gptk_path(&file_path);
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("Specified GPTK path is not a directory"));
     }
 }

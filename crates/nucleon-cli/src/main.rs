@@ -40,6 +40,12 @@ enum Commands {
         /// Select desired Wine runtime flavor or path for Steam (e.g. staging, crossover)
         #[arg(long)]
         wine: Option<String>,
+        /// Point to custom Wine installation directory
+        #[arg(long)]
+        wine_path: Option<PathBuf>,
+        /// Point to custom Apple GPTK directory (containing D3DMetal.framework and libd3dshared.dylib)
+        #[arg(long)]
+        gptk_path: Option<PathBuf>,
         /// Point to extracted Valve client bridge directory (or set NUCLEON_BRIDGE_PATH)
         #[arg(long)]
         bridge_path: Option<PathBuf>,
@@ -55,6 +61,11 @@ enum Commands {
     Wine {
         #[command(subcommand)]
         action: WineAction,
+    },
+    /// Manage Apple Game Porting Toolkit (GPTK) components and custom paths
+    Gptk {
+        #[command(subcommand)]
+        action: GptkAction,
     },
     /// Manage VKD3D-Proton (Direct3D 12 -> Vulkan 1.4) translation layer
     Vkd3d {
@@ -149,6 +160,22 @@ enum WineAction {
     },
     /// Inspect details of active Wine runtime and Steam registration
     Status,
+    /// Register a custom Wine runtime with a custom name
+    Add {
+        /// Unique identifier or name for the runtime (e.g. 'crossover-24', 'proton-ge')
+        name: String,
+        /// Path to Wine installation directory (containing bin/wine or Contents/Resources/wine)
+        path: PathBuf,
+        /// Immediately set this runtime as the active Wine runtime
+        #[arg(short, long)]
+        use_now: bool,
+    },
+    /// Unregister a custom Wine runtime
+    #[command(alias = "rm", alias = "unregister")]
+    Remove {
+        /// Identifier or name of the custom Wine runtime to unregister
+        name: String,
+    },
     /// Point Nucleon to a custom Wine installation directory
     SetPath {
         /// Path to Wine installation directory (containing bin/wine or Contents/Resources/wine)
@@ -157,6 +184,19 @@ enum WineAction {
     /// Reset active Wine to default recommended primary runtime
     Reset,
     /// Clear configured custom Wine path
+    ClearPath,
+}
+
+#[derive(Subcommand)]
+enum GptkAction {
+    /// Inspect Apple Game Porting Toolkit detection, components, and runner status
+    Status,
+    /// Point Nucleon to an existing Apple GPTK components directory
+    SetPath {
+        /// Path to directory containing D3DMetal.framework and libd3dshared.dylib
+        path: PathBuf,
+    },
+    /// Clear configured custom Apple GPTK path
     ClearPath,
 }
 
@@ -190,10 +230,44 @@ fn main() -> Result<()> {
             fetch_vkd3d,
             vkd3d_path,
             wine,
+            wine_path,
+            gptk_path,
             bridge_path,
         } => {
             println!("==> Setting up Nucleon with Wine and GPTK 4...");
             paths::ensure_dirs()?;
+
+            if let Some(ref wp) = wine_path {
+                match wine::set_custom_wine_path(wp) {
+                    Ok(rt) => {
+                        println!(
+                            "  ✓ Registered custom Wine runtime at {}",
+                            rt.root.display()
+                        );
+                        let _ = wine::set_active_wine(&rt.id);
+                    }
+                    Err(e) => eprintln!(
+                        "  ! Failed to set custom Wine path {}: {:#}",
+                        wp.display(),
+                        e
+                    ),
+                }
+            }
+
+            if let Some(ref gp) = gptk_path {
+                match runner::set_custom_gptk_path(gp) {
+                    Ok((fw, shared)) => {
+                        println!("  ✓ Registered custom Apple GPTK path at {}", gp.display());
+                        println!("    └─ D3DMetal.framework: {}", fw.display());
+                        println!("    └─ libd3dshared.dylib: {}", shared.display());
+                    }
+                    Err(e) => eprintln!(
+                        "  ! Failed to set custom GPTK path {}: {:#}",
+                        gp.display(),
+                        e
+                    ),
+                }
+            }
 
             if let Some(ref desired_wine) = wine {
                 match wine::set_active_wine(desired_wine) {
@@ -265,7 +339,8 @@ fn main() -> Result<()> {
 
             // 2. Assemble Wine + GPTK 4 runner
             println!("==> Resolving Wine runtime & GPTK 4 D3DMetal components...");
-            let runner_path = runner::assemble_runner(force)?;
+            let runner_path =
+                runner::assemble_runner(force, wine_path.as_deref(), gptk_path.as_deref())?;
             println!("  ✓ Runner assembled at: {}", runner_path.display());
 
             // 3. Stage Valve bridge packages
@@ -441,8 +516,10 @@ fn main() -> Result<()> {
             println!("  Tri-Engine Architecture:");
             if let Some(gptk) = runner::find_gptk_runner() {
                 println!("    ● Apple GPTK 4 (DX11/12):        ✓ {}", gptk.display());
+            } else if let Ok(Some((fw, _))) = runner::find_gptk_components(None) {
+                println!("    ● Apple GPTK 4 (Components):     ✓ {}", fw.display());
             } else {
-                println!("    ○ Apple GPTK 4 (DX11/12):        ✗ Not found (run 'nucleon setup')");
+                println!("    ○ Apple GPTK 4 (DX11/12):        ✗ Not found (run 'nucleon setup' or 'nucleon gptk set-path <DIR>')");
             }
             if steam::is_gptk_tool_registered() {
                 println!(
@@ -582,15 +659,22 @@ fn main() -> Result<()> {
                         "  To configure a custom Wine runtime: nucleon wine set-path /path/to/wine"
                     );
                 } else {
+                    let custom_ids: std::collections::HashSet<String> = wine::load_custom_wines()
+                        .into_iter()
+                        .map(|r| r.id)
+                        .collect();
+
                     println!("  Found {} runtime(s):\n", runtimes.len());
                     for rt in &runtimes {
                         let is_active = active.as_ref().map(|a| a.root == rt.root).unwrap_or(false);
+                        let is_custom = rt.id == "custom" || custom_ids.contains(&rt.id);
                         let ver = rt.version.as_deref().unwrap_or("Unknown version");
-                        let marker = if is_active { " [ACTIVE]" } else { "" };
+                        let custom_marker = if is_custom { " [CUSTOM]" } else { "" };
+                        let active_marker = if is_active { " [ACTIVE]" } else { "" };
                         let symbol = if is_active { "●" } else { "○" };
                         println!(
-                            "  {} {:<14} - {} [{}] {}",
-                            symbol, rt.id, rt.name, ver, marker
+                            "  {} {:<16} - {} [{}] {}{}",
+                            symbol, rt.id, rt.name, ver, custom_marker, active_marker
                         );
                         println!("    Location: {}", rt.root.display());
                     }
@@ -602,7 +686,45 @@ fn main() -> Result<()> {
                     println!(
                         "  To switch active Wine:        nucleon wine use <staging|crossover|path>"
                     );
+                    println!(
+                        "  To add a custom Wine:         nucleon wine add <name> <path> [--use-now]"
+                    );
+                    println!("  To remove a custom Wine:      nucleon wine remove <name>");
                     println!("  Per-game Steam Launch Option: NUCLEON_WINE=crossover %command%");
+                }
+            }
+            WineAction::Add {
+                name,
+                path,
+                use_now,
+            } => {
+                println!(
+                    "==> Registering custom Wine runtime '{}' from {}...",
+                    name,
+                    path.display()
+                );
+                let rt = wine::add_custom_wine(&name, &path)?;
+                println!(
+                    "  ✓ Validated and registered Wine runtime: {} [{}]",
+                    rt.name,
+                    rt.version.as_deref().unwrap_or("Unknown")
+                );
+                println!("  ✓ Identifier: {}", rt.id);
+                println!("  ✓ Root path:  {}", rt.root.display());
+
+                if use_now {
+                    let _ = wine::set_active_wine(&rt.id);
+                    println!("  ✓ Set as active Wine runtime for Steam.");
+                } else {
+                    println!("\nTo switch to this Wine: nucleon wine use {}", rt.id);
+                }
+            }
+            WineAction::Remove { name } => {
+                println!("==> Unregistering custom Wine runtime '{}'...", name);
+                if wine::remove_custom_wine(&name)? {
+                    println!("  ✓ Successfully unregistered '{}'.", name);
+                } else {
+                    println!("  ! No custom Wine runtime found matching '{}'.", name);
                 }
             }
             WineAction::Use { version } => {
@@ -645,6 +767,57 @@ fn main() -> Result<()> {
             WineAction::ClearPath => {
                 wine::clear_custom_wine_path()?;
                 println!("  ✓ Cleared custom Wine path configuration.");
+            }
+        },
+
+        Commands::Gptk { action } => match action {
+            GptkAction::Status => {
+                println!("==> Apple Game Porting Toolkit (GPTK) Status");
+                let custom_file = runner::custom_gptk_path_file();
+                if custom_file.is_file() {
+                    if let Ok(c) = fs::read_to_string(&custom_file) {
+                        println!("  Custom path configured:    ✓ {}", c.trim());
+                    }
+                } else {
+                    println!("  Custom path configured:    ○ None (auto-discovery active)");
+                }
+
+                if let Some(runner_path) = runner::find_gptk_runner() {
+                    println!("  Assembled GPTK runner:     ✓ {}", runner_path.display());
+                } else {
+                    println!("  Assembled GPTK runner:     ○ Not assembled (run 'nucleon setup')");
+                }
+
+                match runner::find_gptk_components(None) {
+                    Ok(Some((fw, shared))) => {
+                        println!("  D3DMetal.framework:        ✓ {}", fw.display());
+                        println!("  libd3dshared.dylib:        ✓ {}", shared.display());
+                    }
+                    Ok(None) => {
+                        println!("  GPTK Components:           ✗ Not found");
+                        println!(
+                            "  To configure custom GPTK:   nucleon gptk set-path /path/to/gptk"
+                        );
+                    }
+                    Err(e) => {
+                        println!("  GPTK Components error:     ✗ {:#}", e);
+                    }
+                }
+            }
+            GptkAction::SetPath { path } => {
+                println!("==> Registering custom GPTK path: {}", path.display());
+                let (fw, shared) = runner::set_custom_gptk_path(&path)?;
+                println!(
+                    "  ✓ Validated and registered Apple GPTK components at {}",
+                    path.display()
+                );
+                println!("  ✓ D3DMetal.framework: {}", fw.display());
+                println!("  ✓ libd3dshared.dylib: {}", shared.display());
+                println!("\nRun 'nucleon setup' to assemble or refresh the runner with this GPTK.");
+            }
+            GptkAction::ClearPath => {
+                runner::clear_custom_gptk_path()?;
+                println!("  ✓ Cleared custom Apple GPTK path override.");
             }
         },
 

@@ -81,7 +81,7 @@ Nucleon features an intelligent **Tri-Engine Router** that inspects target Windo
 - [Rust](https://rustup.rs/) (1.80+ recommended).
 - [just](https://github.com/casey/just) command runner (`brew install just`).
 - Xcode Command Line Tools (`xcode-select --install`).
-- Apple Game Porting Toolkit 4 DMG mounted or installed, or Wine-Staging.
+- Apple Game Porting Toolkit components (`D3DMetal.framework`, `libd3dshared.dylib`), or Wine-Staging.
 - Steam for macOS installed in `/Applications/Steam.app`.
 
 ### Building from Source
@@ -103,6 +103,78 @@ Run the automated setup command to stage bridge packages, register the Steam com
 ```bash
 just setup
 # or: ./target/release/nucleon setup
+```
+
+### Setting Up Apple Game Porting Toolkit (GPTK)
+
+Nucleon uses Apple's native `D3DMetal.framework` and `libd3dshared.dylib` from the **Apple Game Porting Toolkit (GPTK 4 / GPTK 2)** for hardware-accelerated DirectX 11 and DirectX 12 translation on Apple Silicon.
+
+Apple provides these components inside a disk image (`.dmg`) available from [Apple Developer: Game Porting Toolkit](https://developer.apple.com/games/game-porting-toolkit/).
+
+#### 1. Download & Mount the Apple GPTK DMG
+Download **Game Porting Toolkit** (`Game_Porting_Toolkit_4.0_beta_2.dmg`) from [developer.apple.com/games/game-porting-toolkit/](https://developer.apple.com/games/game-porting-toolkit/) and mount it:
+
+```bash
+hdiutil attach ~/Downloads/Game_Porting_Toolkit_4.0_beta_2.dmg
+# Mounts to: /Volumes/Game Porting Toolkit 4.0 beta 2 (or /Volumes/Game Porting Toolkit)
+```
+
+#### 2. Export GPTK Components to a Directory
+Export the components from the mounted disk image to a local directory:
+
+```bash
+# Create a local directory for GPTK components:
+mkdir -p "$HOME/Developer/gptk"
+
+# Copy D3DMetal.framework and libd3dshared.dylib:
+cp -R "/Volumes/Game Porting Toolkit 4.0 beta 2/redist/lib/external/D3DMetal.framework" "$HOME/Developer/gptk/"
+cp "/Volumes/Game Porting Toolkit 4.0 beta 2/redist/lib/external/libd3dshared.dylib" "$HOME/Developer/gptk/"
+
+# Unmount the DMG when finished:
+hdiutil detach "/Volumes/Game Porting Toolkit 4.0 beta 2"
+```
+
+#### 3. Register the GPTK Directory with Nucleon
+Attach the exported directory to Nucleon using any of the following methods:
+
+- **Method A: Via CLI Subcommand (Persistent)**
+  ```bash
+  nucleon gptk set-path "$HOME/Developer/gptk"
+  ```
+- **Method B: During Initial Setup**
+  ```bash
+  nucleon setup --gptk-path "$HOME/Developer/gptk"
+  ```
+- **Method C: Environment Variable (Per-Session / Shell)**
+  ```bash
+  export NUCLEON_GPTK_PATH="$HOME/Developer/gptk"
+  ```
+
+#### 4. Verify Detection
+Check that Nucleon successfully detects `D3DMetal.framework` and `libd3dshared.dylib`:
+
+```bash
+nucleon gptk status
+# or check overall system status:
+nucleon status
+```
+
+### Managing Wine Runtimes
+
+Nucleon automatically discovers existing Wine installations (Heroic Games Launcher, Homebrew, Whisky, and CrossOver), and allows registering custom named runtimes:
+
+```bash
+# List all discovered and custom Wine runtimes:
+nucleon wine list
+
+# Register a custom Wine installation:
+nucleon wine add my-crossover /Applications/CrossOver.app/Contents/SharedSupport/CrossOver
+
+# Switch active Wine runtime:
+nucleon wine use my-crossover
+
+# Unregister a custom runtime:
+nucleon wine remove my-crossover
 ```
 
 ### Staging Valve Client Bridge Libraries
