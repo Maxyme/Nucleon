@@ -200,11 +200,20 @@ pub fn run(args: SetupArgs) -> Result<()> {
 
     if runner_bin.exists() {
         steam::install_compatibility_tool(&runner_bin)?;
-        ui::success("Registered Steam compatibility tool: 'Nucleon (Game Porting Toolkit 4)'");
+        if steam::is_auto_tool_registered() {
+            ui::success("Registered Steam compatibility tool: 'Nucleon (Wine + Automatic Graphics Backend)'");
+        }
+        if steam::is_gptk_tool_registered() {
+            ui::success(
+                "Registered Steam compatibility tool: 'Nucleon (GPTK Wine + Apple D3DMetal)'",
+            );
+        }
         if steam::is_kosmickrisp_tool_registered() {
-            ui::success("Registered Steam compatibility tool: 'Nucleon (KosmicKrisp)'");
+            ui::success(
+                "Registered Steam compatibility tool: 'Nucleon (Wine + Mesa KosmicKrisp Vulkan)'",
+            );
         } else {
-            ui::info("Steam compatibility tool 'Nucleon (KosmicKrisp)': not registered (KosmicKrisp not detected; pass --kosmickrisp to enable)");
+            ui::info("Steam compatibility tool 'Nucleon (Wine + Mesa KosmicKrisp Vulkan)': not registered (KosmicKrisp not detected; pass --kosmickrisp to enable)");
         }
         if steam::is_wine_tool_registered() {
             let active_name = wine::get_active_wine_runtime()
@@ -217,7 +226,7 @@ pub fn run(args: SetupArgs) -> Result<()> {
                 })
                 .unwrap_or_else(|| "default".to_string());
             ui::success(format!(
-                "Registered Steam compatibility tool: 'Nucleon (Wine)' -> {}",
+                "Registered Steam compatibility tool: 'Nucleon (Wine + WineD3D OpenGL)' -> {}",
                 active_name
             ));
         }
@@ -287,8 +296,11 @@ To use Nucleon in Steam:
   1. Restart Steam: pkill steam_osx && open -a /Applications/Steam.app
   2. The 'Install' button is now enabled for all Windows games in your library.
   3. Clicking 'Install' begins downloading and routes the game via Nucleon.
-  4. To configure a specific runner/engine, right-click the game -> Properties -> Compatibility,
-     or use Steam Settings -> Compatibility.
+  4. Compatibility tools available in Steam:
+     - 'Nucleon (Wine + Automatic Graphics Backend)' [Default]
+     - 'Nucleon (GPTK Wine + Apple D3DMetal)'
+     - 'Nucleon (Wine + Mesa KosmicKrisp Vulkan)'
+     - 'Nucleon (Wine + WineD3D OpenGL)'
   5. Or launch directly from terminal: nucleon launch <AppID>"#
     );
 

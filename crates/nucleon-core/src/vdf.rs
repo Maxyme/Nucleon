@@ -121,7 +121,8 @@ pub fn write_compatibilitytool_vdf(target: &Path) -> Result<()> {
     if let Some(parent) = target.parent() {
         fs::create_dir_all(parent)?;
     }
-    let content = generate_compatibilitytool_vdf("nucleon", "Nucleon (Game Porting Toolkit 4)");
+    let content =
+        generate_compatibilitytool_vdf("nucleon", "Nucleon (Wine + Automatic Graphics Backend)");
     fs::write(target, content).with_context(|| {
         format!(
             "Failed to write compatibilitytool.vdf at {}",
@@ -146,7 +147,7 @@ mod tests {
         write_tool_bundle_with_engine(
             &tool_dir,
             "nucleon-kosmickrisp",
-            "Nucleon (KosmicKrisp)",
+            "Nucleon (Wine + Mesa KosmicKrisp Vulkan)",
             &runner_src,
             Some("kosmickrisp"),
         )
@@ -154,7 +155,9 @@ mod tests {
 
         let vdf_content = fs::read_to_string(tool_dir.join("compatibilitytool.vdf")).unwrap();
         assert!(vdf_content.contains(r#""nucleon-kosmickrisp""#));
-        assert!(vdf_content.contains(r#""display_name" "Nucleon (KosmicKrisp)""#));
+        assert!(
+            vdf_content.contains(r#""display_name" "Nucleon (Wine + Mesa KosmicKrisp Vulkan)""#)
+        );
         assert!(vdf_content.contains(r#""from_oslist" "windows""#));
         assert!(vdf_content.contains(r#""to_oslist" "macos""#));
 

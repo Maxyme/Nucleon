@@ -15,10 +15,19 @@ use anyhow::Result;
 use std::fs;
 use std::path::Path;
 
-pub fn is_gptk_tool_registered() -> bool {
+pub fn is_auto_tool_registered() -> bool {
     paths::steam_compat_tools_dir()
         .join("compatibilitytool.vdf")
         .is_file()
+}
+
+pub fn is_gptk_tool_registered() -> bool {
+    paths::steam_gptk_compat_tools_dir()
+        .join("compatibilitytool.vdf")
+        .is_file()
+        || paths::steam_compat_tools_dir()
+            .join("compatibilitytool.vdf")
+            .is_file()
 }
 
 pub fn is_kosmickrisp_tool_registered() -> bool {
@@ -28,8 +37,8 @@ pub fn is_kosmickrisp_tool_registered() -> bool {
 }
 
 pub fn is_wine_tool_registered() -> bool {
-    paths::home_dir()
-        .join("Library/Application Support/Steam/compatibilitytools.d/nucleon-wine/compatibilitytool.vdf")
+    paths::steam_wine_compat_tools_dir()
+        .join("compatibilitytool.vdf")
         .is_file()
 }
 
@@ -81,13 +90,31 @@ pub fn is_staging_tool_registered() -> bool {
 }
 
 pub fn install_compatibility_tool(runner_bin: &Path) -> Result<()> {
-    let nucleon_tool_dir = paths::steam_compat_tools_dir();
-    vdf::write_tool_bundle(
-        &nucleon_tool_dir,
+    // 1. Register Automatic tool: Nucleon (Wine + Automatic Graphics Backend)
+    let auto_tool_dir = paths::steam_compat_tools_dir();
+    vdf::write_tool_bundle_with_engine(
+        &auto_tool_dir,
         "nucleon",
-        "Nucleon (Game Porting Toolkit 4)",
+        "Nucleon (Wine + Automatic Graphics Backend)",
         runner_bin,
+        Some("auto"),
     )?;
+    log::info!("Registered Steam compatibility tool: Nucleon (Wine + Automatic Graphics Backend)");
+
+    // 2. Register explicit GPTK tool: Nucleon (GPTK Wine + Apple D3DMetal)
+    let gptk_tool_dir = paths::steam_gptk_compat_tools_dir();
+    if runner::find_gptk_runner().is_some() || runner::find_wine_staging_runtime().is_some() {
+        vdf::write_tool_bundle_with_engine(
+            &gptk_tool_dir,
+            "nucleon-gptk",
+            "Nucleon (GPTK Wine + Apple D3DMetal)",
+            runner_bin,
+            Some("gptk"),
+        )?;
+        log::info!("Registered Steam compatibility tool: Nucleon (GPTK Wine + Apple D3DMetal)");
+    } else if gptk_tool_dir.exists() {
+        let _ = fs::remove_dir_all(&gptk_tool_dir);
+    }
 
     // Clean up legacy notproton compatibility tool directory if present
     let notproton_tool_dir =
@@ -96,51 +123,48 @@ pub fn install_compatibility_tool(runner_bin: &Path) -> Result<()> {
         let _ = fs::remove_dir_all(&notproton_tool_dir);
     }
 
-    // Register KosmicKrisp compatibility tool if installed/detected
+    // 3. Register KosmicKrisp compatibility tool if installed/detected
     let kk_tool_dir = paths::steam_kosmickrisp_compat_tools_dir();
     if runner::is_kosmickrisp_installed() {
         vdf::write_tool_bundle_with_engine(
             &kk_tool_dir,
             "nucleon-kosmickrisp",
-            "Nucleon (KosmicKrisp)",
+            "Nucleon (Wine + Mesa KosmicKrisp Vulkan)",
             runner_bin,
             Some("kosmickrisp"),
         )?;
-        log::info!("Registered Steam compatibility tool: Nucleon (KosmicKrisp)");
+        log::info!("Registered Steam compatibility tool: Nucleon (Wine + Mesa KosmicKrisp Vulkan)");
     } else if kk_tool_dir.exists() {
         let _ = fs::remove_dir_all(&kk_tool_dir);
         log::info!("Cleaned up unregistered KosmicKrisp Steam tool bundle (not detected)");
     }
 
-    // Register single unified Wine compatibility tool: 'Nucleon (Wine)' pointing to active desired Wine runtime
-    let wine_tools_base =
-        paths::home_dir().join("Library/Application Support/Steam/compatibilitytools.d");
+    // 4. Register single unified Wine compatibility tool: 'Nucleon (Wine + WineD3D OpenGL)' pointing to active desired Wine runtime
+    let wine_primary_dir = paths::steam_wine_compat_tools_dir();
     let active_wine = crate::wine::get_active_wine_runtime();
 
     if let Some(ref aw) = active_wine {
-        let wine_primary_dir = wine_tools_base.join("nucleon-wine");
         vdf::write_tool_bundle_with_wine(
             &wine_primary_dir,
             "nucleon-wine",
-            "Nucleon (Wine)",
+            "Nucleon (Wine + WineD3D OpenGL)",
             runner_bin,
             Some("staging"),
             Some(&aw.root),
         )?;
         log::info!(
-            "Registered Steam compatibility tool: 'Nucleon (Wine)' -> {} ({})",
+            "Registered Steam compatibility tool: 'Nucleon (Wine + WineD3D OpenGL)' -> {} ({})",
             aw.name,
             aw.root.display()
         );
     } else {
-        let wine_primary_dir = wine_tools_base.join("nucleon-wine");
         if wine_primary_dir.exists() {
             let _ = fs::remove_dir_all(&wine_primary_dir);
         }
     }
 
-    // Clean up all individual version-specific Wine sub-tools (e.g. nucleon-wine-staging, nucleon-wine-crossover, etc.)
-    // so Steam's compatibility dropdown stays minimal and uncluttered!
+    let wine_tools_base =
+        paths::home_dir().join("Library/Application Support/Steam/compatibilitytools.d");
     if let Ok(entries) = fs::read_dir(&wine_tools_base) {
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
@@ -253,24 +277,32 @@ mod tests {
         let base = temp.path();
 
         let tool1 = base.join("nucleon");
-        let tool2 = base.join("nucleon-kosmickrisp");
-        let tool3 = base.join("nucleon-wine");
+        let tool2 = base.join("nucleon-gptk");
+        let tool3 = base.join("nucleon-kosmickrisp");
+        let tool4 = base.join("nucleon-wine");
         let other = base.join("custom-tool");
 
         fs::create_dir_all(&tool1).unwrap();
         fs::create_dir_all(&tool2).unwrap();
         fs::create_dir_all(&tool3).unwrap();
+        fs::create_dir_all(&tool4).unwrap();
         fs::create_dir_all(&other).unwrap();
 
         let removed = remove_compatibility_tools_in(base).unwrap();
         assert_eq!(
             removed,
-            vec!["nucleon", "nucleon-kosmickrisp", "nucleon-wine"]
+            vec![
+                "nucleon",
+                "nucleon-gptk",
+                "nucleon-kosmickrisp",
+                "nucleon-wine"
+            ]
         );
 
         assert!(!tool1.exists());
         assert!(!tool2.exists());
         assert!(!tool3.exists());
+        assert!(!tool4.exists());
         assert!(other.exists(), "Other tools must not be deleted");
     }
 

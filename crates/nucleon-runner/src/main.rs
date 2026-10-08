@@ -300,19 +300,25 @@ fn main() -> Result<()> {
         .or_else(|| env::var("NUCLEON_ENGINE").ok())
         .and_then(|s| nucleon_core::detector::TargetEngine::parse(&s));
 
-    let (engine, api_desc) = if let Some(eng) = requested_engine {
-        log_runner(&format!("Engine manually overridden -> {:?}", eng));
-        (eng, format!("Manual Override ({:?})", eng))
-    } else {
-        let detection = nucleon_core::detector::detect_target_engine(&target_exe);
-        log_runner(&format!(
-            "Auto-detected graphics API: {:?} (found: {:?}) -> routing to {:?}",
-            detection.api, detection.detected_dll, detection.engine
-        ));
-        (
-            detection.engine,
-            format!("{:?} (DLL: {:?})", detection.api, detection.detected_dll),
-        )
+    let (engine, api_desc) = match requested_engine {
+        Some(nucleon_core::detector::TargetEngine::Auto) | None => {
+            let detection = nucleon_core::detector::detect_target_engine(&target_exe);
+            log_runner(&format!(
+                "Auto-detected graphics API: {:?} (found: {:?}) -> routing to {:?}",
+                detection.api, detection.detected_dll, detection.engine
+            ));
+            (
+                detection.engine,
+                format!(
+                    "Automatic Detection: {:?} (DLL: {:?})",
+                    detection.api, detection.detected_dll
+                ),
+            )
+        }
+        Some(eng) => {
+            log_runner(&format!("Engine manually overridden -> {:?}", eng));
+            (eng, format!("Manual Override ({:?})", eng))
+        }
     };
 
     log_runner(&format!(

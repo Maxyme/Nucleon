@@ -51,7 +51,15 @@ pub fn run() -> Result<()> {
         );
     }
 
-    println!("  Tri-Engine Architecture:");
+    println!("  Tri-Engine Architecture & Steam Compatibility Tools:");
+    if steam::is_auto_tool_registered() {
+        ui::sub_kv("Automatic Engine Router:", "✓ Active");
+        ui::tree_kv(
+            "└─",
+            "Registered in Steam UI:",
+            "✓ 'Nucleon (Wine + Automatic Graphics Backend)'",
+        );
+    }
     if let Some(gptk) = runner::find_gptk_runner() {
         ui::sub_kv("Apple GPTK 4 (DX11/12):", format!("✓ {}", gptk.display()));
     } else if let Ok(Some((fw, _))) = runner::find_gptk_components(None) {
@@ -63,7 +71,7 @@ pub fn run() -> Result<()> {
         ui::tree_kv(
             "└─",
             "Registered in Steam UI:",
-            "✓ 'Nucleon (Game Porting Toolkit 4)'",
+            "✓ 'Nucleon (GPTK Wine + Apple D3DMetal)'",
         );
     } else {
         ui::tree_kv(
@@ -83,7 +91,11 @@ pub fn run() -> Result<()> {
         println!("    ○ Mesa KosmicKrisp (Vulkan):     ○ Optional (run 'nucleon kosmickrisp set-path <DIR>' or install Vulkan SDK)");
     }
     if steam::is_kosmickrisp_tool_registered() {
-        ui::tree_kv("├─", "Registered in Steam UI:", "✓ 'Nucleon (KosmicKrisp)'");
+        ui::tree_kv(
+            "├─",
+            "Registered in Steam UI:",
+            "✓ 'Nucleon (Wine + Mesa KosmicKrisp Vulkan)'",
+        );
     } else {
         ui::tree_kv(
             "├─",
@@ -129,7 +141,11 @@ pub fn run() -> Result<()> {
             format!("✓ {} [{}]", aw.name, ver_str),
         );
         if steam::is_wine_tool_registered() {
-            ui::tree_kv("├─", "Registered in Steam UI:", "✓ 'Nucleon (Wine)'");
+            ui::tree_kv(
+                "├─",
+                "Registered in Steam UI:",
+                "✓ 'Nucleon (Wine + WineD3D OpenGL)'",
+            );
         } else {
             ui::tree_kv(
                 "├─",
@@ -155,7 +171,11 @@ pub fn run() -> Result<()> {
             format!("✓ {}", staging.display()),
         );
         if steam::is_staging_tool_registered() {
-            ui::tree_kv("└─", "Registered in Steam UI:", "✓ 'Nucleon (Wine)'");
+            ui::tree_kv(
+                "└─",
+                "Registered in Steam UI:",
+                "✓ 'Nucleon (Wine + WineD3D OpenGL)'",
+            );
         }
     } else {
         println!("    ○ Wine (DX9/10/Legacy):          ○ Optional (install Heroic Wine or brew install --cask wine-staging)");

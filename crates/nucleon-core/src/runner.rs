@@ -544,6 +544,16 @@ pub fn is_kosmickrisp_installed() -> bool {
 /// Resolves the optimal runner for the requested TargetEngine.
 pub fn resolve_runner_for_engine(engine: TargetEngine) -> Result<(PathBuf, TargetEngine)> {
     match engine {
+        TargetEngine::Auto => {
+            if let Some(gptk) = find_gptk_runner() {
+                return Ok((gptk, TargetEngine::Gptk));
+            }
+            if let Some(staging) = find_wine_staging_runtime() {
+                return Ok((staging, TargetEngine::WineStaging));
+            }
+            let assembled = assemble_runner(false, None, None)?;
+            Ok((assembled, TargetEngine::Gptk))
+        }
         TargetEngine::Gptk => {
             if let Some(gptk) = find_gptk_runner() {
                 return Ok((gptk, TargetEngine::Gptk));
@@ -925,6 +935,14 @@ pub fn build_execution_env_for_engine(
     }
 
     match engine {
+        TargetEngine::Auto => {
+            return build_execution_env_for_engine(
+                runner_dir,
+                prefix_dir,
+                TargetEngine::Gptk,
+                enable_hud,
+            );
+        }
         TargetEngine::Gptk => {
             // Apple Silicon & GPTK 4 features
             env.insert("D3DM_MTL4".to_string(), "1".to_string());

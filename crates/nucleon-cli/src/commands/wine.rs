@@ -77,7 +77,7 @@ pub fn run(action: WineAction) -> Result<()> {
                 let active_name = active.as_ref().map(|a| a.name.as_str()).unwrap_or("None");
                 println!(
                     r#"
-  Steam UI Tool: 'Nucleon (Wine)' -> currently using '{active_name}'
+  Steam UI Tool: 'Nucleon (Wine + WineD3D OpenGL)' -> currently using '{active_name}'
   To switch active Wine:        nucleon wine use <staging|crossover|path>
   To add a custom Wine:         nucleon wine add <name> <path> [--use-now]
   To remove a custom Wine:      nucleon wine remove <name>

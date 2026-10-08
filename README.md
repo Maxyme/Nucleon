@@ -39,37 +39,71 @@ crates/
 
 ---
 
-## Tri-Engine Architecture & Automatic Graphics Routing
+## Compatibility Tool Options & Tri-Engine Architecture
 
-Nucleon features an intelligent **Tri-Engine Router** that inspects target Windows binaries and automatically dispatches to the optimal translation engine:
+In Steam, Nucleon registers compatibility tools with clear **`(runtime + graphics translation backend)`** labels so you always know exactly which Wine runtime and graphics translation pipeline each game is running on:
+
+### Steam Compatibility Dropdown Options
+
+| Option Label | Tool ID | Wine Runner Runtime | Graphics Translation Backend | Best For |
+| :--- | :--- | :--- | :--- | :--- |
+| **`Nucleon (Wine + Automatic Graphics Backend)`** | `nucleon` | *Auto-detected* | *Auto-detected* (D3DMetal / KosmicKrisp / WineD3D) | **Recommended (Default)**: Automatically inspects binary imports and routes to the optimal runtime and graphics backend. |
+| **`Nucleon (GPTK Wine + Apple D3DMetal)`** | `nucleon-gptk` | Apple GPTK Wine | **Apple D3DMetal** (Metal 4, MSync, MetalFX) | DirectX 11 & DirectX 12 games requiring Apple's native Metal translation. |
+| **`Nucleon (Wine + Mesa KosmicKrisp Vulkan)`** | `nucleon-kosmickrisp` | 64-bit Wine | **Mesa KosmicKrisp Vulkan 1.4** (VKD3D-Proton / D7VK / DXVK) | Native Vulkan games, DirectDraw / DX1–7 (via D7VK), and DX12 via VKD3D-Proton. |
+| **`Nucleon (Wine + WineD3D OpenGL)`** | `nucleon-wine` | Active Wine (Staging/CrossOver/etc.) | **WineD3D (macOS OpenGL 4.1)** | Legacy DirectX 9, DirectX 10, and native OpenGL titles. |
+
+---
+
+### Why Modern Games Need D3DMetal or KosmicKrisp (Not Vanilla WineD3D)
+
+Running modern Windows games under vanilla Wine with built-in `WineD3D` on macOS often fails with errors such as:
+```text
+Failed to create D3D device
+```
+
+**Technical Explanation:**
+- Wine's built-in `WineD3D` translates Direct3D calls into desktop OpenGL.
+- Apple deprecated OpenGL in macOS 10.14 (Mojave) and froze its driver implementation at **OpenGL 4.1** (Core Profile).
+- Modern DirectX 11 (Feature Level 11_0+) and DirectX 12 games require capabilities introduced in OpenGL 4.3+ and modern extensions—such as compute shaders (`GL_ARB_compute_shader`), Shader Storage Buffer Objects (SSBOs), multi-draw indirect, and advanced floating-point texture formats—which macOS OpenGL 4.1 completely lacks.
+- To run modern games, Nucleon bypasses deprecated macOS OpenGL entirely:
+  - **Apple D3DMetal**: Translates HLSL Direct3D bytecodes directly into Metal Shading Language (MSL) and executes on Apple Silicon GPUs with full hardware acceleration.
+  - **Mesa KosmicKrisp**: Implements a full Khronos-conformant **Vulkan 1.4** driver on top of Metal 4 using Mesa's NIR compiler, enabling DXVK and VKD3D-Proton pipelines.
+  - **WineD3D**: Retained specifically for DirectX 9, DirectX 10, and OpenGL titles that fit within OpenGL 4.1 specifications.
+
+---
+
+### Automatic Graphics Routing (Tri-Engine Router)
+
+When using **`Nucleon (Wine + Automatic Graphics Backend)`** (or invoking via `nucleon launch <AppID>`), Nucleon inspects target Windows binaries and automatically dispatches to the optimal translation pipeline:
 
 | Graphics API | Imported DLLs | Dispatched Engine | Pipeline Characteristics |
 | :--- | :--- | :--- | :--- |
-| **DirectX 12** | `d3d12.dll`, `dxgi.dll` | **Apple GPTK 4** | Native `D3DMetal` HLSL-to-MSL translation, Metal 4, FastSync |
-| **DirectX 11** | `d3d11.dll`, `dxgi.dll` | **Apple GPTK 4** | Native `D3DMetal` Direct3D 11 to Metal hardware acceleration |
-| **Vulkan 1.3 / 1.4** | `vulkan-1.dll` | **Mesa KosmicKrisp** | Khronos-conformant Vulkan 1.4 driver on Metal 4 (Mesa NIR compiler) |
-| **DirectX 10** | `d3d10.dll`, `d3d10_1.dll`, `d3d10core.dll` | **Wine-Staging** / **KosmicKrisp** | Full `wined3d` / DXVK pipeline (D3DMetal lacks DX10 support) |
-| **DirectX 9 & Older** | `d3d9.dll`, `d3d8.dll`, `ddraw.dll` | **Wine-Staging** / **KosmicKrisp** | Upstream Wine legacy pipeline or DXVK on Vulkan 1.4 |
-| **OpenGL** | `opengl32.dll` | **Wine-Staging** / **KosmicKrisp** | Native macOS OpenGL or Mesa Zink-on-KosmicKrisp (OpenGL 4.6) |
+| **DirectX 12** | `d3d12.dll`, `dxgi.dll` | **GPTK Wine + Apple D3DMetal** | Native `D3DMetal` HLSL-to-MSL translation, Metal 4, FastSync |
+| **DirectX 11** | `d3d11.dll`, `dxgi.dll` | **GPTK Wine + Apple D3DMetal** | Native `D3DMetal` Direct3D 11 to Metal hardware acceleration |
+| **Vulkan 1.3 / 1.4** | `vulkan-1.dll` | **Wine + Mesa KosmicKrisp Vulkan** | Khronos-conformant Vulkan 1.4 driver on Metal 4 (Mesa NIR compiler) |
+| **DirectDraw / DX1–7** | `ddraw.dll` | **Wine + Mesa KosmicKrisp Vulkan** | D7VK translation directly to Vulkan 1.4 (bypasses OpenGL) |
+| **DirectX 10** | `d3d10.dll`, `d3d10_1.dll`, `d3d10core.dll` | **Wine + WineD3D OpenGL** | Full `wined3d` pipeline (D3DMetal lacks DX10 support) |
+| **DirectX 9 & Older** | `d3d9.dll`, `d3d8.dll` | **Wine + WineD3D OpenGL** | Upstream Wine legacy pipeline |
+| **OpenGL** | `opengl32.dll` | **Wine + WineD3D OpenGL** | Native macOS OpenGL or Mesa Zink-on-KosmicKrisp (OpenGL 4.6) |
 
-### How It Works
+#### How Dynamic Dispatch Works
 1. **PE Import Table Analysis**: When launching a title, `nucleon-runner` parses the Windows Portable Executable (PE) headers and Import Address Table (IAT) using the Rust `object` engine.
 2. **Dynamic Dispatch**:
    - DX11/12 titles route to Apple GPTK with `D3DM_MTL4=1`, `WINEMSYNC=1`, and Apple's `D3DMetal.framework`.
-   - Native Vulkan titles (`vulkan-1.dll`) automatically route to Mesa KosmicKrisp (`VK_DRIVER_FILES=.../libkosmickrisp_icd.json`).
-   - DX9/10 titles route to Wine-Staging or KosmicKrisp with DXVK overrides.
+   - Native Vulkan titles (`vulkan-1.dll`) and D7VK titles (`ddraw.dll`) automatically route to Mesa KosmicKrisp (`VK_DRIVER_FILES=.../libkosmickrisp_icd.json`).
+   - DX9/10 titles route to Wine with WineD3D overrides.
    - If Wine-Staging or KosmicKrisp is not installed, Nucleon gracefully falls back to the available GPTK runner with legacy DLL configurations.
-3. **Manual Overrides**: You can override engine selection at any time using `--engine <gptk|kosmickrisp|staging>` or the `NUCLEON_ENGINE` environment variable.
+3. **Manual Overrides**: You can override engine selection in Steam's Compatibility dropdown or via CLI using `--engine <auto|gptk|kosmickrisp|staging>` or the `NUCLEON_ENGINE` environment variable.
 
 ---
 
 ## Runtime & Engine Compatibility
 
 - **Apple Game Porting Toolkit (GPTK 4 / GPTK 2)**: Fully supported and recommended for DirectX 11 and DirectX 12 titles via `D3DMetal.framework`.
-- **Mesa KosmicKrisp**: Full Vulkan 1.4 conformant driver implemented on Metal 4 for Apple Silicon (macOS 26+). Recommended for native Vulkan titles and open-source Direct3D via DXVK and VKD3D-Proton.
+- **Mesa KosmicKrisp**: Full Vulkan 1.4 conformant driver implemented on Metal 4 for Apple Silicon (macOS 26+). Recommended for native Vulkan titles and open-source Direct3D via DXVK, VKD3D-Proton, and D7VK.
 - **VKD3D-Proton (Direct3D 12 -> Vulkan 1.4)**: Translates Direct3D 12 calls to Vulkan 1.4 when running with KosmicKrisp. Binaries are never tracked in git; you can extract official releases and configure Nucleon via `nucleon vkd3d set-path <dir>`, `nucleon setup --vkd3d-path <dir>`, or `VKD3D_PROTON_PATH`.
 - **D7VK (DirectDraw / Direct3D 1–7 -> Vulkan 1.4)**: Translates legacy DirectDraw and Direct3D 1 to 7 calls to Vulkan 1.4 when running with KosmicKrisp, bypassing deprecated macOS OpenGL. Binaries are never tracked in git; configure via `nucleon d7vk fetch`, `nucleon d7vk set-path <dir>`, `nucleon setup --d7vk-path <dir>`, or `D7VK_PATH`.
-- **Wine-Staging**: Supported for DirectX 9, DirectX 10, and general legacy Windows applications (`brew install --cask wine-staging`).
+- **Wine-Staging & Custom Wine Runtimes**: Supported for DirectX 9, DirectX 10, and general legacy Windows applications (`brew install --cask wine-staging`, Whisky, Heroic, CrossOver).
 - **Architecture**: Native Apple Silicon 64-bit translation. *Note: Experimental 32-bit support exists, though it has not been validated across titles.*
 
 ---
@@ -224,7 +258,11 @@ Rather than bloating the codebase with in-process decompression crates, C build 
    ```
 2. In your Steam Library, right-click any Windows game -> **Properties...** -> **Compatibility**.
 3. Check **"Force the use of a specific Steam Play compatibility tool"**.
-4. Select **"Nucleon (Game Porting Toolkit 4)"** from the dropdown menu.
+4. Select your preferred compatibility tool from the dropdown menu:
+   - **`Nucleon (Wine + Automatic Graphics Backend)`** *(Recommended / Default)*: Automatically detects the game's graphics API and launches with the optimal runtime and graphics backend.
+   - **`Nucleon (GPTK Wine + Apple D3DMetal)`**: Forces Apple GPTK 4 Wine with native D3DMetal for DirectX 11/12.
+   - **`Nucleon (Wine + Mesa KosmicKrisp Vulkan)`**: Forces Wine with Mesa KosmicKrisp Vulkan 1.4 (for Vulkan, VKD3D-Proton, or D7VK).
+   - **`Nucleon (Wine + WineD3D OpenGL)`**: Forces active Wine with built-in WineD3D (for legacy DirectX 9/10 and OpenGL).
 5. Alternatively, launch games directly via CLI: `nucleon launch <AppID>`.
 
 ### Removing Nucleon from Steam UI

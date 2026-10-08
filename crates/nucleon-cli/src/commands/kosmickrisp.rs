@@ -63,7 +63,9 @@ pub fn handle(action: KosmickrispAction) -> Result<()> {
                 info.icd_path.display(),
                 info.library_path.display()
             ));
-            println!("\nGames running under 'Nucleon (KosmicKrisp)' will now use this driver.");
+            println!(
+                "\nGames running under 'Nucleon (Wine + Mesa KosmicKrisp Vulkan)' will now use this driver."
+            );
         }
         KosmickrispAction::ClearPath => {
             runner::clear_custom_kosmickrisp_path()?;

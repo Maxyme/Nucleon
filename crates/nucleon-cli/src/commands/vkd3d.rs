@@ -70,7 +70,9 @@ To install or configure VKD3D-Proton without committing binaries:
             if let Some(ref core) = bundle.x64_d3d12core {
                 ui::success(format!("64-bit D3D12Core DLL:   {}", core.display()));
             }
-            println!("\nGames running under 'Nucleon (KosmicKrisp)' will now translate Direct3D 12 -> Vulkan 1.4.");
+            println!(
+                "\nGames running under 'Nucleon (Wine + Mesa KosmicKrisp Vulkan)' will now translate Direct3D 12 -> Vulkan 1.4."
+            );
         }
         Vkd3dAction::SetPath { path } => {
             ui::header(format!(

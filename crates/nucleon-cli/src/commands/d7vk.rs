@@ -58,7 +58,9 @@ To install or configure D7VK without committing binaries:
                 "32-bit DirectDraw DLL: {}",
                 bundle.x86_ddraw.display()
             ));
-            println!("\nGames running under 'Nucleon (KosmicKrisp)' will now translate DirectDraw / Direct3D 1-7 -> Vulkan 1.4.");
+            println!(
+                "\nGames running under 'Nucleon (Wine + Mesa KosmicKrisp Vulkan)' will now translate DirectDraw / Direct3D 1-7 -> Vulkan 1.4."
+            );
         }
         D7vkAction::SetPath { path } => {
             ui::header(format!("Registering custom D7VK path: {}", path.display()));

@@ -4,6 +4,7 @@ use std::path::Path;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TargetEngine {
+    Auto,
     Gptk,
     KosmicKrisp,
     WineStaging,
@@ -12,6 +13,7 @@ pub enum TargetEngine {
 impl TargetEngine {
     pub fn as_str(&self) -> &'static str {
         match self {
+            TargetEngine::Auto => "auto",
             TargetEngine::Gptk => "gptk",
             TargetEngine::KosmicKrisp => "kosmickrisp",
             TargetEngine::WineStaging => "staging",
@@ -20,14 +22,16 @@ impl TargetEngine {
 
     pub fn display_name(&self) -> &'static str {
         match self {
-            TargetEngine::Gptk => "Apple Game Porting Toolkit 4 (D3DMetal, Metal 4, MSync)",
-            TargetEngine::KosmicKrisp => "Mesa KosmicKrisp (Vulkan 1.4 on Metal 4, NIR compiler)",
-            TargetEngine::WineStaging => "Wine-Staging (WineD3D / Legacy Stack)",
+            TargetEngine::Auto => "Wine + Automatic Graphics Backend",
+            TargetEngine::Gptk => "GPTK Wine + Apple D3DMetal",
+            TargetEngine::KosmicKrisp => "Wine + Mesa KosmicKrisp Vulkan",
+            TargetEngine::WineStaging => "Wine + WineD3D OpenGL",
         }
     }
 
     pub fn parse(s: &str) -> Option<Self> {
         match s.to_lowercase().trim() {
+            "auto" | "automatic" | "default" => Some(TargetEngine::Auto),
             "gptk" | "apple" | "d3dmetal" => Some(TargetEngine::Gptk),
             "kosmickrisp" | "kk" | "kosmic" | "mesa" | "vulkan" => Some(TargetEngine::KosmicKrisp),
             "staging" | "wine-staging" | "wine" => Some(TargetEngine::WineStaging),
@@ -304,6 +308,9 @@ mod tests {
 
     #[test]
     fn test_target_engine_parsing() {
+        assert_eq!(TargetEngine::parse("auto"), Some(TargetEngine::Auto));
+        assert_eq!(TargetEngine::parse("automatic"), Some(TargetEngine::Auto));
+        assert_eq!(TargetEngine::parse("default"), Some(TargetEngine::Auto));
         assert_eq!(TargetEngine::parse("gptk"), Some(TargetEngine::Gptk));
         assert_eq!(TargetEngine::parse("apple"), Some(TargetEngine::Gptk));
         assert_eq!(
@@ -326,5 +333,25 @@ mod tests {
         );
         assert_eq!(TargetEngine::parse("wine"), Some(TargetEngine::WineStaging));
         assert_eq!(TargetEngine::parse("unknown_engine"), None);
+    }
+
+    #[test]
+    fn test_target_engine_display_names() {
+        assert_eq!(
+            TargetEngine::Auto.display_name(),
+            "Wine + Automatic Graphics Backend"
+        );
+        assert_eq!(
+            TargetEngine::Gptk.display_name(),
+            "GPTK Wine + Apple D3DMetal"
+        );
+        assert_eq!(
+            TargetEngine::KosmicKrisp.display_name(),
+            "Wine + Mesa KosmicKrisp Vulkan"
+        );
+        assert_eq!(
+            TargetEngine::WineStaging.display_name(),
+            "Wine + WineD3D OpenGL"
+        );
     }
 }

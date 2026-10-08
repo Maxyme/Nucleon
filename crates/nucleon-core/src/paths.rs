@@ -53,8 +53,16 @@ pub fn steam_compat_tools_dir() -> PathBuf {
     home_dir().join("Library/Application Support/Steam/compatibilitytools.d/nucleon")
 }
 
+pub fn steam_gptk_compat_tools_dir() -> PathBuf {
+    home_dir().join("Library/Application Support/Steam/compatibilitytools.d/nucleon-gptk")
+}
+
 pub fn steam_kosmickrisp_compat_tools_dir() -> PathBuf {
     home_dir().join("Library/Application Support/Steam/compatibilitytools.d/nucleon-kosmickrisp")
+}
+
+pub fn steam_wine_compat_tools_dir() -> PathBuf {
+    home_dir().join("Library/Application Support/Steam/compatibilitytools.d/nucleon-wine")
 }
 
 pub fn steam_compat_data_dir() -> PathBuf {
