@@ -19,16 +19,16 @@ jobs:
     runs-on: macos-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # stable
         with:
           components: rustfmt, clippy
           targets: aarch64-apple-darwin
 
       - name: Cache Cargo dependencies & build cache
-        uses: actions/cache@v4
+        uses: actions/cache@d4323d4df104b026a6aa633fdb11d772146be0bf # v4.2.2
         with:
           path: |
             ~/.cargo/registry
@@ -54,15 +54,15 @@ jobs:
     runs-on: macos-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # stable
         with:
           targets: aarch64-apple-darwin
 
       - name: Cache Cargo dependencies & build cache
-        uses: actions/cache@v4
+        uses: actions/cache@d4323d4df104b026a6aa633fdb11d772146be0bf # v4.2.2
         with:
           path: |
             ~/.cargo/registry
@@ -117,18 +117,23 @@ jobs:
           tar -czvf nucleon-macos-arm64.tar.gz -C "${BUNDLE_DIR}" .
           zip -r nucleon-macos-arm64.zip "${BUNDLE_DIR}"
 
+          # Generate SHA-256 checksums
+          shasum -a 256 nucleon-macos-arm64.tar.gz nucleon-macos-arm64.zip > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
       - name: Upload build artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
         with:
           name: nucleon-macos-arm64
           path: |
             nucleon-macos-arm64.tar.gz
             nucleon-macos-arm64.zip
+            SHA256SUMS.txt
           retention-days: 14
 
       - name: Publish rolling pre-release for main branch
         if: github.ref == 'refs/heads/main'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@c95fe1489396fe8a9eb87c0abf8aa5b2ef267fda # v2.2.1
         with:
           tag_name: latest
           name: "Nucleon (Latest Development Build)"
@@ -143,18 +148,21 @@ jobs:
             - `libnucleon.dylib`: Steam client universal interposer hook
             - `assets/bridge-manifest.json`: Valve client bridge DLL asset mapping
             - `assets/template.json`: Canonical AoB signature scanning template
+            - `SHA256SUMS.txt`: SHA-256 checksums for verifying release archives
 
             *All binaries are thin 64-bit ARM Mach-O binaries signed with ad-hoc signatures for Apple Silicon.*
           prerelease: true
           files: |
             nucleon-macos-arm64.tar.gz
             nucleon-macos-arm64.zip
+            SHA256SUMS.txt
 
       - name: Publish GitHub Release for version tags
         if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@c95fe1489396fe8a9eb87c0abf8aa5b2ef267fda # v2.2.1
         with:
           files: |
             nucleon-macos-arm64.tar.gz
             nucleon-macos-arm64.zip
+            SHA256SUMS.txt
           generate_release_notes: true
