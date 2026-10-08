@@ -609,6 +609,7 @@ just fix
 
 See [TODO.md](TODO.md) for upcoming milestones, including:
 - **Host Application & GUI Consolidation**: A standalone native macOS GUI (SwiftUI / Tauri) for visual game library management, prefix configuration, and graphics profiling.
+- **String Anchor + ADRP XREF Signature Resolver**: Compiler-resilient hybrid pattern scanner tracing invariant `__cstring` data through ARM64 `ADRP`/`LDR` instructions to function prologues.
 - Automated CEF WebUI chunk patch resolution for future Steam client updates.
 - Isolated per-AppID prefix profiles.
 
@@ -616,4 +617,4 @@ See [TODO.md](TODO.md) for upcoming milestones, including:
 
 ## License
 
-MIT OR Apache-2.0.
+This project is licensed under the [MIT License](LICENSE).
