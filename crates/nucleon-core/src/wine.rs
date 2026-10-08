@@ -40,8 +40,8 @@ fn check_is_valid_wine_root(dir: &Path) -> bool {
     has_wine && has_server
 }
 
-/// Attempts to extract CrossOver version from ancestor Info.plist files.
-fn extract_crossover_version(root: &Path) -> Option<String> {
+/// Attempts to extract version from ancestor Info.plist files (e.g. for app bundles).
+fn extract_bundle_version(root: &Path) -> Option<String> {
     let mut cur = Some(root);
     while let Some(dir) = cur {
         let plist_candidates = [dir.join("Contents/Info.plist"), dir.join("Info.plist")];
@@ -52,9 +52,9 @@ fn extract_crossover_version(root: &Path) -> Option<String> {
                         let after = &content[pos..];
                         if let Some(str_start) = after.find("<string>") {
                             if let Some(str_end) = after[str_start + 8..].find("</string>") {
-                                let ver = &after[str_start + 8..str_start + 8 + str_end];
-                                if !ver.trim().is_empty() {
-                                    return Some(format!("CrossOver {}", ver.trim()));
+                                let ver = after[str_start + 8..str_start + 8 + str_end].trim();
+                                if !ver.is_empty() {
+                                    return Some(ver.to_string());
                                 }
                             }
                         }
@@ -139,6 +139,67 @@ pub fn resolve_wine_runtime_root(candidate: &Path) -> Option<PathBuf> {
     None
 }
 
+/// Derives a clean display name agnostically from the runtime directory or bundle path.
+fn derive_name_from_path(dir: &Path, actual_root: &Path) -> String {
+    // 1. If dir or actual_root is inside an .app bundle, use the bundle's stem name
+    for path in [dir, actual_root] {
+        let mut cur = Some(path);
+        while let Some(p) = cur {
+            if let Some(file_name) = p.file_name().and_then(|n| n.to_str()) {
+                if let Some(stem) = file_name.strip_suffix(".app") {
+                    if !stem.is_empty() {
+                        return stem.to_string();
+                    }
+                }
+            }
+            cur = p.parent();
+        }
+    }
+
+    // 2. Walk up from dir (or actual_root) skipping internal subdirectories or binaries
+    for start in [dir, actual_root] {
+        let mut cur = Some(start);
+        while let Some(p) = cur {
+            if let Some(name) = p.file_name().and_then(|n| n.to_str()) {
+                let lower = name.to_lowercase();
+                let parent_lower = p
+                    .parent()
+                    .and_then(|parent| parent.file_name())
+                    .and_then(|pn| pn.to_str())
+                    .map(|s| s.to_lowercase())
+                    .unwrap_or_default();
+
+                let is_binary_in_bin = parent_lower == "bin"
+                    && matches!(
+                        lower.as_str(),
+                        "wine" | "wine64" | "wineserver" | "wineserver64"
+                    );
+                let is_internal_dir = matches!(
+                    lower.as_str(),
+                    "bin" | "resources" | "contents" | "sharedsupport" | "macos"
+                );
+                let is_nested_wine = lower == "wine"
+                    && matches!(
+                        parent_lower.as_str(),
+                        "resources" | "contents" | "sharedsupport"
+                    );
+
+                if !is_binary_in_bin && !is_internal_dir && !is_nested_wine && !name.is_empty() {
+                    return name.to_string();
+                }
+            }
+            cur = p.parent();
+        }
+    }
+
+    // 3. Fallback to file_name or "wine"
+    dir.file_name()
+        .or_else(|| actual_root.file_name())
+        .and_then(|n| n.to_str())
+        .unwrap_or("wine")
+        .to_string()
+}
+
 /// Inspects a directory to check if it contains a valid Wine runtime.
 /// Handles standard Wine prefixes, app bundles (Contents/Resources/wine, CrossOver), and custom directories.
 pub fn inspect_wine_dir(
@@ -156,68 +217,19 @@ pub fn inspect_wine_dir(
 
     let mut version = query_wine_version(&wine_bin);
     if version.is_none() {
-        version =
-            extract_crossover_version(dir).or_else(|| extract_crossover_version(&actual_root));
+        version = extract_bundle_version(dir).or_else(|| extract_bundle_version(&actual_root));
     }
 
-    // Derive names and IDs from directory name or overrides
-    let dir_name = dir.file_name().and_then(|n| n.to_str()).unwrap_or("wine");
-    let lower = dir_name.to_lowercase();
-    let root_str = actual_root.to_string_lossy().to_lowercase();
-    let dir_str = dir.to_string_lossy().to_lowercase();
+    let name = name_override
+        .map(|n| n.to_string())
+        .unwrap_or_else(|| derive_name_from_path(dir, &actual_root));
 
-    let (id, name, display_name, tool_id) =
-        if let (Some(id), Some(name)) = (id_override, name_override) {
-            let tool = format!("nucleon-wine-{}", id.trim_start_matches("nucleon-wine-"));
-            let display = format!("Nucleon (Wine: {name})");
-            (id.to_string(), name.to_string(), display, tool)
-        } else if lower.contains("crossover")
-            || root_str.contains("crossover")
-            || dir_str.contains("crossover")
-        {
-            let is_heroic = dir_str.contains("heroic") || root_str.contains("heroic");
-            let name = if is_heroic {
-                "Heroic Wine-CrossOver".to_string()
-            } else if let Some(ref ver) = version {
-                format!("CrossOver Wine [{ver}]")
-            } else {
-                "CrossOver Wine".to_string()
-            };
-            (
-                "crossover".to_string(),
-                name,
-                "Nucleon (Wine: CrossOver)".to_string(),
-                "nucleon-wine-crossover".to_string(),
-            )
-        } else if lower.contains("dxmt") || root_str.contains("dxmt") {
-            (
-                "staging-dxmt".to_string(),
-                "Heroic Wine-Staging (DXMT)".to_string(),
-                "Nucleon (Wine: DXMT)".to_string(),
-                "nucleon-wine-dxmt".to_string(),
-            )
-        } else if lower.contains("staging") || root_str.contains("staging") {
-            let is_heroic = dir_str.contains("heroic") || root_str.contains("heroic");
-            let name = if is_heroic {
-                "Heroic Wine-Staging"
-            } else {
-                "Wine-Staging"
-            };
-            (
-                "staging".to_string(),
-                name.to_string(),
-                "Nucleon (Wine: Staging)".to_string(),
-                "nucleon-wine-staging".to_string(),
-            )
-        } else {
-            let slug = dir_name.to_lowercase().replace([' ', '_'], "-");
-            (
-                slug.clone(),
-                dir_name.to_string(),
-                format!("Nucleon (Wine: {dir_name})"),
-                format!("nucleon-wine-{slug}"),
-            )
-        };
+    let id = id_override
+        .map(|i| i.to_string())
+        .unwrap_or_else(|| name.to_lowercase().replace([' ', '_'], "-"));
+
+    let display_name = format!("Nucleon (Wine: {name})");
+    let tool_id = format!("nucleon-wine-{}", id.trim_start_matches("nucleon-wine-"));
 
     Some(WineRuntime {
         id,
@@ -912,5 +924,36 @@ mod tests {
         assert_eq!(resolved.unwrap().root, rt.root);
 
         assert!(remove_custom_wine("crossover-test").unwrap());
+    }
+
+    #[test]
+    fn test_inspect_wine_dir_agnostic_name_derivation() {
+        let dir = tempdir().unwrap();
+
+        // 1. Arbitrary custom tool name (e.g. Wine-GE-Proton8-26)
+        let tool_dir = dir.path().join("Wine-GE-Proton8-26");
+        let bin_dir = tool_dir.join("bin");
+        fs::create_dir_all(&bin_dir).unwrap();
+        fs::write(bin_dir.join("wine"), "#!/bin/sh\n").unwrap();
+        fs::write(bin_dir.join("wineserver"), "#!/bin/sh\n").unwrap();
+
+        let rt = inspect_wine_dir(&tool_dir, None, None).unwrap();
+        assert_eq!(rt.name, "Wine-GE-Proton8-26");
+        assert_eq!(rt.id, "wine-ge-proton8-26");
+        assert_eq!(rt.tool_id, "nucleon-wine-wine-ge-proton8-26");
+        assert_eq!(rt.display_name, "Nucleon (Wine: Wine-GE-Proton8-26)");
+
+        // 2. Custom .app bundle
+        let custom_app = dir.path().join("WhiskyCustom.app");
+        let inner_app = custom_app.join("Contents/Resources/wine/bin");
+        fs::create_dir_all(&inner_app).unwrap();
+        fs::write(inner_app.join("wine"), "#!/bin/sh\n").unwrap();
+        fs::write(inner_app.join("wineserver"), "#!/bin/sh\n").unwrap();
+
+        let rt_app = inspect_wine_dir(&custom_app, None, None).unwrap();
+        assert_eq!(rt_app.name, "WhiskyCustom");
+        assert_eq!(rt_app.id, "whiskycustom");
+        assert_eq!(rt_app.tool_id, "nucleon-wine-whiskycustom");
+        assert_eq!(rt_app.display_name, "Nucleon (Wine: WhiskyCustom)");
     }
 }
