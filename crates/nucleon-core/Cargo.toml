@@ -19,6 +19,11 @@ overlay-shim = { path = "../overlay-shim" }
 plist = { workspace = true }
 keyvalues-parser = { workspace = true }
 nix = { version = "0.31", default-features = false, features = ["user"] }
+ureq = { workspace = true }
+zip = { workspace = true }
+tar = { workspace = true }
+flate2 = { workspace = true }
+zstd = { workspace = true }
 
 [lints]
 workspace = true

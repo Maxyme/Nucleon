@@ -1,8 +1,7 @@
 use crate::paths;
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 pub const DEFAULT_VKD3D_VERSION: &str = "v3.0.1";
 
@@ -358,81 +357,24 @@ pub fn fetch_vkd3d_proton(
     fs::create_dir_all(&target_dir)?;
 
     let temp_dir = tempfile::tempdir()?;
-    let archive_path = temp_dir.path().join(&archive_name);
-
-    log::info!("Fetching VKD3D-Proton {} from {}...", tag, url);
-
-    // Download archive via curl
-    let status = Command::new("curl")
-        .args([
-            "-sSL",
-            "--retry",
-            "3",
-            "-H",
-            "User-Agent: nucleon-fetcher",
-            "-o",
-            archive_path.to_str().unwrap(),
-            &url,
-        ])
-        .status()
-        .with_context(|| format!("Failed to execute curl to download {}", url))?;
-
-    if !status.success() || !archive_path.is_file() || fs::metadata(&archive_path)?.len() < 1000 {
-        bail!(
-            "Failed to download VKD3D-Proton from {}. Check network connection or version tag.",
-            url
-        );
-    }
-
-    // Extract archive
     let extract_dir = temp_dir.path().join("extracted");
     fs::create_dir_all(&extract_dir)?;
 
-    // Try tar with --zstd first, fallback to zstd -d piped into tar
-    let tar_status = Command::new("tar")
-        .args([
-            "--zstd",
-            "-xf",
-            archive_path.to_str().unwrap(),
-            "-C",
-            extract_dir.to_str().unwrap(),
-        ])
-        .status();
+    log::info!("Fetching VKD3D-Proton {} from {}...", tag, url);
 
-    let extracted = if tar_status.map(|s| s.success()).unwrap_or(false) {
-        true
-    } else {
-        // Fallback: use python3 zstandard / subprocess if zstd command isn't directly in tar
-        let py_script = format!(
-            r#"
-import subprocess, sys, shutil
+    let resp = ureq::get(&url)
+        .set("User-Agent", "nucleon-fetcher")
+        .call()
+        .with_context(|| format!("Failed to download VKD3D-Proton from {url}"))?;
 
-# Try zstd command pipe
-try:
-    p1 = subprocess.Popen(["zstd", "-d", "-c", "{} "], stdout=subprocess.PIPE)
-    p2 = subprocess.Popen(["tar", "-xf", "-", "-C", "{}"], stdin=p1.stdout)
-    p1.stdout.close()
-    p2.communicate()
-    if p2.returncode == 0:
-        sys.exit(0)
-except Exception:
-    pass
+    let reader = resp.into_reader();
+    let zstd_decoder = zstd::stream::Decoder::new(reader)
+        .with_context(|| "Failed to initialize zstd decoder for VKD3D-Proton archive")?;
 
-sys.exit(1)
-"#,
-            archive_path.display(),
-            extract_dir.display()
-        );
-        let py_status = Command::new("python3").args(["-c", &py_script]).status();
-        py_status.map(|s| s.success()).unwrap_or(false)
-    };
-
-    if !extracted {
-        bail!(
-            "Failed to extract {}. Ensure zstd and tar are installed (e.g. 'brew install zstd').",
-            archive_path.display()
-        );
-    }
+    let mut tar_archive = tar::Archive::new(zstd_decoder);
+    tar_archive
+        .unpack(&extract_dir)
+        .with_context(|| "Failed to unpack VKD3D-Proton tar.zst archive")?;
 
     // Locate the extracted release folder (usually vkd3d-proton-<ver>)
     let mut source_bundle_dir = extract_dir.clone();

@@ -743,6 +743,31 @@ pub fn find_gptk_components(custom_path: Option<&Path>) -> Result<Option<(PathBu
     Ok(None)
 }
 
+/// Recursively copies a directory tree including files, directories, and symlinks.
+fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
+    fs::create_dir_all(dst)?;
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let ty = entry.file_type()?;
+        let dst_child = dst.join(entry.file_name());
+        if ty.is_dir() {
+            copy_dir_all(&entry.path(), &dst_child)?;
+        } else if ty.is_symlink() {
+            #[cfg(unix)]
+            {
+                let target = fs::read_link(entry.path())?;
+                if dst_child.exists() || dst_child.is_symlink() {
+                    let _ = fs::remove_file(&dst_child);
+                }
+                std::os::unix::fs::symlink(target, &dst_child)?;
+            }
+        } else {
+            fs::copy(entry.path(), &dst_child)?;
+        }
+    }
+    Ok(())
+}
+
 pub fn assemble_runner(
     force: bool,
     custom_wine: Option<&Path>,
@@ -804,21 +829,17 @@ pub fn assemble_runner(
     let ext_dir = target.join("lib/external");
     fs::create_dir_all(&ext_dir)?;
 
-    let _ = Command::new("cp")
-        .args([
-            "-R",
-            "-f",
-            d3dm_fw.to_str().unwrap(),
-            ext_dir.to_str().unwrap(),
-        ])
-        .status()?;
-    let _ = Command::new("cp")
-        .args([
-            "-f",
-            d3d_shared.to_str().unwrap(),
-            ext_dir.to_str().unwrap(),
-        ])
-        .status()?;
+    let target_fw = ext_dir.join("D3DMetal.framework");
+    if target_fw.exists() {
+        let _ = fs::remove_dir_all(&target_fw);
+    }
+    copy_dir_all(&d3dm_fw, &target_fw)?;
+
+    let target_shared = ext_dir.join("libd3dshared.dylib");
+    if target_shared.exists() || target_shared.is_symlink() {
+        let _ = fs::remove_file(&target_shared);
+    }
+    fs::copy(&d3d_shared, &target_shared)?;
 
     // Install overlay-shim.dylib
     let overlay_dst = paths::support_dir().join("overlay-shim.dylib");

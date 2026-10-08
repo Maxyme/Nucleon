@@ -1,8 +1,8 @@
 use crate::paths;
 use anyhow::{bail, Context, Result};
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 pub const DEFAULT_D7VK_VERSION: &str = "v2.3";
 
@@ -321,45 +321,33 @@ pub fn fetch_d7vk(version: Option<&str>, dest_dir: Option<&Path>) -> Result<D7vk
     fs::create_dir_all(&target_dir)?;
 
     let temp_dir = tempfile::tempdir()?;
-    let archive_path = temp_dir.path().join(&archive_name);
-
-    log::info!("Fetching D7VK {tag} from {url}...");
-
-    let status = Command::new("curl")
-        .args([
-            "-sSL",
-            "--retry",
-            "3",
-            "-H",
-            "User-Agent: nucleon-fetcher",
-            "-o",
-            archive_path.to_str().unwrap(),
-            &url,
-        ])
-        .status()
-        .with_context(|| format!("Failed to execute curl to download {url}"))?;
-
-    if !status.success() || !archive_path.is_file() || fs::metadata(&archive_path)?.len() < 1000 {
-        bail!("Failed to download D7VK from {url}. Check network connection or version tag.");
-    }
-
     let extract_dir = temp_dir.path().join("extracted");
     fs::create_dir_all(&extract_dir)?;
 
-    let unzip_status = Command::new("unzip")
-        .args([
-            "-q",
-            "-o",
-            archive_path.to_str().unwrap(),
-            "-d",
-            extract_dir.to_str().unwrap(),
-        ])
-        .status()
-        .with_context(|| "Failed to execute unzip")?;
+    log::info!("Fetching D7VK {tag} from {url}...");
 
-    if !unzip_status.success() {
-        bail!("Failed to unzip D7VK archive: {}", archive_path.display());
+    let resp = ureq::get(&url)
+        .set("User-Agent", "nucleon-fetcher")
+        .call()
+        .with_context(|| format!("Failed to download D7VK from {url}"))?;
+
+    let mut reader = resp.into_reader();
+    let mut zip_bytes = Vec::new();
+    reader
+        .read_to_end(&mut zip_bytes)
+        .with_context(|| format!("Failed to read D7VK payload from {url}"))?;
+
+    if zip_bytes.len() < 1000 {
+        bail!("Downloaded D7VK payload from {url} is too small to be a valid archive.");
     }
+
+    let cursor = std::io::Cursor::new(zip_bytes);
+    let mut archive =
+        zip::ZipArchive::new(cursor).with_context(|| "Failed to parse D7VK zip archive")?;
+
+    archive
+        .extract(&extract_dir)
+        .with_context(|| "Failed to extract D7VK archive")?;
 
     let candidate = inspect_candidate_dir(&extract_dir)
         .ok_or_else(|| anyhow::anyhow!("Could not find ddraw.dll in extracted D7VK archive"))?;
