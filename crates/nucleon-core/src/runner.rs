@@ -545,14 +545,16 @@ pub fn is_kosmickrisp_installed() -> bool {
 pub fn resolve_runner_for_engine(engine: TargetEngine) -> Result<(PathBuf, TargetEngine)> {
     match engine {
         TargetEngine::Auto => {
-            if let Some(gptk) = find_gptk_runner() {
-                return Ok((gptk, TargetEngine::Gptk));
-            }
+            // Auto runner is for Wine only
             if let Some(staging) = find_wine_staging_runtime() {
                 return Ok((staging, TargetEngine::WineStaging));
             }
+            if let Some(gptk) = find_gptk_runner() {
+                log::warn!("Wine runtime not found; utilizing available GPTK wine binary");
+                return Ok((gptk, TargetEngine::WineStaging));
+            }
             let assembled = assemble_runner(false, None, None)?;
-            Ok((assembled, TargetEngine::Gptk))
+            Ok((assembled, TargetEngine::WineStaging))
         }
         TargetEngine::Gptk => {
             if let Some(gptk) = find_gptk_runner() {
@@ -568,12 +570,12 @@ pub fn resolve_runner_for_engine(engine: TargetEngine) -> Result<(PathBuf, Targe
             Ok((assembled, TargetEngine::Gptk))
         }
         TargetEngine::KosmicKrisp => {
-            // KosmicKrisp utilizes a 64-bit Wine runtime configured with Mesa Vulkan 1.4 ICD
-            if let Some(gptk) = find_gptk_runner() {
-                return Ok((gptk, TargetEngine::KosmicKrisp));
-            }
+            // KosmicKrisp runs under Wine configured with Mesa Vulkan 1.4 ICD
             if let Some(staging) = find_wine_staging_runtime() {
                 return Ok((staging, TargetEngine::KosmicKrisp));
+            }
+            if let Some(gptk) = find_gptk_runner() {
+                return Ok((gptk, TargetEngine::KosmicKrisp));
             }
             let assembled = assemble_runner(false, None, None)?;
             Ok((assembled, TargetEngine::KosmicKrisp))
@@ -583,11 +585,11 @@ pub fn resolve_runner_for_engine(engine: TargetEngine) -> Result<(PathBuf, Targe
                 return Ok((staging, TargetEngine::WineStaging));
             }
             if let Some(gptk) = find_gptk_runner() {
-                log::info!("Wine-Staging not found (install via 'brew install --cask wine-staging'); utilizing GPTK runtime for legacy/DX9 pipeline");
-                return Ok((gptk, TargetEngine::Gptk));
+                log::info!("Wine runtime not found (install via 'brew install --cask wine-staging'); utilizing GPTK runtime for legacy/DX9 pipeline");
+                return Ok((gptk, TargetEngine::WineStaging));
             }
             let assembled = assemble_runner(false, None, None)?;
-            Ok((assembled, TargetEngine::Gptk))
+            Ok((assembled, TargetEngine::WineStaging))
         }
     }
 }
@@ -939,7 +941,7 @@ pub fn build_execution_env_for_engine(
             return build_execution_env_for_engine(
                 runner_dir,
                 prefix_dir,
-                TargetEngine::Gptk,
+                TargetEngine::WineStaging,
                 enable_hud,
             );
         }

@@ -302,16 +302,21 @@ fn main() -> Result<()> {
 
     let (engine, api_desc) = match requested_engine {
         Some(nucleon_core::detector::TargetEngine::Auto) | None => {
+            // Auto runner is for Wine only: automatically selects the optimal Wine graphics backend
+            // (Mesa KosmicKrisp Vulkan for DX11/12/Vulkan/D7VK vs WineD3D OpenGL for DX9/10/GL).
             let detection = nucleon_core::detector::detect_target_engine(&target_exe);
+            let wine_engine = detection.wine_engine();
             log_runner(&format!(
-                "Auto-detected graphics API: {:?} (found: {:?}) -> routing to {:?}",
-                detection.api, detection.detected_dll, detection.engine
+                "Wine Auto Runner: detected graphics API {:?} (found: {:?}) -> routing within Wine to {:?}",
+                detection.api, detection.detected_dll, wine_engine
             ));
             (
-                detection.engine,
+                wine_engine,
                 format!(
-                    "Automatic Detection: {:?} (DLL: {:?})",
-                    detection.api, detection.detected_dll
+                    "Wine Auto Detection: {:?} (DLL: {:?}) -> {}",
+                    detection.api,
+                    detection.detected_dll,
+                    wine_engine.display_name()
                 ),
             )
         }
@@ -331,8 +336,11 @@ fn main() -> Result<()> {
     // Resolve optimal runner for selected engine
     let (mut runner_dir, active_engine) = runner::resolve_runner_for_engine(engine)?;
 
-    // If running under WineStaging, allow per-game NUCLEON_WINE launch override or NUCLEON_WINE_PATH
-    if active_engine == nucleon_core::detector::TargetEngine::WineStaging {
+    // If running under Wine (WineStaging, KosmicKrisp, or Auto), allow per-game NUCLEON_WINE launch override or NUCLEON_WINE_PATH
+    if active_engine == nucleon_core::detector::TargetEngine::WineStaging
+        || active_engine == nucleon_core::detector::TargetEngine::KosmicKrisp
+        || active_engine == nucleon_core::detector::TargetEngine::Auto
+    {
         if let Ok(wine_override) = env::var("NUCLEON_WINE") {
             if let Some(resolved) =
                 nucleon_core::wine::resolve_wine_runtime_by_query(&wine_override)

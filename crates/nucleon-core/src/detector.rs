@@ -23,7 +23,7 @@ impl TargetEngine {
     pub fn display_name(&self) -> &'static str {
         match self {
             TargetEngine::Auto => "Wine + Automatic Graphics Backend",
-            TargetEngine::Gptk => "GPTK Wine + Apple D3DMetal",
+            TargetEngine::Gptk => "GPTK + Apple D3DMetal",
             TargetEngine::KosmicKrisp => "Wine + Mesa KosmicKrisp Vulkan",
             TargetEngine::WineStaging => "Wine + WineD3D OpenGL",
         }
@@ -57,6 +57,30 @@ pub struct GraphicsApiInfo {
     pub api: GraphicsApi,
     pub engine: TargetEngine,
     pub detected_dll: Option<String>,
+}
+
+impl GraphicsApiInfo {
+    /// Resolves the optimal graphics translation engine for the Wine runtime (Wine only).
+    /// DirectX 11, DirectX 12, Vulkan, and DirectDraw/DX1–7 (via D7VK) route to KosmicKrisp (Vulkan 1.4);
+    /// DirectX 9, DirectX 10, and OpenGL route to WineStaging (WineD3D / OpenGL).
+    pub fn wine_engine(&self) -> TargetEngine {
+        match self.api {
+            GraphicsApi::DirectX12
+            | GraphicsApi::DirectX11
+            | GraphicsApi::Vulkan
+            | GraphicsApi::DirectX7OrOlder => {
+                if crate::runner::is_kosmickrisp_installed() {
+                    TargetEngine::KosmicKrisp
+                } else {
+                    TargetEngine::WineStaging
+                }
+            }
+            GraphicsApi::DirectX10
+            | GraphicsApi::DirectX9OrOlder
+            | GraphicsApi::OpenGL
+            | GraphicsApi::Unknown => TargetEngine::WineStaging,
+        }
+    }
 }
 
 /// Inspects a PE binary (or directory) and detects the Graphics API and recommended engine.
@@ -341,10 +365,7 @@ mod tests {
             TargetEngine::Auto.display_name(),
             "Wine + Automatic Graphics Backend"
         );
-        assert_eq!(
-            TargetEngine::Gptk.display_name(),
-            "GPTK Wine + Apple D3DMetal"
-        );
+        assert_eq!(TargetEngine::Gptk.display_name(), "GPTK + Apple D3DMetal");
         assert_eq!(
             TargetEngine::KosmicKrisp.display_name(),
             "Wine + Mesa KosmicKrisp Vulkan"
@@ -353,5 +374,24 @@ mod tests {
             TargetEngine::WineStaging.display_name(),
             "Wine + WineD3D OpenGL"
         );
+    }
+
+    #[test]
+    fn test_wine_engine_routing() {
+        let info_dx11 = GraphicsApiInfo {
+            api: GraphicsApi::DirectX11,
+            engine: TargetEngine::Gptk,
+            detected_dll: Some("d3d11.dll".into()),
+        };
+        // Auto runner is for Wine only: DX11 routes to KosmicKrisp if installed or WineStaging
+        let wine_eng = info_dx11.wine_engine();
+        assert!(wine_eng == TargetEngine::KosmicKrisp || wine_eng == TargetEngine::WineStaging);
+
+        let info_dx9 = GraphicsApiInfo {
+            api: GraphicsApi::DirectX9OrOlder,
+            engine: TargetEngine::WineStaging,
+            detected_dll: Some("d3d9.dll".into()),
+        };
+        assert_eq!(info_dx9.wine_engine(), TargetEngine::WineStaging);
     }
 }

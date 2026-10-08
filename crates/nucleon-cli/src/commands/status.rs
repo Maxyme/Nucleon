@@ -71,7 +71,7 @@ pub fn run() -> Result<()> {
         ui::tree_kv(
             "└─",
             "Registered in Steam UI:",
-            "✓ 'Nucleon (GPTK Wine + Apple D3DMetal)'",
+            "✓ 'Nucleon (GPTK + Apple D3DMetal)'",
         );
     } else {
         ui::tree_kv(

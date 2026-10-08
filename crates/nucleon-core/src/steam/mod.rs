@@ -90,28 +90,33 @@ pub fn is_staging_tool_registered() -> bool {
 }
 
 pub fn install_compatibility_tool(runner_bin: &Path) -> Result<()> {
+    let active_wine = crate::wine::get_active_wine_runtime();
+    let wine_root = active_wine.as_ref().map(|w| w.root.as_path());
+
     // 1. Register Automatic tool: Nucleon (Wine + Automatic Graphics Backend)
+    // Auto runner is for Wine only: routes between Wine graphics backends (KosmicKrisp Vulkan vs WineD3D OpenGL)
     let auto_tool_dir = paths::steam_compat_tools_dir();
-    vdf::write_tool_bundle_with_engine(
+    vdf::write_tool_bundle_with_wine(
         &auto_tool_dir,
         "nucleon",
         "Nucleon (Wine + Automatic Graphics Backend)",
         runner_bin,
         Some("auto"),
+        wine_root,
     )?;
     log::info!("Registered Steam compatibility tool: Nucleon (Wine + Automatic Graphics Backend)");
 
-    // 2. Register explicit GPTK tool: Nucleon (GPTK Wine + Apple D3DMetal)
+    // 2. Register explicit separate GPTK tool: Nucleon (GPTK + Apple D3DMetal)
     let gptk_tool_dir = paths::steam_gptk_compat_tools_dir();
-    if runner::find_gptk_runner().is_some() || runner::find_wine_staging_runtime().is_some() {
+    if runner::find_gptk_runner().is_some() {
         vdf::write_tool_bundle_with_engine(
             &gptk_tool_dir,
             "nucleon-gptk",
-            "Nucleon (GPTK Wine + Apple D3DMetal)",
+            "Nucleon (GPTK + Apple D3DMetal)",
             runner_bin,
             Some("gptk"),
         )?;
-        log::info!("Registered Steam compatibility tool: Nucleon (GPTK Wine + Apple D3DMetal)");
+        log::info!("Registered Steam compatibility tool: Nucleon (GPTK + Apple D3DMetal)");
     } else if gptk_tool_dir.exists() {
         let _ = fs::remove_dir_all(&gptk_tool_dir);
     }
@@ -123,15 +128,16 @@ pub fn install_compatibility_tool(runner_bin: &Path) -> Result<()> {
         let _ = fs::remove_dir_all(&notproton_tool_dir);
     }
 
-    // 3. Register KosmicKrisp compatibility tool if installed/detected
+    // 3. Register KosmicKrisp compatibility tool if installed/detected (Wine only)
     let kk_tool_dir = paths::steam_kosmickrisp_compat_tools_dir();
     if runner::is_kosmickrisp_installed() {
-        vdf::write_tool_bundle_with_engine(
+        vdf::write_tool_bundle_with_wine(
             &kk_tool_dir,
             "nucleon-kosmickrisp",
             "Nucleon (Wine + Mesa KosmicKrisp Vulkan)",
             runner_bin,
             Some("kosmickrisp"),
+            wine_root,
         )?;
         log::info!("Registered Steam compatibility tool: Nucleon (Wine + Mesa KosmicKrisp Vulkan)");
     } else if kk_tool_dir.exists() {
@@ -141,8 +147,6 @@ pub fn install_compatibility_tool(runner_bin: &Path) -> Result<()> {
 
     // 4. Register single unified Wine compatibility tool: 'Nucleon (Wine + WineD3D OpenGL)' pointing to active desired Wine runtime
     let wine_primary_dir = paths::steam_wine_compat_tools_dir();
-    let active_wine = crate::wine::get_active_wine_runtime();
-
     if let Some(ref aw) = active_wine {
         vdf::write_tool_bundle_with_wine(
             &wine_primary_dir,

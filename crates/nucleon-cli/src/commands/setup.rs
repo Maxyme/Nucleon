@@ -204,9 +204,7 @@ pub fn run(args: SetupArgs) -> Result<()> {
             ui::success("Registered Steam compatibility tool: 'Nucleon (Wine + Automatic Graphics Backend)'");
         }
         if steam::is_gptk_tool_registered() {
-            ui::success(
-                "Registered Steam compatibility tool: 'Nucleon (GPTK Wine + Apple D3DMetal)'",
-            );
+            ui::success("Registered Steam compatibility tool: 'Nucleon (GPTK + Apple D3DMetal)'");
         }
         if steam::is_kosmickrisp_tool_registered() {
             ui::success(
@@ -298,7 +296,7 @@ To use Nucleon in Steam:
   3. Clicking 'Install' begins downloading and routes the game via Nucleon.
   4. Compatibility tools available in Steam:
      - 'Nucleon (Wine + Automatic Graphics Backend)' [Default]
-     - 'Nucleon (GPTK Wine + Apple D3DMetal)'
+     - 'Nucleon (GPTK + Apple D3DMetal)'
      - 'Nucleon (Wine + Mesa KosmicKrisp Vulkan)'
      - 'Nucleon (Wine + WineD3D OpenGL)'
   5. Or launch directly from terminal: nucleon launch <AppID>"#

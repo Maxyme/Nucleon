@@ -9,10 +9,11 @@ pub fn run(path: &Path) -> Result<()> {
         "  Detected library:          {}",
         info.detected_dll.as_deref().unwrap_or("None (heuristic)")
     );
-    println!("  Recommended Engine:        {:?}", info.engine);
+    let wine_eng = info.wine_engine();
+    println!("  Wine Auto Runner Pipeline: {}", wine_eng.display_name());
     println!(
-        "  Target Pipeline:           {}",
-        info.engine.display_name()
+        "  GPTK Option Pipeline:      {}",
+        nucleon_core::detector::TargetEngine::Gptk.display_name()
     );
     Ok(())
 }
