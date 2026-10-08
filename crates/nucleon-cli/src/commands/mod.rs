@@ -1,6 +1,7 @@
 pub mod detect;
 pub mod gptk;
 pub mod guard;
+pub mod kosmickrisp;
 pub mod launch;
 pub mod logs;
 pub mod setup;

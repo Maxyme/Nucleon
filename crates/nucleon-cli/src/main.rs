@@ -3,8 +3,8 @@ mod commands;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use commands::{
-    gptk::GptkAction, guard::GuardAction, setup::SetupArgs, steam::SteamAction, vkd3d::Vkd3dAction,
-    wine::WineAction,
+    gptk::GptkAction, guard::GuardAction, kosmickrisp::KosmickrispAction, setup::SetupArgs,
+    steam::SteamAction, vkd3d::Vkd3dAction, wine::WineAction,
 };
 use std::path::PathBuf;
 
@@ -29,6 +29,12 @@ enum Commands {
         /// Enable or stage KosmicKrisp (Mesa Vulkan 1.4) compatibility tool in Steam
         #[arg(short, long)]
         kosmickrisp: bool,
+        /// Point to custom KosmicKrisp ICD manifest, driver dylib, or directory
+        #[arg(long)]
+        kosmickrisp_path: Option<PathBuf>,
+        /// Optional Vulkan API version override for KosmicKrisp (e.g. 1.4.0)
+        #[arg(long)]
+        kosmickrisp_version: Option<String>,
         /// Automatically fetch and stage VKD3D-Proton (Direct3D 12 -> Vulkan) from GitHub
         #[arg(long)]
         fetch_vkd3d: bool,
@@ -64,6 +70,11 @@ enum Commands {
     Gptk {
         #[command(subcommand)]
         action: GptkAction,
+    },
+    /// Manage Mesa KosmicKrisp Vulkan driver and custom paths
+    Kosmickrisp {
+        #[command(subcommand)]
+        action: KosmickrispAction,
     },
     /// Manage VKD3D-Proton (Direct3D 12 -> Vulkan 1.4) translation layer
     Vkd3d {
@@ -123,6 +134,8 @@ fn main() -> Result<()> {
         Commands::Setup {
             force,
             kosmickrisp,
+            kosmickrisp_path,
+            kosmickrisp_version,
             fetch_vkd3d,
             vkd3d_path,
             wine,
@@ -132,6 +145,8 @@ fn main() -> Result<()> {
         } => commands::setup::run(SetupArgs {
             force,
             kosmickrisp,
+            kosmickrisp_path,
+            kosmickrisp_version,
             fetch_vkd3d,
             vkd3d_path,
             wine,
@@ -143,6 +158,7 @@ fn main() -> Result<()> {
         Commands::Guard { action } => commands::guard::run(action),
         Commands::Wine { action } => commands::wine::run(action),
         Commands::Gptk { action } => commands::gptk::run(action),
+        Commands::Kosmickrisp { action } => commands::kosmickrisp::handle(action),
         Commands::Vkd3d { action } => commands::vkd3d::run(action),
         Commands::Detect { path } => commands::detect::run(&path),
         Commands::Launch { appid, hud, engine } => commands::launch::run_launch(appid, hud, engine),

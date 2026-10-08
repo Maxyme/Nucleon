@@ -1,6 +1,6 @@
 use crate::detector::TargetEngine;
 use crate::paths;
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -53,6 +53,272 @@ pub fn find_wine_staging_runtime() -> Option<PathBuf> {
     crate::wine::get_active_wine_runtime().map(|r| r.root)
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct KosmicKrispInfo {
+    pub icd_path: PathBuf,
+    pub library_path: PathBuf,
+    pub api_version: String,
+    pub is_custom: bool,
+}
+
+pub fn custom_kosmickrisp_path_file() -> PathBuf {
+    paths::support_dir().join("custom_kosmickrisp_path.txt")
+}
+
+pub fn write_kosmickrisp_icd(
+    target_icd: &Path,
+    library_path: &Path,
+    api_version: &str,
+) -> Result<()> {
+    if let Some(parent) = target_icd.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let json_content = serde_json::json!({
+        "file_format_version": "1.0.0",
+        "ICD": {
+            "library_path": library_path.to_string_lossy(),
+            "api_version": api_version
+        }
+    });
+    fs::write(
+        target_icd,
+        serde_json::to_string_pretty(&json_content)? + "\n",
+    )?;
+    Ok(())
+}
+
+pub fn detect_vulkan_dylib_api_version(dylib_path: &Path) -> Option<String> {
+    use std::io::Read;
+    let mut f = fs::File::open(dylib_path).ok()?;
+    let mut buffer = Vec::new();
+    f.by_ref()
+        .take(8 * 1024 * 1024)
+        .read_to_end(&mut buffer)
+        .ok()?;
+
+    if let Some(pos) = buffer.windows(11).position(|w| w == b"vulkan-sdk-") {
+        let after = &buffer[pos + 11..];
+        let ver_bytes: Vec<u8> = after
+            .iter()
+            .copied()
+            .take_while(|&b| b.is_ascii_digit() || b == b'.')
+            .collect();
+        if let Ok(ver_str) = String::from_utf8(ver_bytes) {
+            let parts: Vec<&str> = ver_str.split('.').collect();
+            if parts.len() >= 2 {
+                return Some(format!("{}.{}.0", parts[0], parts[1]));
+            }
+        }
+    }
+
+    for prefix in &[b"1.4.", b"1.3."] {
+        if let Some(pos) = buffer.windows(prefix.len()).position(|w| w == *prefix) {
+            let after = &buffer[pos..];
+            let ver_bytes: Vec<u8> = after
+                .iter()
+                .copied()
+                .take_while(|&b| b.is_ascii_digit() || b == b'.')
+                .collect();
+            if let Ok(ver_str) = String::from_utf8(ver_bytes) {
+                let parts: Vec<&str> = ver_str.split('.').collect();
+                if parts.len() >= 3 {
+                    return Some(format!("{}.{}.{}", parts[0], parts[1], parts[2]));
+                } else if parts.len() == 2 {
+                    return Some(format!("{}.{}.0", parts[0], parts[1]));
+                }
+            }
+        }
+    }
+
+    None
+}
+
+pub fn inspect_kosmickrisp_candidate(
+    path: &Path,
+    api_version_override: Option<&str>,
+) -> Result<KosmicKrispInfo> {
+    if !path.exists() {
+        bail!(
+            "Specified KosmicKrisp path does not exist: {}",
+            path.display()
+        );
+    }
+
+    // 1. Path is a JSON ICD manifest
+    if path.is_file()
+        && (path.extension().and_then(|s| s.to_str()) == Some("json")
+            || fs::read_to_string(path)
+                .map(|c| c.contains("\"ICD\""))
+                .unwrap_or(false))
+    {
+        let content = fs::read_to_string(path)
+            .with_context(|| format!("Failed to read ICD manifest at {}", path.display()))?;
+        let val: serde_json::Value = serde_json::from_str(&content)
+            .with_context(|| format!("Invalid JSON in ICD manifest at {}", path.display()))?;
+
+        let icd_obj = val
+            .get("ICD")
+            .context("Missing 'ICD' section in Vulkan manifest")?;
+        let lib_str = icd_obj
+            .get("library_path")
+            .and_then(|v| v.as_str())
+            .context("Missing 'library_path' in ICD manifest")?;
+
+        let resolved_lib = {
+            let p = PathBuf::from(lib_str);
+            if p.is_absolute() && p.is_file() {
+                p
+            } else if let Some(parent) = path.parent() {
+                let cand = parent.join(lib_str);
+                if let Ok(canon) = cand.canonicalize() {
+                    canon
+                } else {
+                    cand
+                }
+            } else {
+                p
+            }
+        };
+
+        let detected_ver = icd_obj
+            .get("api_version")
+            .and_then(|v| v.as_str())
+            .unwrap_or("1.4.0");
+
+        let api_version = api_version_override.unwrap_or(detected_ver).to_string();
+
+        return Ok(KosmicKrispInfo {
+            icd_path: path.to_path_buf(),
+            library_path: resolved_lib,
+            api_version,
+            is_custom: true,
+        });
+    }
+
+    // 2. Path is a driver dylib
+    if path.is_file() {
+        let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("");
+        if ext == "dylib"
+            || path
+                .file_name()
+                .and_then(|s| s.to_str())
+                .map(|n| n.contains("libvulkan"))
+                .unwrap_or(false)
+        {
+            let api_version = if let Some(ver) = api_version_override {
+                ver.to_string()
+            } else if let Some(ver) = detect_vulkan_dylib_api_version(path) {
+                ver
+            } else {
+                "1.4.0".to_string()
+            };
+
+            let target_icd = paths::kosmickrisp_dir().join("libkosmickrisp_icd.json");
+            return Ok(KosmicKrispInfo {
+                icd_path: target_icd,
+                library_path: path.to_path_buf(),
+                api_version,
+                is_custom: true,
+            });
+        }
+    }
+
+    // 3. Path is a directory
+    if path.is_dir() {
+        let json_candidates = [
+            path.join("libkosmickrisp_icd.json"),
+            path.join("share/vulkan/icd.d/libkosmickrisp_icd.json"),
+        ];
+        for jc in &json_candidates {
+            if jc.is_file() {
+                return inspect_kosmickrisp_candidate(jc, api_version_override);
+            }
+        }
+
+        if let Ok(entries) = fs::read_dir(path) {
+            for entry in entries.flatten() {
+                let p = entry.path();
+                if p.is_file() && p.extension().and_then(|s| s.to_str()) == Some("json") {
+                    if let Ok(content) = fs::read_to_string(&p) {
+                        if content.contains("\"ICD\"") {
+                            return inspect_kosmickrisp_candidate(&p, api_version_override);
+                        }
+                    }
+                }
+            }
+        }
+
+        let dylib_candidates = [
+            path.join("libvulkan_kosmickrisp.dylib"),
+            path.join("lib/libvulkan_kosmickrisp.dylib"),
+        ];
+        for dc in &dylib_candidates {
+            if dc.is_file() {
+                return inspect_kosmickrisp_candidate(dc, api_version_override);
+            }
+        }
+
+        if let Ok(entries) = fs::read_dir(path) {
+            for entry in entries.flatten() {
+                let p = entry.path();
+                if p.is_file() && p.extension().and_then(|s| s.to_str()) == Some("dylib") {
+                    let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
+                    if name.contains("kosmickrisp") || name.contains("vulkan") {
+                        return inspect_kosmickrisp_candidate(&p, api_version_override);
+                    }
+                }
+            }
+        }
+
+        bail!(
+            "No Vulkan ICD manifest (*.json) or driver dylib (*.dylib) found in directory: {}",
+            path.display()
+        );
+    }
+
+    bail!(
+        "Invalid KosmicKrisp path: {}. Expected an ICD JSON manifest, driver dylib, or directory.",
+        path.display()
+    )
+}
+
+pub fn set_custom_kosmickrisp_path(
+    path: &Path,
+    api_version_override: Option<&str>,
+) -> Result<KosmicKrispInfo> {
+    let canonical = path
+        .canonicalize()
+        .with_context(|| format!("Path does not exist: {}", path.display()))?;
+
+    let info = inspect_kosmickrisp_candidate(&canonical, api_version_override)?;
+
+    paths::ensure_dirs()?;
+    if canonical.is_file() && canonical.extension().and_then(|s| s.to_str()) != Some("json") {
+        write_kosmickrisp_icd(&info.icd_path, &info.library_path, &info.api_version)?;
+    }
+
+    fs::write(
+        custom_kosmickrisp_path_file(),
+        canonical.to_string_lossy().as_bytes(),
+    )?;
+
+    log::info!(
+        "Registered custom KosmicKrisp driver (Vulkan {}) at {}",
+        info.api_version,
+        info.icd_path.display()
+    );
+
+    Ok(info)
+}
+
+pub fn clear_custom_kosmickrisp_path() -> Result<()> {
+    let custom_file = custom_kosmickrisp_path_file();
+    if custom_file.is_file() {
+        let _ = fs::remove_file(&custom_file);
+    }
+    Ok(())
+}
+
 /// Locates the Mesa KosmicKrisp Vulkan ICD manifest on macOS.
 pub fn find_kosmickrisp_icd() -> Option<PathBuf> {
     // 1. Check explicit environment variables
@@ -68,8 +334,36 @@ pub fn find_kosmickrisp_icd() -> Option<PathBuf> {
             return Some(p);
         }
     }
+    if let Ok(path) = std::env::var("KOSMICKRISP_ICD_PATH") {
+        let p = PathBuf::from(path);
+        if p.is_file() {
+            return Some(p);
+        }
+    }
 
-    // 2. Check VULKAN_SDK environment variable
+    // 2. Check custom configured KosmicKrisp path (set via `nucleon kosmickrisp set-path` or `--kosmickrisp-path`)
+    let custom_file = custom_kosmickrisp_path_file();
+    if custom_file.is_file() {
+        if let Ok(content) = fs::read_to_string(&custom_file) {
+            let p = PathBuf::from(content.trim());
+            if p.is_file() {
+                if p.extension().and_then(|s| s.to_str()) == Some("json") {
+                    return Some(p);
+                } else {
+                    let staged = paths::kosmickrisp_dir().join("libkosmickrisp_icd.json");
+                    if staged.is_file() {
+                        return Some(staged);
+                    }
+                }
+            } else if p.is_dir() {
+                if let Ok(info) = inspect_kosmickrisp_candidate(&p, None) {
+                    return Some(info.icd_path);
+                }
+            }
+        }
+    }
+
+    // 3. Check VULKAN_SDK environment variable
     if let Ok(sdk) = std::env::var("VULKAN_SDK") {
         let sdk_icd = PathBuf::from(sdk).join("share/vulkan/icd.d/libkosmickrisp_icd.json");
         if sdk_icd.is_file() {
@@ -77,7 +371,7 @@ pub fn find_kosmickrisp_icd() -> Option<PathBuf> {
         }
     }
 
-    // 3. Check well-known LunarG SDK, Homebrew, and Nucleon driver paths
+    // 4. Check well-known LunarG SDK, Homebrew, and Nucleon driver paths
     let candidates = [
         paths::kosmickrisp_dir().join("libkosmickrisp_icd.json"),
         paths::runners_dir().join("kosmickrisp/libkosmickrisp_icd.json"),
@@ -100,6 +394,23 @@ pub fn find_kosmickrisp_icd() -> Option<PathBuf> {
 
 /// Locates the Mesa KosmicKrisp Vulkan driver dylib (`libvulkan_kosmickrisp.dylib`).
 pub fn find_kosmickrisp_driver_dylib() -> Option<PathBuf> {
+    if let Ok(path) = std::env::var("KOSMICKRISP_DRIVER_PATH") {
+        let p = PathBuf::from(path);
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+
+    let custom_file = custom_kosmickrisp_path_file();
+    if custom_file.is_file() {
+        if let Ok(content) = fs::read_to_string(&custom_file) {
+            let p = PathBuf::from(content.trim());
+            if p.is_file() && p.extension().and_then(|s| s.to_str()) == Some("dylib") {
+                return Some(p);
+            }
+        }
+    }
+
     if let Some(icd) = find_kosmickrisp_icd() {
         if let Ok(content) = fs::read_to_string(&icd) {
             if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
@@ -110,6 +421,11 @@ pub fn find_kosmickrisp_driver_dylib() -> Option<PathBuf> {
                     }
                     if let Some(parent) = icd.parent() {
                         let resolved = parent.join(lib_str);
+                        if let Ok(canon) = resolved.canonicalize() {
+                            if canon.is_file() {
+                                return Some(canon);
+                            }
+                        }
                         if resolved.is_file() {
                             return Some(resolved);
                         }
@@ -139,6 +455,61 @@ pub fn find_kosmickrisp_driver_dylib() -> Option<PathBuf> {
     }
 
     None
+}
+
+pub fn get_kosmickrisp_info() -> Option<KosmicKrispInfo> {
+    let icd = find_kosmickrisp_icd()?;
+    let content = fs::read_to_string(&icd).ok()?;
+    let val = serde_json::from_str::<serde_json::Value>(&content).ok()?;
+    let api_version = val["ICD"]["api_version"]
+        .as_str()
+        .unwrap_or("1.4.0")
+        .to_string();
+    let library_path = if let Some(lib_str) = val["ICD"]["library_path"].as_str() {
+        let p = PathBuf::from(lib_str);
+        if p.is_absolute() && p.is_file() {
+            p
+        } else if let Some(parent) = icd.parent() {
+            let resolved = parent.join(lib_str);
+            if let Ok(canon) = resolved.canonicalize() {
+                if canon.is_file() {
+                    canon
+                } else {
+                    find_kosmickrisp_driver_dylib().unwrap_or(resolved)
+                }
+            } else if resolved.is_file() {
+                resolved
+            } else {
+                find_kosmickrisp_driver_dylib().unwrap_or(p)
+            }
+        } else {
+            find_kosmickrisp_driver_dylib().unwrap_or(p)
+        }
+    } else {
+        find_kosmickrisp_driver_dylib()
+            .unwrap_or_else(|| PathBuf::from("libvulkan_kosmickrisp.dylib"))
+    };
+
+    let custom_file = custom_kosmickrisp_path_file();
+    let is_custom = if custom_file.is_file() {
+        if let Ok(c) = fs::read_to_string(&custom_file) {
+            let p = PathBuf::from(c.trim());
+            p == icd
+                || p == library_path
+                || icd == paths::kosmickrisp_dir().join("libkosmickrisp_icd.json")
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+
+    Some(KosmicKrispInfo {
+        icd_path: icd,
+        library_path,
+        api_version,
+        is_custom,
+    })
 }
 
 /// Sets up a shim directory where `libMoltenVK.dylib` links to `libvulkan_kosmickrisp.dylib`,
@@ -690,5 +1061,51 @@ mod tests {
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
         assert!(err_msg.contains("Specified GPTK path is not a directory"));
+    }
+
+    #[test]
+    fn test_inspect_kosmickrisp_candidate_json() {
+        let dir = tempdir().unwrap();
+        let icd_path = dir.path().join("custom_icd.json");
+        let dylib_path = dir.path().join("libvulkan_custom.dylib");
+        fs::write(&dylib_path, "fake_dylib").unwrap();
+
+        let content = serde_json::json!({
+            "file_format_version": "1.0.0",
+            "ICD": {
+                "library_path": "libvulkan_custom.dylib",
+                "api_version": "1.4.304"
+            }
+        });
+        fs::write(&icd_path, serde_json::to_string(&content).unwrap()).unwrap();
+
+        let info = inspect_kosmickrisp_candidate(&icd_path, None).unwrap();
+        assert_eq!(info.api_version, "1.4.304");
+        assert_eq!(info.icd_path, icd_path);
+        assert_eq!(info.library_path, dylib_path.canonicalize().unwrap());
+        assert!(info.is_custom);
+
+        // Test with explicit version override
+        let info_override = inspect_kosmickrisp_candidate(&icd_path, Some("1.4.1")).unwrap();
+        assert_eq!(info_override.api_version, "1.4.1");
+    }
+
+    #[test]
+    fn test_inspect_kosmickrisp_candidate_dylib() {
+        let dir = tempdir().unwrap();
+        let dylib_path = dir.path().join("libvulkan_kosmickrisp.dylib");
+        fs::write(&dylib_path, "fake_dylib_bytes").unwrap();
+
+        let info = inspect_kosmickrisp_candidate(&dylib_path, Some("1.4.2")).unwrap();
+        assert_eq!(info.api_version, "1.4.2");
+        assert_eq!(info.library_path, dylib_path);
+
+        // Verify write_kosmickrisp_icd
+        let target_icd = dir.path().join("test_icd.json");
+        write_kosmickrisp_icd(&target_icd, &info.library_path, &info.api_version).unwrap();
+        let icd_content = fs::read_to_string(&target_icd).unwrap();
+        let val: serde_json::Value = serde_json::from_str(&icd_content).unwrap();
+        assert_eq!(val["ICD"]["api_version"], "1.4.2");
+        assert_eq!(val["ICD"]["library_path"], dylib_path.to_str().unwrap());
     }
 }

@@ -2,12 +2,14 @@ use super::ui;
 use anyhow::Result;
 use nucleon_core::{guard, manifest, paths, runner, signatures, steam, vkd3d, wine};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Default)]
 pub struct SetupArgs {
     pub force: bool,
     pub kosmickrisp: bool,
+    pub kosmickrisp_path: Option<PathBuf>,
+    pub kosmickrisp_version: Option<String>,
     pub fetch_vkd3d: bool,
     pub vkd3d_path: Option<PathBuf>,
     pub wine: Option<String>,
@@ -55,6 +57,23 @@ pub fn run(args: SetupArgs) -> Result<()> {
         }
     }
 
+    if let Some(ref kp) = args.kosmickrisp_path {
+        match runner::set_custom_kosmickrisp_path(kp, args.kosmickrisp_version.as_deref()) {
+            Ok(info) => {
+                ui::success(format!(
+                    "Registered custom KosmicKrisp (Vulkan {}) at {}",
+                    info.api_version,
+                    info.icd_path.display()
+                ));
+            }
+            Err(e) => ui::warn(format!(
+                "Failed to set custom KosmicKrisp path {}: {:#}",
+                kp.display(),
+                e
+            )),
+        }
+    }
+
     if let Some(ref desired_wine) = args.wine {
         match wine::set_active_wine(desired_wine) {
             Ok(rt) => ui::success(format!(
@@ -89,23 +108,29 @@ pub fn run(args: SetupArgs) -> Result<()> {
         }
     }
 
-    if args.kosmickrisp {
+    if args.kosmickrisp || args.kosmickrisp_path.is_some() {
         std::env::set_var("KOSMICKRISP_FORCE", "1");
         let kk_icd = paths::kosmickrisp_dir().join("libkosmickrisp_icd.json");
         if !kk_icd.exists() && runner::find_kosmickrisp_icd().is_none() {
-            let template = r#"{
-    "file_format_version": "1.0.0",
-    "ICD": {
-        "library_path": "libvulkan_kosmickrisp.dylib",
-        "api_version": "1.4.0"
-    }
-}
-"#;
-            let _ = fs::write(&kk_icd, template);
-            ui::success(format!(
-                "Staged KosmicKrisp driver manifest template at {}",
-                kk_icd.display()
-            ));
+            let dylib = runner::find_kosmickrisp_driver_dylib();
+            let lib_path = dylib
+                .as_ref()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_else(|| "libvulkan_kosmickrisp.dylib".to_string());
+            let version = args.kosmickrisp_version.as_deref().unwrap_or("1.4.0");
+
+            match runner::write_kosmickrisp_icd(&kk_icd, Path::new(&lib_path), version) {
+                Ok(()) => {
+                    ui::success(format!(
+                        "Staged KosmicKrisp driver manifest (Vulkan {}) at {}",
+                        version,
+                        kk_icd.display()
+                    ));
+                }
+                Err(e) => {
+                    ui::warn(format!("Failed to write KosmicKrisp ICD manifest: {:#}", e));
+                }
+            }
         }
     }
 

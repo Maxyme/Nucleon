@@ -73,13 +73,14 @@ pub fn run() -> Result<()> {
         );
     }
 
-    if let Some(kk) = runner::find_kosmickrisp_icd() {
+    if let Some(info) = runner::get_kosmickrisp_info() {
+        let custom_tag = if info.is_custom { " [CUSTOM]" } else { "" };
         ui::sub_kv(
-            "Mesa KosmicKrisp (Vulkan 1.4):",
-            format!("✓ {}", kk.display()),
+            format!("Mesa KosmicKrisp (Vulkan {}):", info.api_version),
+            format!("✓ {}{}", info.icd_path.display(), custom_tag),
         );
     } else {
-        println!("    ○ Mesa KosmicKrisp (Vulkan 1.4): ○ Optional (install Vulkan SDK or Mesa)");
+        println!("    ○ Mesa KosmicKrisp (Vulkan):     ○ Optional (run 'nucleon kosmickrisp set-path <DIR>' or install Vulkan SDK)");
     }
     if steam::is_kosmickrisp_tool_registered() {
         ui::tree_kv("├─", "Registered in Steam UI:", "✓ 'Nucleon (KosmicKrisp)'");
