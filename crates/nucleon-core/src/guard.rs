@@ -377,19 +377,21 @@ pub fn install_launchagent(binary_path: Option<&Path>) -> Result<PathBuf> {
 pub fn load_launchagent(plist_path: &Path) -> Result<()> {
     let uid = nix::unistd::getuid();
     let domain = format!("gui/{}", uid);
-    let plist_str = plist_path.to_str().unwrap();
 
     // Ensure previous instance is stopped before reloading
     let _ = Command::new("launchctl")
-        .args(["bootout", &domain, plist_str])
+        .args(["bootout", &domain])
+        .arg(plist_path)
         .output();
     let _ = Command::new("launchctl")
-        .args(["unload", "-w", plist_str])
+        .args(["unload", "-w"])
+        .arg(plist_path)
         .output();
 
     // Try modern bootstrap first
     let bootstrap_res = Command::new("launchctl")
-        .args(["bootstrap", &domain, plist_str])
+        .args(["bootstrap", &domain])
+        .arg(plist_path)
         .status();
 
     if let Ok(st) = bootstrap_res {
@@ -400,7 +402,8 @@ pub fn load_launchagent(plist_path: &Path) -> Result<()> {
 
     // Fallback to load -w
     let load_res = Command::new("launchctl")
-        .args(["load", "-w", plist_str])
+        .args(["load", "-w"])
+        .arg(plist_path)
         .status()
         .with_context(|| format!("Failed to load LaunchAgent {}", plist_path.display()))?;
 
@@ -417,13 +420,14 @@ pub fn uninstall_launchagent() -> Result<()> {
     if plist_path.exists() {
         let uid = nix::unistd::getuid();
         let domain = format!("gui/{}", uid);
-        let plist_str = plist_path.to_str().unwrap();
 
         let _ = Command::new("launchctl")
-            .args(["bootout", &domain, plist_str])
+            .args(["bootout", &domain])
+            .arg(&plist_path)
             .output();
         let _ = Command::new("launchctl")
-            .args(["unload", "-w", plist_str])
+            .args(["unload", "-w"])
+            .arg(&plist_path)
             .output();
 
         let _ = fs::remove_file(&plist_path);

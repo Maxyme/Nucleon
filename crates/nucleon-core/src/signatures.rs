@@ -170,6 +170,54 @@ pub fn extract_arm64_slice(dylib_bytes: &[u8]) -> Result<&[u8]> {
         anyhow::bail!("arm64 slice not found in Mach-O universal binary");
     }
 
+    if magic == 0xcafebabf {
+        let nfat_arch = u32::from_be_bytes([
+            dylib_bytes[4],
+            dylib_bytes[5],
+            dylib_bytes[6],
+            dylib_bytes[7],
+        ]) as usize;
+
+        for i in 0..nfat_arch {
+            let offset_entry = 8 + i * 32;
+            if dylib_bytes.len() < offset_entry + 32 {
+                break;
+            }
+            let cputype = u32::from_be_bytes([
+                dylib_bytes[offset_entry],
+                dylib_bytes[offset_entry + 1],
+                dylib_bytes[offset_entry + 2],
+                dylib_bytes[offset_entry + 3],
+            ]);
+            let offset = u64::from_be_bytes([
+                dylib_bytes[offset_entry + 8],
+                dylib_bytes[offset_entry + 9],
+                dylib_bytes[offset_entry + 10],
+                dylib_bytes[offset_entry + 11],
+                dylib_bytes[offset_entry + 12],
+                dylib_bytes[offset_entry + 13],
+                dylib_bytes[offset_entry + 14],
+                dylib_bytes[offset_entry + 15],
+            ]) as usize;
+            let size = u64::from_be_bytes([
+                dylib_bytes[offset_entry + 16],
+                dylib_bytes[offset_entry + 17],
+                dylib_bytes[offset_entry + 18],
+                dylib_bytes[offset_entry + 19],
+                dylib_bytes[offset_entry + 20],
+                dylib_bytes[offset_entry + 21],
+                dylib_bytes[offset_entry + 22],
+                dylib_bytes[offset_entry + 23],
+            ]) as usize;
+
+            // CPU_TYPE_ARM64 = 0x0100000C
+            if cputype == 0x0100000c && dylib_bytes.len() >= offset + size {
+                return Ok(&dylib_bytes[offset..offset + size]);
+            }
+        }
+        anyhow::bail!("arm64 slice not found in Mach-O 64-bit universal binary");
+    }
+
     // Single 64-bit Mach-O binary check (MH_MAGIC_64 = 0xfeedfacf)
     let magic_le = u32::from_le_bytes([
         dylib_bytes[0],

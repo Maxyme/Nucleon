@@ -186,7 +186,10 @@ pub fn run(args: SetupArgs) -> Result<()> {
     // 4. Register compatibility tool
     let runner_bin = paths::support_dir().join("nucleon-runner");
     let current_exe = std::env::current_exe()?;
-    let runner_src = current_exe.parent().unwrap().join("nucleon-runner");
+    let runner_src = current_exe
+        .parent()
+        .map(|p| p.join("nucleon-runner"))
+        .unwrap_or_else(|| PathBuf::from("nucleon-runner"));
 
     if runner_src.exists() {
         fs::copy(&runner_src, &runner_bin)?;

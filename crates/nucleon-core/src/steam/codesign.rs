@@ -193,7 +193,8 @@ pub fn restore_steam() -> Result<()> {
 
 pub fn sign_binary(path: &Path) -> Result<()> {
     let status = Command::new("codesign")
-        .args(["-fs", "-", path.to_str().unwrap()])
+        .args(["-fs", "-"])
+        .arg(path)
         .status()
         .with_context(|| format!("Failed to sign {}", path.display()))?;
     if !status.success() {
@@ -206,16 +207,15 @@ pub fn is_adhoc_signed(path: &Path) -> bool {
     if !path.exists() {
         return false;
     }
-    let verify = Command::new("codesign")
-        .args(["-v", path.to_str().unwrap()])
-        .output();
+    let verify = Command::new("codesign").arg("-v").arg(path).output();
     match verify {
         Ok(v) if v.status.success() => {}
         _ => return false,
     }
 
     let detail = Command::new("codesign")
-        .args(["-d", "-vvv", path.to_str().unwrap()])
+        .args(["-d", "-vvv"])
+        .arg(path)
         .output();
     if let Ok(d) = detail {
         let combined = format!(
@@ -232,9 +232,7 @@ pub fn is_adhoc_signed(path: &Path) -> bool {
 pub fn refresh_launch_services(app_path: &Path) -> Result<()> {
     let lsregister = "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister";
     if Path::new(lsregister).exists() {
-        let _ = Command::new(lsregister)
-            .args(["-f", app_path.to_str().unwrap()])
-            .status();
+        let _ = Command::new(lsregister).arg("-f").arg(app_path).status();
     }
     Ok(())
 }

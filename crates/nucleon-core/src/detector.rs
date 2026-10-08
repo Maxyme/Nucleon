@@ -2,6 +2,31 @@ use object::Object;
 use std::fs;
 use std::path::Path;
 
+/// Fast, zero-allocation ASCII case-insensitive substring search over raw binary slices.
+fn bytes_contains_ascii_case_insensitive(data: &[u8], needle: &[u8]) -> bool {
+    if needle.is_empty() || data.len() < needle.len() {
+        return false;
+    }
+    let first_lower = needle[0].to_ascii_lowercase();
+    let first_upper = needle[0].to_ascii_uppercase();
+    let pat_len = needle.len();
+    let mut i = 0;
+    while i <= data.len() - pat_len {
+        if let Some(pos) =
+            memchr::memchr2(first_lower, first_upper, &data[i..=data.len() - pat_len])
+        {
+            let candidate_start = i + pos;
+            if data[candidate_start..candidate_start + pat_len].eq_ignore_ascii_case(needle) {
+                return true;
+            }
+            i = candidate_start + 1;
+        } else {
+            break;
+        }
+    }
+    false
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TargetEngine {
     Auto,
@@ -126,7 +151,6 @@ pub fn inspect_pe_bytes(data: &[u8]) -> Result<GraphicsApiInfo, anyhow::Error> {
 
     // Fallback: If import table parsing was empty or truncated, scan ASCII / UTF-8 byte sequences
     if imported_dlls.is_empty() {
-        let text = String::from_utf8_lossy(data).to_lowercase();
         for dll in &[
             "d3d12.dll",
             "d3d11.dll",
@@ -140,7 +164,7 @@ pub fn inspect_pe_bytes(data: &[u8]) -> Result<GraphicsApiInfo, anyhow::Error> {
             "vulkan-1.dll",
             "opengl32.dll",
         ] {
-            if text.contains(dll) {
+            if bytes_contains_ascii_case_insensitive(data, dll.as_bytes()) {
                 imported_dlls.push(dll.to_string());
             }
         }
