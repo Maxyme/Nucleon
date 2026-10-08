@@ -153,6 +153,7 @@ jobs:
             - `SHA256SUMS.txt`: SHA-256 checksums for verifying release archives
 
             *All binaries are thin 64-bit ARM Mach-O binaries signed with ad-hoc signatures for Apple Silicon.*
+          draft: true
           prerelease: true
           files: |
             nucleon-macos-arm64.tar.gz
