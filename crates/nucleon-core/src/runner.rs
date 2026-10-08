@@ -881,11 +881,17 @@ pub fn build_execution_env_for_engine(
     // If runner is CrossOver, set CrossOver root and dynamic linker paths
     let runner_str = runner_dir.to_string_lossy().to_lowercase();
     if runner_str.contains("crossover") || runner_dir.join("share/crossover").is_dir() {
-        env.insert("CX_ROOT".to_string(), runner_dir.to_string_lossy().to_string());
+        env.insert(
+            "CX_ROOT".to_string(),
+            runner_dir.to_string_lossy().to_string(),
+        );
         let cx_bin = runner_dir.join("bin");
         if cx_bin.is_dir() {
             let cur_path = std::env::var("PATH").unwrap_or_default();
-            env.insert("PATH".to_string(), format!("{}:{}", cx_bin.display(), cur_path));
+            env.insert(
+                "PATH".to_string(),
+                format!("{}:{}", cx_bin.display(), cur_path),
+            );
         }
         let mut dyld_paths = Vec::new();
         let cx_lib = runner_dir.join("lib");
@@ -900,7 +906,10 @@ pub fn build_execution_env_for_engine(
             if let Ok(cur_dyld) = std::env::var("DYLD_FALLBACK_LIBRARY_PATH") {
                 dyld_paths.push(cur_dyld);
             }
-            env.insert("DYLD_FALLBACK_LIBRARY_PATH".to_string(), dyld_paths.join(":"));
+            env.insert(
+                "DYLD_FALLBACK_LIBRARY_PATH".to_string(),
+                dyld_paths.join(":"),
+            );
         }
     }
 

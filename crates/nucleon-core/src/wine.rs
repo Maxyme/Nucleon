@@ -44,10 +44,7 @@ fn check_is_valid_wine_root(dir: &Path) -> bool {
 fn extract_crossover_version(root: &Path) -> Option<String> {
     let mut cur = Some(root);
     while let Some(dir) = cur {
-        let plist_candidates = [
-            dir.join("Contents/Info.plist"),
-            dir.join("Info.plist"),
-        ];
+        let plist_candidates = [dir.join("Contents/Info.plist"), dir.join("Info.plist")];
         for plist_path in &plist_candidates {
             if plist_path.is_file() {
                 if let Ok(content) = fs::read_to_string(plist_path) {
@@ -127,7 +124,7 @@ pub fn resolve_wine_runtime_root(candidate: &Path) -> Option<PathBuf> {
     let nested_candidates = [
         candidate.join("Contents/SharedSupport/CrossOver"), // CrossOver.app
         candidate.join("SharedSupport/CrossOver"),
-        candidate.join("Contents/Resources/wine"),          // Wine Staging.app, Homebrew
+        candidate.join("Contents/Resources/wine"), // Wine Staging.app, Homebrew
         candidate.join("Resources/wine"),
         candidate.join("CrossOver"),
         candidate.join("wine"),
@@ -159,7 +156,8 @@ pub fn inspect_wine_dir(
 
     let mut version = query_wine_version(&wine_bin);
     if version.is_none() {
-        version = extract_crossover_version(dir).or_else(|| extract_crossover_version(&actual_root));
+        version =
+            extract_crossover_version(dir).or_else(|| extract_crossover_version(&actual_root));
     }
 
     // Derive names and IDs from directory name or overrides
@@ -173,7 +171,10 @@ pub fn inspect_wine_dir(
             let tool = format!("nucleon-wine-{}", id.trim_start_matches("nucleon-wine-"));
             let display = format!("Nucleon (Wine: {name})");
             (id.to_string(), name.to_string(), display, tool)
-        } else if lower.contains("crossover") || root_str.contains("crossover") || dir_str.contains("crossover") {
+        } else if lower.contains("crossover")
+            || root_str.contains("crossover")
+            || dir_str.contains("crossover")
+        {
             let is_heroic = dir_str.contains("heroic") || root_str.contains("heroic");
             let name = if is_heroic {
                 "Heroic Wine-CrossOver".to_string()
@@ -390,14 +391,19 @@ pub fn discover_wine_runtimes() -> Vec<WineRuntime> {
     }
 
     // Dynamically check Applications directories for any CrossOver*.app
-    for app_dir in &[PathBuf::from("/Applications"), paths::home_dir().join("Applications")] {
+    for app_dir in &[
+        PathBuf::from("/Applications"),
+        paths::home_dir().join("Applications"),
+    ] {
         if let Ok(entries) = fs::read_dir(app_dir) {
             for entry in entries.flatten() {
                 let p = entry.path();
                 if p.is_dir() {
                     let name_str = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
                     if name_str.starts_with("CrossOver") && name_str.ends_with(".app") {
-                        if let Some(rt) = inspect_wine_dir(&p, Some("crossover"), Some("CrossOver Wine")) {
+                        if let Some(rt) =
+                            inspect_wine_dir(&p, Some("crossover"), Some("CrossOver Wine"))
+                        {
                             if seen_roots.insert(rt.root.clone()) {
                                 runtimes.push(rt);
                             }
@@ -701,7 +707,10 @@ pub fn set_active_wine(identifier_or_path: &str) -> Result<WineRuntime> {
     let p = PathBuf::from(identifier_or_path);
     if p.exists() {
         let mut records = load_custom_wines();
-        if !records.iter().any(|r| r.id == runtime.id || r.path == runtime.root) {
+        if !records
+            .iter()
+            .any(|r| r.id == runtime.id || r.path == runtime.root)
+        {
             records.push(CustomWineRecord {
                 id: runtime.id.clone(),
                 name: runtime.name.clone(),

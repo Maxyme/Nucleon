@@ -86,3 +86,24 @@ test:
 # Complete validation: formatting check, strict clippy lints, and test suite
 check: fmt-check lint test
     @echo "✓ All formatting, clippy lints, and tests passed cleanly!"
+
+# Build and package the release bundle (thin arm64) for Apple Silicon
+package:
+    @echo "==> Building thin arm64 release binaries and hook..."
+    cargo build --release --target aarch64-apple-darwin -p nucleon-cli -p nucleon-runner -p nucleon-hook
+    @echo "==> Applying ad-hoc codesignatures..."
+    codesign -fs - target/aarch64-apple-darwin/release/nucleon
+    codesign -fs - target/aarch64-apple-darwin/release/nucleon-runner
+    codesign -fs - target/aarch64-apple-darwin/release/libnucleon.dylib
+    @echo "==> Assembling release bundle directory..."
+    rm -rf target/nucleon-macos-arm64 target/nucleon-macos-arm64.tar.gz
+    mkdir -p target/nucleon-macos-arm64/assets
+    cp target/aarch64-apple-darwin/release/nucleon target/nucleon-macos-arm64/
+    cp target/aarch64-apple-darwin/release/nucleon-runner target/nucleon-macos-arm64/
+    cp target/aarch64-apple-darwin/release/libnucleon.dylib target/nucleon-macos-arm64/
+    cp assets/bridge-manifest.json target/nucleon-macos-arm64/assets/
+    cp assets/template.json target/nucleon-macos-arm64/assets/
+    cp README.md target/nucleon-macos-arm64/ 2>/dev/null || true
+    tar -czvf target/nucleon-macos-arm64.tar.gz -C target/nucleon-macos-arm64 .
+    @echo "✓ Release bundle created at target/nucleon-macos-arm64.tar.gz"
+

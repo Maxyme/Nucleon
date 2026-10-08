@@ -35,7 +35,9 @@ pub fn check_window_presentation(target_pids: Option<&[i32]>) -> Result<Vec<Pres
     let mut presented = Vec::new();
 
     for i in 0..array.len() {
-        let dict_ptr = array.get(i).unwrap();
+        let Some(dict_ptr) = array.get(i) else {
+            continue;
+        };
         let dict: CFDictionary = unsafe { CFDictionary::wrap_under_get_rule(*dict_ptr as *mut _) };
 
         let get_string = |key: &str| -> String {
@@ -61,8 +63,9 @@ pub fn check_window_presentation(target_pids: Option<&[i32]>) -> Result<Vec<Pres
         let get_bool = |key: &str| -> bool {
             let cf_key = CFString::new(key);
             if let Some(val) = dict.find(cf_key.as_CFTypeRef()) {
-                let cf_bool: core_foundation::boolean::CFBoolean =
-                    unsafe { core_foundation::boolean::CFBoolean::wrap_under_get_rule(*val as *mut _) };
+                let cf_bool: core_foundation::boolean::CFBoolean = unsafe {
+                    core_foundation::boolean::CFBoolean::wrap_under_get_rule(*val as *mut _)
+                };
                 bool::from(cf_bool)
             } else {
                 false

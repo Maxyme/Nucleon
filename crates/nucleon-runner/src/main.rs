@@ -430,8 +430,11 @@ fn main() -> Result<()> {
             } else {
                 log_runner(&format!("Per-game NUCLEON_WINE='{}' could not be resolved, falling back to default runner", wine_override));
             }
-        } else if let Ok(custom_wine) = env::var("NUCLEON_WINE_PATH").or_else(|_| env::var("WINE_PATH")) {
-            if let Some(resolved) = nucleon_core::wine::resolve_wine_runtime_by_query(&custom_wine) {
+        } else if let Ok(custom_wine) =
+            env::var("NUCLEON_WINE_PATH").or_else(|_| env::var("WINE_PATH"))
+        {
+            if let Some(resolved) = nucleon_core::wine::resolve_wine_runtime_by_query(&custom_wine)
+            {
                 log_runner(&format!(
                     "Per-game NUCLEON_WINE_PATH override matched: '{}' -> {}",
                     resolved.name,
@@ -747,6 +750,9 @@ mod tests {
         if !exited {
             let _ = child.kill();
         }
-        assert!(exited, "Process should have been terminated by kill_process_tree_sysinfo");
+        assert!(
+            exited,
+            "Process should have been terminated by kill_process_tree_sysinfo"
+        );
     }
 }

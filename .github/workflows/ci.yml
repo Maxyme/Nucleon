@@ -1,0 +1,160 @@
+name: CI & Release
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  check-and-test:
+    name: Code Quality & Tests
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+          targets: aarch64-apple-darwin
+
+      - name: Cache Cargo dependencies & build cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Check Clippy lints
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+      - name: Run test suite
+        run: cargo test --workspace
+
+  build-and-release:
+    name: Build & Package Release Bundle
+    needs: check-and-test
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Cache Cargo dependencies & build cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Build thin arm64 release binaries & hook
+        run: |
+          cargo build --release --target aarch64-apple-darwin \
+            -p nucleon-cli \
+            -p nucleon-runner \
+            -p nucleon-hook
+
+      - name: Ad-hoc sign release binaries for Apple Silicon
+        run: |
+          RELEASE_DIR="target/aarch64-apple-darwin/release"
+          codesign -fs - "${RELEASE_DIR}/nucleon"
+          codesign -fs - "${RELEASE_DIR}/nucleon-runner"
+          codesign -fs - "${RELEASE_DIR}/libnucleon.dylib"
+
+      - name: Verify Mach-O thin arm64 format & ad-hoc signatures
+        run: |
+          RELEASE_DIR="target/aarch64-apple-darwin/release"
+          file "${RELEASE_DIR}/nucleon"
+          file "${RELEASE_DIR}/nucleon-runner"
+          file "${RELEASE_DIR}/libnucleon.dylib"
+          codesign -dv "${RELEASE_DIR}/nucleon"
+          codesign -dv "${RELEASE_DIR}/nucleon-runner"
+          codesign -dv "${RELEASE_DIR}/libnucleon.dylib"
+
+      - name: Package release bundle
+        run: |
+          BUNDLE_DIR="nucleon-macos-arm64"
+          mkdir -p "${BUNDLE_DIR}/assets"
+
+          # Distribute binaries and hook
+          cp target/aarch64-apple-darwin/release/nucleon "${BUNDLE_DIR}/"
+          cp target/aarch64-apple-darwin/release/nucleon-runner "${BUNDLE_DIR}/"
+          cp target/aarch64-apple-darwin/release/libnucleon.dylib "${BUNDLE_DIR}/"
+
+          # Distribute manifests and AoB templates
+          cp assets/bridge-manifest.json "${BUNDLE_DIR}/assets/"
+          cp assets/template.json "${BUNDLE_DIR}/assets/"
+
+          # Include documentation & license
+          cp README.md LICENSE* "${BUNDLE_DIR}/" 2>/dev/null || true
+
+          # Create compressed release tarball and zip
+          tar -czvf nucleon-macos-arm64.tar.gz -C "${BUNDLE_DIR}" .
+          zip -r nucleon-macos-arm64.zip "${BUNDLE_DIR}"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nucleon-macos-arm64
+          path: |
+            nucleon-macos-arm64.tar.gz
+            nucleon-macos-arm64.zip
+          retention-days: 14
+
+      - name: Publish rolling pre-release for main branch
+        if: github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: "Nucleon (Latest Development Build)"
+          body: |
+            ### Nucleon Latest Release Bundle (Apple Silicon arm64)
+
+            Automated rolling release from commit `${{ github.sha }}` on `main`.
+
+            **Contents:**
+            - `nucleon`: Core CLI management and setup tool
+            - `nucleon-runner`: Safe process supervisor and prefix engine runner
+            - `libnucleon.dylib`: Steam client universal interposer hook
+            - `assets/bridge-manifest.json`: Valve client bridge DLL asset mapping
+            - `assets/template.json`: Canonical AoB signature scanning template
+
+            *All binaries are thin 64-bit ARM Mach-O binaries signed with ad-hoc signatures for Apple Silicon.*
+          prerelease: true
+          files: |
+            nucleon-macos-arm64.tar.gz
+            nucleon-macos-arm64.zip
+
+      - name: Publish GitHub Release for version tags
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            nucleon-macos-arm64.tar.gz
+            nucleon-macos-arm64.zip
+          generate_release_notes: true

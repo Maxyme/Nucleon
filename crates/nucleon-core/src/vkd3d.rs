@@ -453,7 +453,9 @@ sys.exit(1)
         for entry in fs::read_dir(source_bundle_dir.join("x64"))?.flatten() {
             let p = entry.path();
             if p.is_file() {
-                fs::copy(&p, dst_x64.join(p.file_name().unwrap()))?;
+                if let Some(name) = p.file_name() {
+                    fs::copy(&p, dst_x64.join(name))?;
+                }
             }
         }
     }
@@ -463,7 +465,9 @@ sys.exit(1)
         for entry in fs::read_dir(source_bundle_dir.join("x86"))?.flatten() {
             let p = entry.path();
             if p.is_file() {
-                fs::copy(&p, dst_x86.join(p.file_name().unwrap()))?;
+                if let Some(name) = p.file_name() {
+                    fs::copy(&p, dst_x86.join(name))?;
+                }
             }
         }
     }
