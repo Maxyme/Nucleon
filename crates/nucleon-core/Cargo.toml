@@ -16,9 +16,9 @@ memchr = { workspace = true }
 core-graphics = { workspace = true }
 core-foundation = { workspace = true }
 overlay-shim = { path = "../overlay-shim" }
-libc = { workspace = true }
 plist = { workspace = true }
 keyvalues-parser = { workspace = true }
+nix = { version = "0.31", default-features = false, features = ["user"] }
 
 [lints]
 workspace = true

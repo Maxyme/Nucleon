@@ -55,21 +55,13 @@ fn init() {
     );
 
     // Export STEAM_EXTRA_COMPAT_TOOLS_PATHS so Steam searches compatibilitytools.d
-    unsafe {
-        let tools_path =
-            paths::home_dir().join("Library/Application Support/Steam/compatibilitytools.d");
-        if let Ok(c_path) = std::ffi::CString::new(tools_path.to_string_lossy().as_bytes()) {
-            libc::setenv(
-                c"STEAM_EXTRA_COMPAT_TOOLS_PATHS".as_ptr(),
-                c_path.as_ptr(),
-                1,
-            );
-            info!(
-                "Set STEAM_EXTRA_COMPAT_TOOLS_PATHS={}",
-                tools_path.display()
-            );
-        }
-    }
+    let tools_path =
+        paths::home_dir().join("Library/Application Support/Steam/compatibilitytools.d");
+    std::env::set_var("STEAM_EXTRA_COMPAT_TOOLS_PATHS", &tools_path);
+    info!(
+        "Set STEAM_EXTRA_COMPAT_TOOLS_PATHS={}",
+        tools_path.display()
+    );
 
     // 1. Install spawn environment sanitization
     if let Err(e) = hooks::spawn::install_spawn_hooks() {

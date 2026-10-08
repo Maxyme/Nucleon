@@ -108,7 +108,7 @@ enum Commands {
         #[arg(short, long)]
         engine: Option<String>,
     },
-    /// Validate that a game window is actively displaying and presenting frames on macOS (0 screen capture)
+    /// Diagnostic troubleshooting tool: verify whether a game window is actively displaying on macOS (0 screen capture)
     Validate {
         /// Steam Application ID
         appid: u32,

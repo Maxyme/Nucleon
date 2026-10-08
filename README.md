@@ -468,13 +468,115 @@ When Steam downloads background client updates, it can overwrite modified CEF We
 - **In-Process Launch Hook**: `libnucleon.dylib` verifies and heals WebUI chunk patches asynchronously whenever Steam initializes.
 - **Pre-Launch CLI Hook**: `nucleon launch <AppID>` automatically re-verifies ad-hoc signatures before invoking the game.
 
-### Validating Window Presentation
+### Troubleshooting Specific Games
 
-Nucleon adheres to a strict zero-screen-capture policy. To verify that a game's window is actively drawing on screen, inspect WindowServer layer metadata directly:
+When getting a Windows game running on macOS through Wine/GPTK, common failure modes include headless hangs, missing DLL dependencies, 32-bit graphics translation mismatches, or unsupported anti-cheat.
+
+Nucleon provides several built-in diagnostic and inspection tools to debug and resolve game issues.
+
+#### 1. Inspecting Graphics APIs & Dependencies
+Before launching, inspect what DirectX APIs, rendering backends, and dependencies the game executable requires:
 
 ```bash
-./target/release/nucleon validate <AppID>
+nucleon detect "/path/to/game.exe"
 ```
+This inspects the PE import directory (`d3d9.dll`, `dxgi.dll`, `d3d11.dll`, `d3d12.dll`, `vulkan-1.dll`, etc.) and recommends the appropriate runtime engine and graphics backend.
+
+#### 2. Diagnosing Headless Hangs (`nucleon validate`)
+If Steam reports a game as "Running" but nothing appears on screen, `nucleon validate` acts as a diagnostic troubleshooting tool. It queries macOS WindowServer metadata (with zero screen capture and no invasive permissions) to confirm whether Wine and the game have actually created a visible on-screen window:
+
+```bash
+nucleon validate <AppID>
+```
+- **If windows are listed**: The game has successfully initialized its graphics pipeline and is presenting frames to macOS WindowServer.
+- **If no window appears**: The game encountered a headless crash or hang during pre-render initialization (e.g. D3D device creation failure, missing media foundation video codec, or shader compilation error).
+
+#### 3. Inspecting Real-Time Logs
+Inspect the live hook and runner logs to see exact process commands, environment variables, Wine output, and errors:
+
+```bash
+# View last 100 lines of runner execution:
+nucleon logs --runner -n 100
+
+# Follow live output while launching a game:
+nucleon logs --runner --follow
+```
+
+#### 4. Switching Runtimes & Translation Backends
+If a game fails on one backend, test alternative translation stacks directly:
+
+- **DirectX 11 / 12 on Apple Silicon**:
+  - `Nucleon (Wine + Apple GPTK 4)`: Uses Apple D3DMetal.
+  - Or try Vulkan translation under Wine: `Nucleon (Wine + Mesa KosmicKrisp Vulkan)` with VKD3D-Proton.
+- **DirectX 9 / 10 / OpenGL**:
+  - `Nucleon (Wine + WineD3D OpenGL)` or `Nucleon (Wine + Mesa KosmicKrisp Vulkan)`.
+- **DirectDraw / DirectX 1–7 (Retro titles)**:
+  - `Nucleon (Wine + Mesa KosmicKrisp Vulkan)` with D7VK.
+- **Testing Different Wine Distributions**:
+  ```bash
+  # Test with CrossOver:
+  NUCLEON_WINE=/Applications/CrossOver.app %command%
+
+  # Test with Heroic Wine-Staging:
+  NUCLEON_WINE=staging %command%
+  ```
+
+---
+
+### Working with an LLM (AI Assistant) to Make Games Work
+
+You can easily use an LLM (such as Claude, ChatGPT, or Gemini) to diagnose game launch failures and formulate launch options. Here is the recommended prompt workflow:
+
+#### Step 1: Gather Diagnostic Output
+Run these commands in your terminal for the target game:
+
+```bash
+# 1. PE inspection
+nucleon detect "/path/to/game/executable.exe"
+
+# 2. Window validation (while Steam says 'Running')
+nucleon validate <AppID>
+
+# 3. Runner execution log
+nucleon logs --runner -n 100
+```
+
+#### Step 2: Feed the Logs to the LLM
+Copy the output into this prompt template:
+
+> **Prompt Template for LLM:**
+> ```markdown
+> I am running a Windows game on macOS Apple Silicon using Nucleon (Steam compatibility layer).
+>
+> - **Game:** [Game Name] (AppID: [AppID])
+> - **Behavior:** [e.g. Game crashes immediately / black screen / audio plays but no video / Steam says Running but no window appears]
+>
+> **`nucleon detect` output:**
+> ```
+> [paste output here]
+> ```
+>
+> **`nucleon validate` output:**
+> ```
+> [paste output here]
+> ```
+>
+> **`nucleon logs --runner` output:**
+> ```
+> [paste log lines here]
+> ```
+>
+> Please analyze the logs and advise:
+> 1. Which engine should I pick in the Steam compatibility dropdown?
+>    - Apple GPTK 4 (D3DMetal)
+>    - Wine + Automatic Graphics Backend
+>    - Wine + Mesa KosmicKrisp Vulkan (VKD3D/DXVK/D7VK)
+>    - Wine + WineD3D OpenGL
+> 2. What Steam Launch Options or environment variable overrides (e.g. `WINEDLLOVERRIDES`, `DXVK_HUD`, `WINE_SIMULATE_WRITECOPY`) are recommended for this game?
+> 3. Are any Windows DLL overrides (e.g. Media Foundation, Visual C++ redistributables, DirectX runtimes) typically required for this game under Wine/Proton?
+> ```
+
+The LLM can parse the exact Wine error lines (such as `failed to create d3d device`, missing DLL symbols, or `mfplat` Media Foundation stubs) and recommend targeted DLL overrides or runtime engine selections to get the game running.
 
 ---
 
