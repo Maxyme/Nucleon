@@ -921,11 +921,14 @@ pub fn build_execution_env_for_engine(
             let shim_dir =
                 setup_kosmickrisp_shim().unwrap_or_else(|_| paths::kosmickrisp_shim_dir());
 
-            // Wine DLL overrides: map Direct3D to DXVK/VKD3D (n,b) and forward Vulkan to host KosmicKrisp
-            env.insert(
-                "WINEDLLOVERRIDES".to_string(),
-                "steamclient,steamclient64,lsteamclient=n,b;winevulkan=b,n;vulkan-1=b,n;d3d11,dxgi,d3d10core,d3d9,d3d12,d3d12core=n,b".to_string(),
-            );
+            // Wine DLL overrides: map Direct3D to DXVK/VKD3D/D7VK (n,b) and forward Vulkan to host KosmicKrisp
+            let mut overrides =
+                "steamclient,steamclient64,lsteamclient=n,b;winevulkan=b,n;vulkan-1=b,n;d3d11,dxgi,d3d10core,d3d9,d3d12,d3d12core=n,b"
+                    .to_string();
+            if crate::d7vk::find_d7vk().is_some() {
+                overrides.push_str(";ddraw=n,b");
+            }
+            env.insert("WINEDLLOVERRIDES".to_string(), overrides);
 
             // Configure VKD3D-Proton features if available
             if crate::vkd3d::find_vkd3d_proton().is_some() {

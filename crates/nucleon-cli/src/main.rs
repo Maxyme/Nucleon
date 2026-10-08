@@ -3,8 +3,8 @@ mod commands;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use commands::{
-    gptk::GptkAction, guard::GuardAction, kosmickrisp::KosmickrispAction, setup::SetupArgs,
-    steam::SteamAction, vkd3d::Vkd3dAction, wine::WineAction,
+    d7vk::D7vkAction, gptk::GptkAction, guard::GuardAction, kosmickrisp::KosmickrispAction,
+    setup::SetupArgs, steam::SteamAction, vkd3d::Vkd3dAction, wine::WineAction,
 };
 use std::path::PathBuf;
 
@@ -41,6 +41,12 @@ enum Commands {
         /// Point to custom VKD3D-Proton installation directory
         #[arg(long)]
         vkd3d_path: Option<PathBuf>,
+        /// Automatically fetch and stage D7VK (DirectDraw / Direct3D 1-7 -> Vulkan) from GitHub
+        #[arg(long)]
+        fetch_d7vk: bool,
+        /// Point to custom D7VK installation directory
+        #[arg(long)]
+        d7vk_path: Option<PathBuf>,
         /// Select desired Wine runtime flavor or path for Steam (e.g. staging, crossover)
         #[arg(long)]
         wine: Option<String>,
@@ -80,6 +86,11 @@ enum Commands {
     Vkd3d {
         #[command(subcommand)]
         action: Vkd3dAction,
+    },
+    /// Manage D7VK (DirectDraw / Direct3D 1-7 -> Vulkan 1.4) translation layer
+    D7vk {
+        #[command(subcommand)]
+        action: D7vkAction,
     },
     /// Inspect Graphics API dependencies and recommended engine for an executable or game folder
     Detect {
@@ -138,6 +149,8 @@ fn main() -> Result<()> {
             kosmickrisp_version,
             fetch_vkd3d,
             vkd3d_path,
+            fetch_d7vk,
+            d7vk_path,
             wine,
             wine_path,
             gptk_path,
@@ -149,6 +162,8 @@ fn main() -> Result<()> {
             kosmickrisp_version,
             fetch_vkd3d,
             vkd3d_path,
+            fetch_d7vk,
+            d7vk_path,
             wine,
             wine_path,
             gptk_path,
@@ -160,6 +175,7 @@ fn main() -> Result<()> {
         Commands::Gptk { action } => commands::gptk::run(action),
         Commands::Kosmickrisp { action } => commands::kosmickrisp::handle(action),
         Commands::Vkd3d { action } => commands::vkd3d::run(action),
+        Commands::D7vk { action } => commands::d7vk::run(action),
         Commands::Detect { path } => commands::detect::run(&path),
         Commands::Launch { appid, hud, engine } => commands::launch::run_launch(appid, hud, engine),
         Commands::Validate { appid } => commands::launch::run_validate(appid),

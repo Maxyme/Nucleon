@@ -73,6 +73,10 @@ pub fn vkd3d_proton_dir() -> PathBuf {
     support_dir().join("vkd3d-proton")
 }
 
+pub fn d7vk_dir() -> PathBuf {
+    support_dir().join("d7vk")
+}
+
 pub fn launch_agents_dir() -> PathBuf {
     home_dir().join("Library/LaunchAgents")
 }
@@ -105,6 +109,7 @@ pub fn ensure_dirs() -> Result<()> {
         kosmickrisp_dir(),
         kosmickrisp_shim_dir(),
         vkd3d_proton_dir(),
+        d7vk_dir(),
         launch_agents_dir(),
     ] {
         fs::create_dir_all(d)

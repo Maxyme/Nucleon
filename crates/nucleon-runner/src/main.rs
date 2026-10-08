@@ -192,9 +192,9 @@ fn main() -> Result<()> {
     // Initialize prefix, registry, and bridge DLLs
     prefix::ensure_prefix(&pfx_dir, &runner_dir)?;
 
-    // Stage or unstage VKD3D-Proton based on active engine:
-    // KosmicKrisp: stages VKD3D-Proton (Direct3D 12 -> Vulkan 1.4 -> KosmicKrisp)
-    // Other engines (e.g. GPTK): unstages VKD3D-Proton to use native D3DMetal without DLL override conflicts
+    // Stage or unstage translation DLLs based on active engine:
+    // KosmicKrisp: stages VKD3D-Proton (Direct3D 12 -> Vulkan 1.4) and D7VK (DirectDraw / D3D 1-7 -> Vulkan 1.4)
+    // Other engines (e.g. GPTK): unstages VKD3D-Proton and D7VK to use native D3DMetal/WineD3D without DLL override conflicts
     if active_engine == nucleon_core::detector::TargetEngine::KosmicKrisp {
         if let Some(vkd3d) = nucleon_core::vkd3d::find_vkd3d_proton() {
             if let Ok(staged) =
@@ -211,14 +211,36 @@ fn main() -> Result<()> {
                 "VKD3D-Proton not installed. Point to an extracted path via 'nucleon vkd3d set-path <DIR>' or set VKD3D_PROTON_PATH to enable Direct3D 12 on KosmicKrisp."
             );
         }
-    } else if let Ok(removed) =
-        nucleon_core::vkd3d::unstage_vkd3d_proton_from_prefix(&pfx_dir, Some(&runner_dir))
-    {
-        if removed > 0 {
-            log_runner(&format!(
-                "Unstaged {} VKD3D-Proton DLL(s) from prefix (restored builtin D3D12 for {:?})",
-                removed, active_engine
-            ));
+
+        if let Some(d7vk) = nucleon_core::d7vk::find_d7vk() {
+            if let Ok(staged) = nucleon_core::d7vk::stage_d7vk_into_prefix(&d7vk, &pfx_dir) {
+                log_runner(&format!(
+                    "D7VK active ({} DLL(s) from {}): DirectDraw / Direct3D 1-7 -> Vulkan 1.4 -> KosmicKrisp",
+                    staged,
+                    d7vk.root.display()
+                ));
+            }
+        }
+    } else {
+        if let Ok(removed) =
+            nucleon_core::vkd3d::unstage_vkd3d_proton_from_prefix(&pfx_dir, Some(&runner_dir))
+        {
+            if removed > 0 {
+                log_runner(&format!(
+                    "Unstaged {} VKD3D-Proton DLL(s) from prefix (restored builtin D3D12 for {:?})",
+                    removed, active_engine
+                ));
+            }
+        }
+        if let Ok(removed) =
+            nucleon_core::d7vk::unstage_d7vk_from_prefix(&pfx_dir, Some(&runner_dir))
+        {
+            if removed > 0 {
+                log_runner(&format!(
+                    "Unstaged {} D7VK DLL(s) from prefix (restored builtin ddraw for {:?})",
+                    removed, active_engine
+                ));
+            }
         }
     }
 

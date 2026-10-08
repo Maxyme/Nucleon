@@ -42,6 +42,7 @@ pub enum GraphicsApi {
     DirectX11,
     DirectX10,
     DirectX9OrOlder,
+    DirectX7OrOlder,
     Vulkan,
     OpenGL,
     Unknown,
@@ -154,14 +155,29 @@ pub fn inspect_pe_bytes(data: &[u8]) -> Result<GraphicsApiInfo, anyhow::Error> {
         });
     }
 
-    // 5. DirectX 9 or older
+    // 5. DirectX 9 / 8
     if let Some(dll) = imported_dlls
         .iter()
-        .find(|d| d.contains("d3d9") || d.contains("d3d8") || d.contains("ddraw"))
+        .find(|d| d.contains("d3d9") || d.contains("d3d8"))
     {
         return Ok(GraphicsApiInfo {
             api: GraphicsApi::DirectX9OrOlder,
             engine: TargetEngine::WineStaging,
+            detected_dll: Some(dll.clone()),
+        });
+    }
+
+    // 6. DirectDraw / DirectX 1-7 (ddraw.dll)
+    // Routes to KosmicKrisp if D7VK is installed, otherwise falls back to WineStaging (WineD3D).
+    if let Some(dll) = imported_dlls.iter().find(|d| d.contains("ddraw")) {
+        let engine = if crate::d7vk::is_d7vk_installed() {
+            TargetEngine::KosmicKrisp
+        } else {
+            TargetEngine::WineStaging
+        };
+        return Ok(GraphicsApiInfo {
+            api: GraphicsApi::DirectX7OrOlder,
+            engine,
             detected_dll: Some(dll.clone()),
         });
     }
@@ -278,6 +294,12 @@ mod tests {
         let info = inspect_pe_bytes(bytes_gl).unwrap();
         assert_eq!(info.api, GraphicsApi::OpenGL);
         assert_eq!(info.engine, TargetEngine::WineStaging);
+
+        // Simulated binary containing ddraw.dll
+        let bytes_ddraw = b"MZ\x90\x00...SomeHeader...ddraw.dll\x00kernel32.dll\x00";
+        let info = inspect_pe_bytes(bytes_ddraw).unwrap();
+        assert_eq!(info.api, GraphicsApi::DirectX7OrOlder);
+        assert_eq!(info.detected_dll, Some("ddraw.dll".into()));
     }
 
     #[test]

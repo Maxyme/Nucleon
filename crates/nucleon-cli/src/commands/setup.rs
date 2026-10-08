@@ -1,6 +1,6 @@
 use super::ui;
 use anyhow::Result;
-use nucleon_core::{guard, manifest, paths, runner, signatures, steam, vkd3d, wine};
+use nucleon_core::{d7vk, guard, manifest, paths, runner, signatures, steam, vkd3d, wine};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -12,6 +12,8 @@ pub struct SetupArgs {
     pub kosmickrisp_version: Option<String>,
     pub fetch_vkd3d: bool,
     pub vkd3d_path: Option<PathBuf>,
+    pub fetch_d7vk: bool,
+    pub d7vk_path: Option<PathBuf>,
     pub wine: Option<String>,
     pub wine_path: Option<PathBuf>,
     pub gptk_path: Option<PathBuf>,
@@ -105,6 +107,22 @@ pub fn run(args: SetupArgs) -> Result<()> {
         match vkd3d::fetch_vkd3d_proton(None, None) {
             Ok(bundle) => ui::success(format!("VKD3D-Proton staged at {}", bundle.root.display())),
             Err(e) => ui::warn(format!("Failed to fetch VKD3D-Proton: {:#}", e)),
+        }
+    }
+
+    if let Some(ref p) = args.d7vk_path {
+        match d7vk::set_custom_d7vk_path(p) {
+            Ok(bundle) => ui::success(format!(
+                "Registered custom D7VK path at {}",
+                bundle.root.display()
+            )),
+            Err(e) => ui::warn(format!("Failed to set D7VK path {}: {:#}", p.display(), e)),
+        }
+    } else if args.fetch_d7vk {
+        ui::header("Fetching D7VK (DirectDraw / Direct3D 1-7 -> Vulkan)...");
+        match d7vk::fetch_d7vk(None, None) {
+            Ok(bundle) => ui::success(format!("D7VK staged at {}", bundle.root.display())),
+            Err(e) => ui::warn(format!("Failed to fetch D7VK: {:#}", e)),
         }
     }
 

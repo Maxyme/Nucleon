@@ -68,6 +68,7 @@ Nucleon features an intelligent **Tri-Engine Router** that inspects target Windo
 - **Apple Game Porting Toolkit (GPTK 4 / GPTK 2)**: Fully supported and recommended for DirectX 11 and DirectX 12 titles via `D3DMetal.framework`.
 - **Mesa KosmicKrisp**: Full Vulkan 1.4 conformant driver implemented on Metal 4 for Apple Silicon (macOS 26+). Recommended for native Vulkan titles and open-source Direct3D via DXVK and VKD3D-Proton.
 - **VKD3D-Proton (Direct3D 12 -> Vulkan 1.4)**: Translates Direct3D 12 calls to Vulkan 1.4 when running with KosmicKrisp. Binaries are never tracked in git; you can extract official releases and configure Nucleon via `nucleon vkd3d set-path <dir>`, `nucleon setup --vkd3d-path <dir>`, or `VKD3D_PROTON_PATH`.
+- **D7VK (DirectDraw / Direct3D 1–7 -> Vulkan 1.4)**: Translates legacy DirectDraw and Direct3D 1 to 7 calls to Vulkan 1.4 when running with KosmicKrisp, bypassing deprecated macOS OpenGL. Binaries are never tracked in git; configure via `nucleon d7vk fetch`, `nucleon d7vk set-path <dir>`, `nucleon setup --d7vk-path <dir>`, or `D7VK_PATH`.
 - **Wine-Staging**: Supported for DirectX 9, DirectX 10, and general legacy Windows applications (`brew install --cask wine-staging`).
 - **Architecture**: Native Apple Silicon 64-bit translation. *Note: Experimental 32-bit support exists, though it has not been validated across titles.*
 
@@ -317,6 +318,39 @@ Check that Nucleon successfully detects the Direct3D 12 translation layer:
 nucleon vkd3d status
 # or check overall system status:
 nucleon status
+```
+
+### Managing D7VK (DirectDraw / Direct3D 1–7 for KosmicKrisp)
+
+DirectDraw and early Direct3D (DirectX 1 to 7) titles run via D7VK over Vulkan 1.4 on Mesa KosmicKrisp, avoiding macOS's deprecated OpenGL stack:
+
+#### 1. Fetch Automatically or Download Release
+- **Option A: Automatic fetch via Nucleon CLI**
+  ```bash
+  nucleon d7vk fetch
+  ```
+- **Option B: Manual download from GitHub**
+  Download `d7vk-v2.3.zip` from [WinterSnowfall/d7vk Releases](https://github.com/WinterSnowfall/d7vk/releases) and unzip it.
+
+#### 2. Configure Path
+- **Via CLI Subcommand:**
+  ```bash
+  nucleon d7vk set-path /path/to/extracted/d7vk-v2.3
+  ```
+- **During Initial Setup:**
+  ```bash
+  nucleon setup --fetch-d7vk
+  # or point to existing path:
+  nucleon setup --d7vk-path /path/to/extracted/d7vk-v2.3
+  ```
+- **Environment Variable:**
+  ```bash
+  export D7VK_PATH=/path/to/extracted/d7vk-v2.3
+  ```
+
+#### 3. Verify Detection
+```bash
+nucleon d7vk status
 ```
 
 ### Background Steam Update Guard & LaunchAgent

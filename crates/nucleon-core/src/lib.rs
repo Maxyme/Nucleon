@@ -1,3 +1,4 @@
+pub mod d7vk;
 pub mod detector;
 pub mod guard;
 pub mod manifest;

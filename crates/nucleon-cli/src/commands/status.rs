@@ -1,6 +1,6 @@
 use super::ui;
 use anyhow::Result;
-use nucleon_core::{guard, paths, runner, steam, vkd3d, wine};
+use nucleon_core::{d7vk, guard, paths, runner, steam, vkd3d, wine};
 use std::fs;
 
 pub fn run() -> Result<()> {
@@ -94,15 +94,29 @@ pub fn run() -> Result<()> {
     if let Some(vkd3d) = vkd3d::find_vkd3d_proton() {
         let ver = vkd3d.version.as_deref().unwrap_or("detected");
         ui::tree_kv(
-            "└─",
+            "├─",
             "VKD3D-Proton (Direct3D 12):",
             format!("✓ {} [{}]", vkd3d.root.display(), ver),
         );
     } else {
         ui::tree_kv(
-            "└─",
+            "├─",
             "VKD3D-Proton (Direct3D 12):",
             "○ Optional (run 'nucleon vkd3d set-path <DIR>' or 'nucleon setup --vkd3d-path <DIR>')",
+        );
+    }
+    if let Some(d7vk) = d7vk::find_d7vk() {
+        let ver = d7vk.version.as_deref().unwrap_or("detected");
+        ui::tree_kv(
+            "└─",
+            "D7VK (DirectDraw / D3D 1-7):",
+            format!("✓ {} [{}]", d7vk.root.display(), ver),
+        );
+    } else {
+        ui::tree_kv(
+            "└─",
+            "D7VK (DirectDraw / D3D 1-7):",
+            "○ Optional (run 'nucleon d7vk fetch' or 'nucleon setup --fetch-d7vk')",
         );
     }
 
