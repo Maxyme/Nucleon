@@ -948,7 +948,8 @@ pub fn build_execution_env_for_engine(
             env.insert(
                 "DYLD_FALLBACK_LIBRARY_PATH".to_string(),
                 format!(
-                    "{}:{}:{}",
+                    "{}:{}:{}:{}",
+                    steam_dir.display(),
                     lib_ext.display(),
                     lib_unix.display(),
                     lib_dir.display()
@@ -1008,7 +1009,8 @@ pub fn build_execution_env_for_engine(
             env.insert(
                 "DYLD_FALLBACK_LIBRARY_PATH".to_string(),
                 format!(
-                    "{}:{}:{}",
+                    "{}:{}:{}:{}",
+                    steam_dir.display(),
                     shim_dir.display(),
                     lib_unix.display(),
                     lib_dir.display()
@@ -1027,7 +1029,12 @@ pub fn build_execution_env_for_engine(
             let lib_unix = runner_dir.join("lib/wine/x86_64-unix");
             env.insert(
                 "DYLD_FALLBACK_LIBRARY_PATH".to_string(),
-                format!("{}:{}", lib_unix.display(), lib_dir.display()),
+                format!(
+                    "{}:{}:{}",
+                    steam_dir.display(),
+                    lib_unix.display(),
+                    lib_dir.display()
+                ),
             );
         }
     }

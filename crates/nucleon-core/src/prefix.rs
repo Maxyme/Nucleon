@@ -135,6 +135,7 @@ pub fn stage_bridge_libraries(prefix_dir: &Path) -> Result<()> {
                 steam_dir.join("steamclient64.so"),
             ],
         ),
+        ("ntdll_compat.so", vec![steam_dir.join("ntdll_compat.so")]),
     ];
 
     for (name, targets) in files_to_stage {
@@ -157,6 +158,18 @@ pub fn stage_bridge_libraries(prefix_dir: &Path) -> Result<()> {
         let _ = fs::copy(&i386_lsteam, syswow64.join("lsteamclient.dll"));
     }
 
+    // Copy architecture-specific unix bridge libraries if present
+    let x64_unix_lsteam = bridge.join("x86_64-unix/lsteamclient.so");
+    if x64_unix_lsteam.is_file() {
+        let _ = fs::copy(&x64_unix_lsteam, steam_dir.join("lsteamclient.so"));
+        let _ = fs::copy(&x64_unix_lsteam, steam_dir.join("steamclient.so"));
+        let _ = fs::copy(&x64_unix_lsteam, steam_dir.join("steamclient64.so"));
+    }
+    let ntdll_compat = bridge.join("x86_64-unix/ntdll_compat.so");
+    if ntdll_compat.is_file() {
+        let _ = fs::copy(&ntdll_compat, steam_dir.join("ntdll_compat.so"));
+    }
+
     // Copy legacycompat files and legacy Steam.dll
     let legacy_src = bridge.join("legacycompat");
     if legacy_src.is_dir() {
@@ -175,4 +188,24 @@ pub fn stage_bridge_libraries(prefix_dir: &Path) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn test_stage_bridge_libraries_structure() {
+        let prefix_dir = tempdir().unwrap();
+        let res = stage_bridge_libraries(prefix_dir.path());
+        assert!(res.is_ok());
+
+        let steam_dir = prefix_dir.path().join("drive_c/Program Files (x86)/Steam");
+        assert!(steam_dir.is_dir());
+        let sys32 = prefix_dir.path().join("drive_c/windows/system32");
+        assert!(sys32.is_dir());
+        let syswow64 = prefix_dir.path().join("drive_c/windows/syswow64");
+        assert!(syswow64.is_dir());
+    }
 }
