@@ -24,6 +24,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # stable
         with:
+          toolchain: stable
           components: rustfmt, clippy
           targets: aarch64-apple-darwin
 
@@ -59,6 +60,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # stable
         with:
+          toolchain: stable
           targets: aarch64-apple-darwin
 
       - name: Cache Cargo dependencies & build cache
