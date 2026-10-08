@@ -173,6 +173,7 @@ fn is_wine_game_process_line(
         || args_part.contains("rpcss.exe")
         || args_part.contains("explorer.exe")
         || args_part.contains("conhost.exe")
+        || args_part.contains("steam.exe")
     {
         return false;
     }
@@ -234,7 +235,18 @@ fn main() -> Result<()> {
     }
 
     // Parse Steam compatibility environment
-    let compat_appid = env::var("STEAM_COMPAT_APP_ID").ok();
+    let compat_appid = env::var("STEAM_COMPAT_APP_ID")
+        .ok()
+        .or_else(|| env::var("SteamAppId").ok())
+        .or_else(|| {
+            env::var_os("STEAM_COMPAT_DATA_PATH").and_then(|p| {
+                let path = PathBuf::from(p);
+                path.file_name()
+                    .and_then(|n| n.to_str())
+                    .filter(|s| s.chars().all(|c| c.is_ascii_digit()))
+                    .map(|s| s.to_string())
+            })
+        });
     let compat_data_path = env::var_os("STEAM_COMPAT_DATA_PATH")
         .map(PathBuf::from)
         .unwrap_or_else(|| paths::support_dir().join("default_prefix"));
@@ -255,6 +267,17 @@ fn main() -> Result<()> {
     }
 
     let target_exe = PathBuf::from(&game_args[0]);
+
+    if let Some(ref id) = compat_appid {
+        env::set_var("SteamAppId", id);
+        env::set_var("SteamGameId", id);
+        if let Some(target_dir) = target_exe.parent() {
+            let appid_path = target_dir.join("steam_appid.txt");
+            if !appid_path.exists() {
+                let _ = fs::write(&appid_path, id);
+            }
+        }
+    }
 
     // Check for launch overrides (from CLI launch command)
     let mut launch_override: Option<LaunchOverride> = None;
@@ -405,8 +428,13 @@ fn main() -> Result<()> {
         log_runner("Metal Performance HUD enabled");
     }
 
-    let exec_env =
+    let mut exec_env =
         runner::build_execution_env_for_engine(&runner_dir, &pfx_dir, active_engine, enable_hud);
+
+    if let Some(ref id) = compat_appid {
+        exec_env.insert("SteamAppId".to_string(), id.clone());
+        exec_env.insert("SteamGameId".to_string(), id.clone());
+    }
 
     // Setup signal handler for prompt SIGTERM exit
     let term_flag = Arc::new(AtomicBool::new(false));
@@ -417,22 +445,42 @@ fn main() -> Result<()> {
     })
     .ok();
 
-    log_runner(&format!("Launching game with Wine: {:?}", game_args));
+    // Working directory is the parent of the exe if available
+    let game_cwd = if let Some(exe_path) = game_args.first().map(Path::new) {
+        if let Some(parent) = exe_path.parent() {
+            if parent.is_dir() {
+                Some(parent.to_path_buf())
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    // If steam.exe exists in the prefix, wrap game arguments through steam.exe
+    let steam_shim = pfx_dir.join("drive_c/Program Files (x86)/Steam/steam.exe");
+    let wine_args: Vec<String> = if steam_shim.is_file() {
+        let mut wrapped = vec!["C:\\Program Files (x86)\\Steam\\steam.exe".to_string()];
+        wrapped.extend(game_args.clone());
+        wrapped
+    } else {
+        game_args.clone()
+    };
+
+    log_runner(&format!("Launching game with Wine: {:?}", wine_args));
 
     let mut cmd = Command::new(&wine_bin);
-    cmd.args(&game_args);
+    cmd.args(&wine_args);
 
     for (k, v) in exec_env {
         cmd.env(k, v);
     }
 
-    // Working directory is the parent of the exe if available
-    if let Some(exe_path) = game_args.first().map(Path::new) {
-        if let Some(parent) = exe_path.parent() {
-            if parent.is_dir() {
-                cmd.current_dir(parent);
-            }
-        }
+    if let Some(ref cwd) = game_cwd {
+        cmd.current_dir(cwd);
     }
 
     let mut child = cmd.spawn()?;
@@ -534,6 +582,14 @@ mod tests {
         let line_wineserver = "12347 /opt/wine/bin/wineserver -p";
         assert!(!is_wine_game_process_line(
             line_wineserver,
+            my_pid,
+            "/opt/wine",
+            "dirtrally2.exe"
+        ));
+
+        let line_steam = "12348 /opt/wine/bin/wine64 C:\\Program Files (x86)\\Steam\\steam.exe";
+        assert!(!is_wine_game_process_line(
+            line_steam,
             my_pid,
             "/opt/wine",
             "dirtrally2.exe"

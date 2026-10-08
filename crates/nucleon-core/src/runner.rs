@@ -2,6 +2,7 @@ use crate::detector::TargetEngine;
 use crate::paths;
 use anyhow::{bail, Context, Result};
 use std::collections::HashMap;
+use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -860,6 +861,69 @@ pub fn build_execution_env_for_engine(
     env.insert("WINEMSYNC".to_string(), "1".to_string());
     env.insert("WINEESYNC".to_string(), "1".to_string());
 
+    // Wine library and DLL search path including prefix Steam directory
+    let steam_dir = prefix_dir.join("drive_c/Program Files (x86)/Steam");
+    let win_dlls = runner_dir.join("lib/wine/x86_64-windows");
+    let unix_dlls = runner_dir.join("lib/wine/x86_64-unix");
+    let aarch64_unix = runner_dir.join("lib/wine/aarch64-unix");
+    let unix_path = if aarch64_unix.is_dir() {
+        aarch64_unix
+    } else {
+        unix_dlls
+    };
+    env.insert(
+        "WINEDLLPATH".to_string(),
+        format!(
+            "{}:{}:{}",
+            steam_dir.display(),
+            win_dlls.display(),
+            unix_path.display()
+        ),
+    );
+
+    // Native Steam client installation path for lsteamclient bridge
+    let steam_bundle = paths::steam_data_dir().join("Steam.AppBundle/Steam/Contents/MacOS");
+    let steam_client_dir = if steam_bundle.is_dir() {
+        steam_bundle
+    } else {
+        paths::steam_app().join("Contents/MacOS")
+    };
+    let client_path_str = env::var("STEAM_COMPAT_CLIENT_INSTALL_PATH")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| steam_client_dir.to_string_lossy().to_string());
+    env.insert(
+        "STEAM_COMPAT_CLIENT_INSTALL_PATH".to_string(),
+        client_path_str,
+    );
+
+    // Compose DYLD_INSERT_LIBRARIES: overlay-shim + Steam client loader/overlay
+    let overlay_shim = paths::support_dir().join("overlay-shim.dylib");
+    let steam_dyld = env::var("STEAM_DYLD_INSERT_LIBRARIES")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            let loader = steam_client_dir.join("steamloader.dylib");
+            let renderer = steam_client_dir.join("gameoverlayrenderer.dylib");
+            if loader.exists() && renderer.exists() {
+                Some(format!("{}:{}", loader.display(), renderer.display()))
+            } else if loader.exists() {
+                Some(loader.display().to_string())
+            } else {
+                None
+            }
+        });
+
+    let insert_val = match (overlay_shim.exists(), steam_dyld) {
+        (true, Some(s_dyld)) => format!("{}:{}", overlay_shim.display(), s_dyld),
+        (true, None) => overlay_shim.to_string_lossy().to_string(),
+        (false, Some(s_dyld)) => s_dyld,
+        (false, None) => String::new(),
+    };
+    if !insert_val.is_empty() {
+        env.insert("DYLD_INSERT_LIBRARIES".to_string(), insert_val);
+    }
+
     match engine {
         TargetEngine::Gptk => {
             // Apple Silicon & GPTK 4 features
@@ -870,7 +934,7 @@ pub fn build_execution_env_for_engine(
             // DirectX 11 & 12 Metal DLL Overrides
             env.insert(
                 "WINEDLLOVERRIDES".to_string(),
-                "d3d11,dxgi,d3d12,d3d10core,d3dcompiler_47=n,b;nvapi64,nvngx=n,b;steamclient,steamclient64,lsteamclient=n,b".to_string(),
+                "steamclient=n,b;steamclient64=n,b;lsteamclient=b;d3d11,dxgi,d3d12,d3d10core,d3dcompiler_47=n,b;nvapi64,nvngx=n,b".to_string(),
             );
 
             if enable_hud {
@@ -890,15 +954,6 @@ pub fn build_execution_env_for_engine(
                     lib_dir.display()
                 ),
             );
-
-            // Overlay shim for D3DMetal view & Metal 4 bridging
-            let overlay_shim = paths::support_dir().join("overlay-shim.dylib");
-            if overlay_shim.exists() {
-                env.insert(
-                    "DYLD_INSERT_LIBRARIES".to_string(),
-                    overlay_shim.to_string_lossy().to_string(),
-                );
-            }
         }
         TargetEngine::KosmicKrisp => {
             // Configure Vulkan loader to point to Mesa KosmicKrisp driver
@@ -923,7 +978,7 @@ pub fn build_execution_env_for_engine(
 
             // Wine DLL overrides: map Direct3D to DXVK/VKD3D/D7VK (n,b) and forward Vulkan to host KosmicKrisp
             let mut overrides =
-                "steamclient,steamclient64,lsteamclient=n,b;winevulkan=b,n;vulkan-1=b,n;d3d11,dxgi,d3d10core,d3d9,d3d12,d3d12core=n,b"
+                "steamclient=n,b;steamclient64=n,b;lsteamclient=b;winevulkan=b,n;vulkan-1=b,n;d3d11,dxgi,d3d10core,d3d9,d3d12,d3d12core=n,b"
                     .to_string();
             if crate::d7vk::find_d7vk().is_some() {
                 overrides.push_str(";ddraw=n,b");
@@ -964,7 +1019,7 @@ pub fn build_execution_env_for_engine(
             // Wine-Staging legacy overrides: map DX9, DX10 to built-in WineD3D / OpenGL
             env.insert(
                 "WINEDLLOVERRIDES".to_string(),
-                "steamclient,steamclient64,lsteamclient=n,b;d3d9,d3d10,d3d10_1,d3d10core=b,n"
+                "steamclient=n,b;steamclient64=n,b;lsteamclient=b;d3d9,d3d10,d3d10_1,d3d10core=b,n"
                     .to_string(),
             );
 

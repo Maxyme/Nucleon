@@ -44,6 +44,21 @@ pub fn configure_prefix_registry(prefix_dir: &Path, runner_dir: &Path) -> Result
 
 [HKEY_CURRENT_USER\Software\Wine\Direct3D]
 "csmt"=dword:00000001
+
+[HKEY_LOCAL_MACHINE\Software\Classes\steam]
+"URL Protocol"=""
+
+[HKEY_LOCAL_MACHINE\Software\Classes\steam\shell\open\command]
+@="\"C:\\Program Files (x86)\\Steam\\steam.exe\" \"%1\""
+
+[HKEY_LOCAL_MACHINE\Software\Microsoft\Windows NT\CurrentVersion\AeDebug]
+"Auto"="0"
+
+[HKEY_LOCAL_MACHINE\Software\Wow6432Node\Microsoft\Windows NT\CurrentVersion\AeDebug]
+"Auto"="0"
+
+[HKEY_CURRENT_USER\Software\Wine\WineDbg]
+"ShowCrashDialog"=dword:00000000
 "#;
 
     fs::write(&reg_file, reg_content)?;
@@ -112,7 +127,14 @@ pub fn stage_bridge_libraries(prefix_dir: &Path) -> Result<()> {
                 syswow64.join("lsteamclient.dll"),
             ],
         ),
-        ("lsteamclient.so", vec![steam_dir.join("lsteamclient.so")]),
+        (
+            "lsteamclient.so",
+            vec![
+                steam_dir.join("lsteamclient.so"),
+                steam_dir.join("steamclient.so"),
+                steam_dir.join("steamclient64.so"),
+            ],
+        ),
     ];
 
     for (name, targets) in files_to_stage {
@@ -124,14 +146,29 @@ pub fn stage_bridge_libraries(prefix_dir: &Path) -> Result<()> {
         }
     }
 
-    // Copy legacycompat files
+    // Copy architecture-specific triggers if present
+    let x64_lsteam = bridge.join("x86_64-windows/lsteamclient.dll");
+    if x64_lsteam.is_file() {
+        let _ = fs::copy(&x64_lsteam, sys32.join("lsteamclient.dll"));
+        let _ = fs::copy(&x64_lsteam, sys32.join("steamclient64.dll"));
+    }
+    let i386_lsteam = bridge.join("i386-windows/lsteamclient.dll");
+    if i386_lsteam.is_file() {
+        let _ = fs::copy(&i386_lsteam, syswow64.join("lsteamclient.dll"));
+    }
+
+    // Copy legacycompat files and legacy Steam.dll
     let legacy_src = bridge.join("legacycompat");
     if legacy_src.is_dir() {
         if let Ok(entries) = fs::read_dir(&legacy_src) {
             for e in entries.flatten() {
                 let p = e.path();
                 if p.is_file() {
-                    let _ = fs::copy(&p, legacy_dir.join(e.file_name()));
+                    let fname = e.file_name();
+                    let _ = fs::copy(&p, legacy_dir.join(&fname));
+                    if fname == "Steam.dll" {
+                        let _ = fs::copy(&p, syswow64.join("Steam.dll"));
+                    }
                 }
             }
         }
