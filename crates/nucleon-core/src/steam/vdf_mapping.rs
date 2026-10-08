@@ -1,4 +1,4 @@
-use super::native_detect::{is_directory_native_mac, KNOWN_NATIVE_MAC_APPIDS};
+use super::native_detect::find_native_mac_appids;
 use crate::paths;
 use crate::runner;
 use anyhow::Result;
@@ -31,47 +31,8 @@ pub fn migrate_compat_mappings() -> Result<()> {
 
     // Collect native macOS AppIDs to ensure they are never forced into CompatToolMapping.
     // Also include "0" (global wildcard) so that wildcard priority 250 does not hijack native games.
-    let mut native_appids = HashSet::new();
+    let mut native_appids = find_native_mac_appids();
     native_appids.insert("0".to_string());
-    for &id in KNOWN_NATIVE_MAC_APPIDS {
-        native_appids.insert(id.to_string());
-    }
-
-    let steamapps = paths::steam_data_dir().join("steamapps");
-    if let Ok(entries) = fs::read_dir(&steamapps) {
-        for entry in entries.flatten() {
-            let p = entry.path();
-            if let Some(file_name) = p.file_name().and_then(|s| s.to_str()) {
-                if file_name.starts_with("appmanifest_") && file_name.ends_with(".acf") {
-                    let id = file_name
-                        .trim_start_matches("appmanifest_")
-                        .trim_end_matches(".acf");
-                    if !id.is_empty() && id.chars().all(|c| c.is_ascii_digit()) {
-                        let mut is_native_mac = KNOWN_NATIVE_MAC_APPIDS.contains(&id);
-                        if !is_native_mac {
-                            if let Ok(acf_content) = fs::read_to_string(&p) {
-                                for line in acf_content.lines() {
-                                    let trimmed = line.trim();
-                                    let quotes: Vec<&str> = trimmed.split('"').collect();
-                                    if quotes.len() >= 4 && quotes[1] == "installdir" {
-                                        let dir_name = quotes[3];
-                                        let game_dir = steamapps.join("common").join(dir_name);
-                                        if is_directory_native_mac(&game_dir, 3) {
-                                            is_native_mac = true;
-                                            break;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        if is_native_mac {
-                            native_appids.insert(id.to_string());
-                        }
-                    }
-                }
-            }
-        }
-    }
 
     // We do NOT inject unmapped installed games into CompatToolMapping with priority 250.
     // Doing so locks the "Force compatibility tool" checkbox on and converts native macOS games into Wine games.
@@ -222,9 +183,6 @@ pub fn sanitize_installed_app_manifests() -> Result<usize> {
             let p = entry.path();
             let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
             if name.starts_with("appmanifest_") && name.ends_with(".acf") {
-                let id = name
-                    .trim_start_matches("appmanifest_")
-                    .trim_end_matches(".acf");
                 if let Ok(content) = fs::read_to_string(&p) {
                     let mut installdir = None;
                     for line in content.lines() {
@@ -238,17 +196,6 @@ pub fn sanitize_installed_app_manifests() -> Result<usize> {
                         .as_ref()
                         .map(|dir| steamapps.join("common").join(dir));
                     let is_installed = game_dir.as_ref().map(|d| d.exists()).unwrap_or(false);
-
-                    // If this is a known native macOS game, but it currently lacks its native macOS executable
-                    // (e.g. because Windows depots were previously downloaded), do not force StateFlags 4.
-                    // Allow Steam to update / fetch the native macOS binaries.
-                    if KNOWN_NATIVE_MAC_APPIDS.contains(&id) {
-                        if let Some(ref dir) = game_dir {
-                            if !is_directory_native_mac(dir, 3) {
-                                continue;
-                            }
-                        }
-                    }
 
                     if is_installed {
                         let mut skipping_section = false;
@@ -720,62 +667,6 @@ mod tests {
             }
         }
         assert_eq!(depth, 0);
-    }
-
-    #[test]
-    fn test_update_compat_tool_mapping_removes_stellaris_and_dirt4_native_games() {
-        let sample = r#""InstallConfigStore"
-{
-	"Software"
-	{
-		"Valve"
-		{
-			"Steam"
-			{
-				"CompatToolMapping"
-				{
-					"281990"
-					{
-						"name"		"nucleon"
-						"config"		""
-						"priority"		"250"
-					}
-					"421020"
-					{
-						"name"		"nucleon"
-						"config"		""
-						"priority"		"250"
-					}
-					"690790"
-					{
-						"name"		"nucleon"
-						"config"		""
-						"priority"		"250"
-					}
-				}
-			}
-		}
-	}
-}"#;
-
-        let mut native_appids = HashSet::new();
-        native_appids.insert("0".to_string());
-        for &id in KNOWN_NATIVE_MAC_APPIDS {
-            native_appids.insert(id.to_string());
-        }
-
-        let (result, modified) = update_compat_tool_mapping(sample, &[], &native_appids);
-        assert!(modified);
-
-        // Stellaris (281990) and DiRT 4 (421020) must be stripped from CompatToolMapping
-        assert!(!result.contains(r#""281990""#));
-        assert!(!result.contains(r#""421020""#));
-
-        // Windows game DiRT Rally 2.0 (690790) must be preserved
-        assert!(result.contains(r#""690790""#));
-        assert!(
-            result.contains("\"name\"\t\"nucleon\"") || result.contains(r#""name"		"nucleon""#)
-        );
     }
 
     #[test]
