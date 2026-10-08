@@ -858,9 +858,14 @@ pub fn build_execution_env_for_engine(
         "WINEPREFIX".to_string(),
         prefix_dir.to_string_lossy().to_string(),
     );
+    let wine_loader = if runner_dir.join("bin/wine").is_file() {
+        runner_dir.join("bin/wine")
+    } else {
+        runner_dir.join("bin/wine64")
+    };
     env.insert(
         "WINELOADER".to_string(),
-        runner_dir.join("bin/wine").to_string_lossy().to_string(),
+        wine_loader.to_string_lossy().to_string(),
     );
     env.insert(
         "WINESERVER".to_string(),
@@ -873,25 +878,56 @@ pub fn build_execution_env_for_engine(
     env.insert("WINEMSYNC".to_string(), "1".to_string());
     env.insert("WINEESYNC".to_string(), "1".to_string());
 
+    // If runner is CrossOver, set CrossOver root and dynamic linker paths
+    let runner_str = runner_dir.to_string_lossy().to_lowercase();
+    if runner_str.contains("crossover") || runner_dir.join("share/crossover").is_dir() {
+        env.insert("CX_ROOT".to_string(), runner_dir.to_string_lossy().to_string());
+        let cx_bin = runner_dir.join("bin");
+        if cx_bin.is_dir() {
+            let cur_path = std::env::var("PATH").unwrap_or_default();
+            env.insert("PATH".to_string(), format!("{}:{}", cx_bin.display(), cur_path));
+        }
+        let mut dyld_paths = Vec::new();
+        let cx_lib = runner_dir.join("lib");
+        let cx_lib64 = runner_dir.join("lib64");
+        if cx_lib.is_dir() {
+            dyld_paths.push(cx_lib.to_string_lossy().to_string());
+        }
+        if cx_lib64.is_dir() {
+            dyld_paths.push(cx_lib64.to_string_lossy().to_string());
+        }
+        if !dyld_paths.is_empty() {
+            if let Ok(cur_dyld) = std::env::var("DYLD_FALLBACK_LIBRARY_PATH") {
+                dyld_paths.push(cur_dyld);
+            }
+            env.insert("DYLD_FALLBACK_LIBRARY_PATH".to_string(), dyld_paths.join(":"));
+        }
+    }
+
     // Wine library and DLL search path including prefix Steam directory
     let steam_dir = prefix_dir.join("drive_c/Program Files (x86)/Steam");
-    let win_dlls = runner_dir.join("lib/wine/x86_64-windows");
-    let unix_dlls = runner_dir.join("lib/wine/x86_64-unix");
-    let aarch64_unix = runner_dir.join("lib/wine/aarch64-unix");
-    let unix_path = if aarch64_unix.is_dir() {
-        aarch64_unix
-    } else {
-        unix_dlls
-    };
-    env.insert(
-        "WINEDLLPATH".to_string(),
-        format!(
-            "{}:{}:{}",
-            steam_dir.display(),
-            win_dlls.display(),
-            unix_path.display()
-        ),
-    );
+    let mut dll_paths = vec![steam_dir.to_string_lossy().to_string()];
+    for sub in &[
+        "lib/wine/x86_64-windows",
+        "lib/wine/x86_64-unix",
+        "lib/wine/aarch64-unix",
+        "lib64/wine/x86_64-windows",
+        "lib64/wine/x86_64-unix",
+        "lib/wine",
+        "lib64/wine",
+    ] {
+        let p = runner_dir.join(sub);
+        if p.is_dir() {
+            dll_paths.push(p.to_string_lossy().to_string());
+        }
+    }
+    if dll_paths.len() == 1 {
+        let win_dlls = runner_dir.join("lib/wine/x86_64-windows");
+        let unix_dlls = runner_dir.join("lib/wine/x86_64-unix");
+        dll_paths.push(win_dlls.to_string_lossy().to_string());
+        dll_paths.push(unix_dlls.to_string_lossy().to_string());
+    }
+    env.insert("WINEDLLPATH".to_string(), dll_paths.join(":"));
 
     // Native Steam client installation path for lsteamclient bridge
     let steam_bundle = paths::steam_data_dir().join("Steam.AppBundle/Steam/Contents/MacOS");

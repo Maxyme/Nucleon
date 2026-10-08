@@ -81,7 +81,8 @@ pub fn run(action: WineAction) -> Result<()> {
   To switch active Wine:        nucleon wine use <staging|crossover|path>
   To add a custom Wine:         nucleon wine add <name> <path> [--use-now]
   To remove a custom Wine:      nucleon wine remove <name>
-  Per-game Steam Launch Option: NUCLEON_WINE=crossover %command%"#
+  Per-game Steam Launch Option: NUCLEON_WINE=crossover %command%
+                                NUCLEON_WINE=/Applications/CrossOver.app %command%"#
                 );
             }
         }

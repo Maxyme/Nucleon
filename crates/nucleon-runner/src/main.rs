@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 use anyhow::{bail, Result};
 use nucleon_core::{paths, prefix, runner};
 use serde::Deserialize;
@@ -10,6 +12,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
+use sysinfo::{Pid, ProcessesToUpdate, Signal, System};
 
 #[derive(Debug, Deserialize)]
 struct LaunchOverride {
@@ -80,7 +83,30 @@ fn wait_wineserver(wineserver_bin: &Path, pfx_dir: &Path, timeout_ms: u64) {
     }
 }
 
-fn terminate_wine_prefix(runner_dir: &Path, pfx_dir: &Path, child_id: u32) {
+/// Recursively terminates all child processes of a given PID using sysinfo (kill-tree algorithm).
+fn kill_process_tree_sysinfo(sys: &System, root_pid: Pid, signal: Signal) {
+    let child_pids: Vec<Pid> = sys
+        .processes()
+        .iter()
+        .filter(|(_, p)| p.parent() == Some(root_pid))
+        .map(|(pid, _)| *pid)
+        .collect();
+
+    for child_pid in child_pids {
+        kill_process_tree_sysinfo(sys, child_pid, signal);
+    }
+
+    if let Some(proc) = sys.process(root_pid) {
+        let _ = proc.kill_with(signal);
+    }
+}
+
+fn terminate_wine_prefix(
+    runner_dir: &Path,
+    pfx_dir: &Path,
+    mut child: Option<&mut std::process::Child>,
+    child_id: u32,
+) {
     let wineserver_bin = runner_dir.join("bin/wineserver");
 
     // 1. Tell wineserver to cleanly terminate all processes under this prefix
@@ -92,46 +118,83 @@ fn terminate_wine_prefix(runner_dir: &Path, pfx_dir: &Path, child_id: u32) {
         let _ = cmd.status();
     }
 
-    // 2. Send SIGTERM to the primary child process if still alive
-    unsafe {
-        libc::kill(child_id as i32, libc::SIGTERM);
-    }
+    let mut sys = System::new();
+    sys.refresh_processes(ProcessesToUpdate::All, true);
 
-    // 3. Find and terminate any remaining processes associated with this runner or prefix
+    let root_pid = Pid::from_u32(child_id);
     let runner_dir_str = runner_dir.to_string_lossy().to_lowercase();
     let pfx_str = pfx_dir.to_string_lossy().to_lowercase();
     let my_pid = std::process::id();
 
-    if let Ok(out) = Command::new("ps").args(["-ww", "-eo", "pid,args"]).output() {
-        let text = String::from_utf8_lossy(&out.stdout);
-        for line in text.lines() {
-            let trimmed = line.trim();
-            let mut parts = trimmed.split_whitespace();
-            if let Some(pid_str) = parts.next() {
-                if let Ok(pid) = pid_str.parse::<i32>() {
-                    if pid as u32 == my_pid {
-                        continue;
-                    }
-                    let lower = trimmed.to_lowercase();
-                    if lower.contains("nucleon-runner") || lower.contains("bin/nucleon") {
-                        continue;
-                    }
-                    if lower.contains(&runner_dir_str) || lower.contains(&pfx_str) {
-                        unsafe {
-                            libc::kill(pid, libc::SIGTERM);
-                        }
-                    }
-                }
-            }
+    // 2. Kill the primary child process tree recursively with SIGTERM (kill-tree)
+    kill_process_tree_sysinfo(&sys, root_pid, Signal::Term);
+
+    // 3. Terminate any other processes running under this Wine runner or prefix
+    for (pid, proc) in sys.processes() {
+        if pid.as_u32() == my_pid || *pid == root_pid {
+            continue;
+        }
+        let exe_str = proc
+            .exe()
+            .map(|e| e.to_string_lossy().to_lowercase())
+            .unwrap_or_default();
+        let cmd_joined = proc
+            .cmd()
+            .iter()
+            .map(|s| s.to_string_lossy())
+            .collect::<Vec<_>>()
+            .join(" ")
+            .to_lowercase();
+
+        if cmd_joined.contains("nucleon-runner") || cmd_joined.contains("bin/nucleon") {
+            continue;
+        }
+
+        if exe_str.contains(&runner_dir_str)
+            || cmd_joined.contains(&runner_dir_str)
+            || cmd_joined.contains(&pfx_str)
+        {
+            let _ = proc.kill_with(Signal::Term);
         }
     }
 
     // Brief grace period for processes to exit
     thread::sleep(Duration::from_millis(300));
 
-    // Force SIGKILL on child if still around
-    unsafe {
-        libc::kill(child_id as i32, libc::SIGKILL);
+    // Force SIGKILL on child if still around: use std::process::Child::kill() if handle is present,
+    // and kill_process_tree_sysinfo with Signal::Kill. 100% safe Rust.
+    if let Some(ref mut c) = child {
+        let _ = c.kill();
+    }
+    sys.refresh_processes(ProcessesToUpdate::All, true);
+    kill_process_tree_sysinfo(&sys, root_pid, Signal::Kill);
+
+    for (pid, proc) in sys.processes() {
+        if pid.as_u32() == my_pid || *pid == root_pid {
+            continue;
+        }
+        let exe_str = proc
+            .exe()
+            .map(|e| e.to_string_lossy().to_lowercase())
+            .unwrap_or_default();
+        let cmd_joined = proc
+            .cmd()
+            .iter()
+            .map(|s| s.to_string_lossy())
+            .collect::<Vec<_>>()
+            .join(" ")
+            .to_lowercase();
+
+        if cmd_joined.contains("nucleon-runner") || cmd_joined.contains("bin/nucleon") {
+            continue;
+        }
+
+        if exe_str.contains(&runner_dir_str)
+            || cmd_joined.contains(&runner_dir_str)
+            || cmd_joined.contains(&pfx_str)
+        {
+            let _ = proc.kill();
+        }
     }
 
     // Wait briefly for wineserver socket cleanup (at most 1000ms)
@@ -190,22 +253,35 @@ fn is_wine_game_process_line(
 }
 
 fn is_wine_game_process_running(runner_dir: &Path, target_exe: &Path) -> bool {
+    let mut sys = System::new();
+    sys.refresh_processes(ProcessesToUpdate::All, true);
     let my_pid = std::process::id();
+    let runner_dir_str = runner_dir.to_string_lossy().to_lowercase();
     let target_name = target_exe
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("")
         .to_lowercase();
-    let runner_dir_str = runner_dir.to_string_lossy().to_lowercase();
 
-    let output = Command::new("ps").args(["-ww", "-eo", "pid,args"]).output();
+    for (pid, proc) in sys.processes() {
+        if pid.as_u32() == my_pid {
+            continue;
+        }
+        let exe_str = proc
+            .exe()
+            .map(|e| e.to_string_lossy().to_lowercase())
+            .unwrap_or_default();
+        let cmd_joined = proc
+            .cmd()
+            .iter()
+            .map(|s| s.to_string_lossy())
+            .collect::<Vec<_>>()
+            .join(" ")
+            .to_lowercase();
+        let line = format!("{} {} {}", pid.as_u32(), exe_str, cmd_joined);
 
-    if let Ok(out) = output {
-        let text = String::from_utf8_lossy(&out.stdout);
-        for line in text.lines() {
-            if is_wine_game_process_line(line, my_pid, &runner_dir_str, &target_name) {
-                return true;
-            }
+        if is_wine_game_process_line(&line, my_pid, &runner_dir_str, &target_name) {
+            return true;
         }
     }
     false
@@ -354,15 +430,28 @@ fn main() -> Result<()> {
             } else {
                 log_runner(&format!("Per-game NUCLEON_WINE='{}' could not be resolved, falling back to default runner", wine_override));
             }
-        } else if let Ok(custom_wine) = env::var("NUCLEON_WINE_PATH") {
-            let wp = PathBuf::from(custom_wine);
-            if wp.join("bin/wine").is_file() {
-                runner_dir = wp;
+        } else if let Ok(custom_wine) = env::var("NUCLEON_WINE_PATH").or_else(|_| env::var("WINE_PATH")) {
+            if let Some(resolved) = nucleon_core::wine::resolve_wine_runtime_by_query(&custom_wine) {
+                log_runner(&format!(
+                    "Per-game NUCLEON_WINE_PATH override matched: '{}' -> {}",
+                    resolved.name,
+                    resolved.root.display()
+                ));
+                runner_dir = resolved.root;
+            } else {
+                let wp = PathBuf::from(&custom_wine);
+                if wp.join("bin/wine").is_file() || wp.join("bin/wine64").is_file() {
+                    runner_dir = wp;
+                }
             }
         }
     }
 
-    let wine_bin = runner_dir.join("bin/wine");
+    let wine_bin = if runner_dir.join("bin/wine").is_file() {
+        runner_dir.join("bin/wine")
+    } else {
+        runner_dir.join("bin/wine64")
+    };
     let wineserver_bin = runner_dir.join("bin/wineserver");
 
     if !wine_bin.exists() {
@@ -512,7 +601,8 @@ fn main() -> Result<()> {
     loop {
         if term_flag.load(Ordering::SeqCst) {
             log_runner("Termination signal received, stopping Wine processes cleanly");
-            terminate_wine_prefix(&runner_dir, &pfx_dir, child.id());
+            let child_id = child.id();
+            terminate_wine_prefix(&runner_dir, &pfx_dir, Some(&mut child), child_id);
             std::process::exit(0);
         }
 
@@ -628,5 +718,35 @@ mod tests {
             "/opt/wine",
             ""
         ));
+    }
+
+    #[test]
+    fn test_kill_process_tree_sysinfo_terminates_process() {
+        let mut child = Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .expect("Failed to spawn sleep command");
+
+        let pid = Pid::from_u32(child.id());
+        let mut sys = System::new();
+        sys.refresh_processes(ProcessesToUpdate::All, true);
+        assert!(sys.process(pid).is_some());
+
+        kill_process_tree_sysinfo(&sys, pid, Signal::Term);
+
+        // Wait up to 1 second for child to terminate
+        let mut exited = false;
+        for _ in 0..10 {
+            if let Ok(Some(_)) = child.try_wait() {
+                exited = true;
+                break;
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
+
+        if !exited {
+            let _ = child.kill();
+        }
+        assert!(exited, "Process should have been terminated by kill_process_tree_sysinfo");
     }
 }

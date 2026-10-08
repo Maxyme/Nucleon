@@ -229,23 +229,40 @@ nucleon gptk status
 nucleon status
 ```
 
-### Managing Wine Runtimes
+### Managing Wine Runtimes (including CrossOver)
 
-Nucleon automatically discovers existing Wine installations (Heroic Games Launcher, Homebrew, Whisky, and CrossOver), and allows registering custom named runtimes:
+Nucleon automatically discovers existing Wine installations (Heroic Games Launcher, Homebrew, Whisky, and CrossOver), and treats CrossOver as a first-class standard Wine runtime under the unified Wine selector:
 
 ```bash
 # List all discovered and custom Wine runtimes:
 nucleon wine list
 
-# Register a custom Wine installation:
-nucleon wine add my-crossover /Applications/CrossOver.app/Contents/SharedSupport/CrossOver
+# Switch active Wine runtime directly to CrossOver:
+nucleon wine use crossover
 
-# Switch active Wine runtime:
-nucleon wine use my-crossover
+# Or point directly to any Wine or CrossOver path:
+nucleon wine use /Applications/CrossOver.app
 
-# Unregister a custom runtime:
-nucleon wine remove my-crossover
+# Register a custom Wine/CrossOver installation under a custom name:
+nucleon wine add crossover-24 /Applications/CrossOver.app
+
+# Run end-to-end setup pointing to a custom Wine or CrossOver:
+nucleon setup --wine-path /Applications/CrossOver.app
+
+# Per-game Steam Launch Option override:
+NUCLEON_WINE=/Applications/CrossOver.app %command%
+# or by identifier:
+NUCLEON_WINE=crossover %command%
 ```
+
+Nucleon automatically inspects and resolves nested CrossOver bundle paths (such as `CrossOver.app`, `Contents/SharedSupport/CrossOver`, `bin/wine`, and `bin/wine64`), detects its version, and configures the environment with `CX_ROOT`, `DYLD_FALLBACK_LIBRARY_PATH`, and DLL search paths.
+
+### Safe Process Supervision (`sysinfo` & Tree Killing)
+
+`nucleon-runner` features zero unsafe code (`#![forbid(unsafe_code)]`) and does not rely on raw `libc::kill` calls:
+- **Kernel-level Process Table Tracking**: Uses `sysinfo` to monitor running processes directly via OS APIs instead of polling `/bin/ps` every 500ms.
+- **Recursive Process Tree Termination (`kill_tree`)**: When a termination signal (`SIGTERM` or Steam "Stop") is received, Nucleon traverses the process hierarchy to recursively terminate the child process and all its descendants.
+- **Prefix Isolation**: Identifies and terminates orphaned background Wine processes associated with the prefix while leaving unrelated system processes untouched.
 
 ### Staging Valve Client Bridge Libraries
 

@@ -47,10 +47,10 @@ enum Commands {
         /// Point to custom D7VK installation directory
         #[arg(long)]
         d7vk_path: Option<PathBuf>,
-        /// Select desired Wine runtime flavor or path for Steam (e.g. staging, crossover)
+        /// Select desired Wine runtime flavor or path for Steam (e.g. staging, crossover, or /Applications/CrossOver.app)
         #[arg(long)]
         wine: Option<String>,
-        /// Point to custom Wine installation directory
+        /// Point to custom Wine installation directory or app bundle (e.g. /Applications/CrossOver.app)
         #[arg(long)]
         wine_path: Option<PathBuf>,
         /// Point to custom Apple GPTK directory (containing D3DMetal.framework and libd3dshared.dylib)
