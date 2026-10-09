@@ -24,6 +24,7 @@ zip = { workspace = true }
 tar = { workspace = true }
 flate2 = { workspace = true }
 zstd = { workspace = true }
+memmap2 = { workspace = true }
 
 [lints]
 workspace = true

@@ -273,10 +273,13 @@ pub fn ensure_signature_db_for_installed_steam() -> Result<(PathBuf, SignatureDb
         .cloned()
         .ok_or_else(|| anyhow::anyhow!("steamclient.dylib not found for signature scanning"))?;
 
-    let dylib_bytes = fs::read(&dylib_path)
-        .with_context(|| format!("Failed to read {}", dylib_path.display()))?;
+    let file = fs::File::open(&dylib_path)
+        .with_context(|| format!("Failed to open {}", dylib_path.display()))?;
+    // Memory map steamclient.dylib (often 100MB+) rather than buffering entire file on heap
+    let mmap = unsafe { memmap2::Mmap::map(&file) }
+        .with_context(|| format!("Failed to memory map {}", dylib_path.display()))?;
 
-    let arm64_slice = extract_arm64_slice(&dylib_bytes)?;
+    let arm64_slice = extract_arm64_slice(&mmap)?;
 
     // Parse template
     let template: SignatureDb = serde_json::from_str(DEFAULT_ARM64_TEMPLATE_JSON)
@@ -463,8 +466,9 @@ mod tests {
             paths::steam_app().join("Contents/MacOS/steamclient.dylib"),
         ];
         if let Some(path) = candidates.iter().find(|p| p.is_file()) {
-            let bytes = fs::read(path).expect("read steamclient.dylib");
-            let slice = extract_arm64_slice(&bytes).expect("extract arm64 slice");
+            let file = fs::File::open(path).expect("open steamclient.dylib");
+            let mmap = unsafe { memmap2::Mmap::map(&file) }.expect("mmap steamclient.dylib");
+            let slice = extract_arm64_slice(&mmap).expect("extract arm64 slice");
             let template: SignatureDb =
                 serde_json::from_str(DEFAULT_ARM64_TEMPLATE_JSON).expect("parse template");
             let resolved = scan_signatures_from_slice(slice, &template, 1788652215);

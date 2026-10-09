@@ -134,8 +134,10 @@ pub fn detect_target_engine(exe_path: &Path) -> GraphicsApiInfo {
 }
 
 pub fn inspect_pe_file(path: &Path) -> Result<GraphicsApiInfo, anyhow::Error> {
-    let data = fs::read(path)?;
-    inspect_pe_bytes(&data)
+    let file = fs::File::open(path)?;
+    // Use memory mapping to avoid reading 100MB+ executables entirely into heap
+    let mmap = unsafe { memmap2::Mmap::map(&file) }?;
+    inspect_pe_bytes(&mmap)
 }
 
 pub fn inspect_pe_bytes(data: &[u8]) -> Result<GraphicsApiInfo, anyhow::Error> {

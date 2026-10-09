@@ -38,6 +38,7 @@ zip = { version = "2.2", default-features = false, features = ["deflate"] }
 tar = "0.4"
 flate2 = "1.0"
 zstd = "0.13"
+memmap2 = "0.9"
 
 [workspace.lints.rust]
 unsafe_code = "allow"
