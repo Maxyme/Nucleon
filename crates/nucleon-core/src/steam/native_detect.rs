@@ -63,18 +63,29 @@ pub fn find_steamapps_dirs() -> Vec<PathBuf> {
 
     for vdf_path in &libraryfolders_candidates {
         if let Ok(content) = fs::read_to_string(vdf_path) {
-            for line in content.lines() {
-                let trimmed = line.trim();
-                let quotes: Vec<&str> = trimmed.split('"').collect();
-                if quotes.len() >= 4 && quotes[1] == "path" {
-                    let base = PathBuf::from(quotes[3]);
-                    let candidate = if base.ends_with("steamapps") {
-                        base
-                    } else {
-                        base.join("steamapps")
-                    };
-                    if candidate.is_dir() && !dirs.contains(&candidate) {
-                        dirs.push(candidate);
+            if let Ok(partial) = keyvalues_parser::parse(&content) {
+                let vdf = keyvalues_parser::Vdf::from(partial);
+                if let keyvalues_parser::Value::Obj(ref root_obj) = vdf.value {
+                    for folder_vals in root_obj.values() {
+                        for folder_val in folder_vals {
+                            if let keyvalues_parser::Value::Obj(ref folder_obj) = folder_val {
+                                if let Some(path_str) = folder_obj
+                                    .get("path")
+                                    .and_then(|v| v.first())
+                                    .and_then(|v| v.get_str())
+                                {
+                                    let base = PathBuf::from(path_str);
+                                    let candidate = if base.ends_with("steamapps") {
+                                        base
+                                    } else {
+                                        base.join("steamapps")
+                                    };
+                                    if candidate.is_dir() && !dirs.contains(&candidate) {
+                                        dirs.push(candidate);
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -114,15 +125,20 @@ pub fn find_native_mac_appids_in(steamapps_dirs: &[PathBuf]) -> HashSet<String> 
                 }
 
                 if let Ok(acf_content) = fs::read_to_string(&p) {
-                    let mut installdir = None;
-                    for line in acf_content.lines() {
-                        let trimmed = line.trim();
-                        let quotes: Vec<&str> = trimmed.split('"').collect();
-                        if quotes.len() >= 4 && quotes[1] == "installdir" {
-                            installdir = Some(quotes[3]);
-                            break;
-                        }
-                    }
+                    let installdir =
+                        keyvalues_parser::parse(&acf_content)
+                            .ok()
+                            .and_then(|partial| {
+                                let vdf = keyvalues_parser::Vdf::from(partial);
+                                if let keyvalues_parser::Value::Obj(ref obj) = vdf.value {
+                                    obj.get("installdir")
+                                        .and_then(|v| v.first())
+                                        .and_then(|v| v.get_str())
+                                        .map(|s| s.to_string())
+                                } else {
+                                    None
+                                }
+                            });
 
                     if let Some(dir_name) = installdir {
                         let game_dir = steamapps.join("common").join(dir_name);
@@ -151,13 +167,21 @@ pub fn is_app_native_mac(appid: &str) -> bool {
     for steamapps in &dirs {
         let manifest_path = steamapps.join(format!("appmanifest_{appid}.acf"));
         if let Ok(content) = fs::read_to_string(&manifest_path) {
-            for line in content.lines() {
-                let trimmed = line.trim();
-                let quotes: Vec<&str> = trimmed.split('"').collect();
-                if quotes.len() >= 4 && quotes[1] == "installdir" {
-                    let game_dir = steamapps.join("common").join(quotes[3]);
-                    return is_directory_native_mac(&game_dir, 3);
+            let installdir = keyvalues_parser::parse(&content).ok().and_then(|partial| {
+                let vdf = keyvalues_parser::Vdf::from(partial);
+                if let keyvalues_parser::Value::Obj(ref obj) = vdf.value {
+                    obj.get("installdir")
+                        .and_then(|v| v.first())
+                        .and_then(|v| v.get_str())
+                        .map(|s| s.to_string())
+                } else {
+                    None
                 }
+            });
+
+            if let Some(dir_name) = installdir {
+                let game_dir = steamapps.join("common").join(dir_name);
+                return is_directory_native_mac(&game_dir, 3);
             }
         }
     }

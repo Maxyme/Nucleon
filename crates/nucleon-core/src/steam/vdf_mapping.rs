@@ -84,24 +84,24 @@ pub fn sync_library_folders() -> Result<Vec<u32>> {
             if let Some(file_name) = p.file_name().and_then(|s| s.to_str()) {
                 if file_name.starts_with("appmanifest_") && file_name.ends_with(".acf") {
                     if let Ok(content) = fs::read_to_string(&p) {
-                        let mut appid = None;
-                        let mut size = None;
-                        for line in content.lines() {
-                            let trimmed = line.trim();
-                            if trimmed.starts_with("\"appid\"") {
-                                let parts: Vec<&str> = trimmed.split_whitespace().collect();
-                                if parts.len() >= 2 {
-                                    appid = Some(parts[1].trim_matches('"').to_string());
-                                }
-                            } else if trimmed.starts_with("\"SizeOnDisk\"") {
-                                let parts: Vec<&str> = trimmed.split_whitespace().collect();
-                                if parts.len() >= 2 {
-                                    size = Some(parts[1].trim_matches('"').to_string());
+                        if let Ok(partial) = keyvalues_parser::parse(&content) {
+                            let vdf = keyvalues_parser::Vdf::from(partial);
+                            if let keyvalues_parser::Value::Obj(ref obj) = vdf.value {
+                                let appid = obj
+                                    .get("appid")
+                                    .and_then(|v| v.first())
+                                    .and_then(|v| v.get_str())
+                                    .map(|s| s.to_string());
+                                let size = obj
+                                    .get("SizeOnDisk")
+                                    .and_then(|v| v.first())
+                                    .and_then(|v| v.get_str())
+                                    .map(|s| s.to_string())
+                                    .unwrap_or_else(|| "0".to_string());
+                                if let Some(id) = appid {
+                                    installed_apps.push((id, size));
                                 }
                             }
-                        }
-                        if let (Some(id), Some(sz)) = (appid, size) {
-                            installed_apps.push((id, sz));
                         }
                     }
                 }
@@ -125,20 +125,36 @@ pub fn sync_library_folders() -> Result<Vec<u32>> {
             Err(_) => continue,
         };
 
+        let Ok(partial) = keyvalues_parser::parse(&content) else {
+            continue;
+        };
+        let mut vdf = keyvalues_parser::Vdf::from(partial).into_owned();
         let mut modified = false;
-        let mut new_lines = Vec::new();
 
-        for line in content.lines() {
-            new_lines.push(line.to_string());
-            if line.contains("\"apps\"") {
-                for (id, sz) in &installed_apps {
-                    let needle = format!("\"{id}\"");
-                    if !content.contains(&needle) {
-                        new_lines.push(format!("\t\t\t\"{id}\"\t\t\"{sz}\""));
-                        modified = true;
-                        if let Ok(num) = id.parse::<u32>() {
-                            if !restored_appids.contains(&num) {
-                                restored_appids.push(num);
+        if let keyvalues_parser::Value::Obj(ref mut root_obj) = vdf.value {
+            for folder_vals in root_obj.values_mut() {
+                for folder_val in folder_vals {
+                    if let keyvalues_parser::Value::Obj(ref mut folder_obj) = folder_val {
+                        if let Some(apps_obj) = folder_obj
+                            .get_mut("apps")
+                            .and_then(|v| v.first_mut())
+                            .and_then(|v| v.get_mut_obj())
+                        {
+                            for (id, sz) in &installed_apps {
+                                if !apps_obj.contains_key(id.as_str()) {
+                                    apps_obj.insert(
+                                        std::borrow::Cow::Owned(id.clone()),
+                                        vec![keyvalues_parser::Value::Str(
+                                            std::borrow::Cow::Owned(sz.clone()),
+                                        )],
+                                    );
+                                    modified = true;
+                                    if let Ok(num) = id.parse::<u32>() {
+                                        if !restored_appids.contains(&num) {
+                                            restored_appids.push(num);
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -154,7 +170,7 @@ pub fn sync_library_folders() -> Result<Vec<u32>> {
                 write_perms.set_mode(0o644);
                 let _ = fs::set_permissions(lib_path, write_perms);
             }
-            let _ = fs::write(lib_path, new_lines.join("\n") + "\n");
+            let _ = fs::write(lib_path, vdf.to_string());
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
@@ -167,6 +183,24 @@ pub fn sync_library_folders() -> Result<Vec<u32>> {
     }
 
     Ok(restored_appids)
+}
+
+fn set_vdf_str_field(obj: &mut keyvalues_parser::Obj<'static>, key: &str, new_val: &str) -> bool {
+    let current = obj
+        .get(key)
+        .and_then(|v| v.first())
+        .and_then(|v| v.get_str());
+    if current != Some(new_val) {
+        obj.insert(
+            std::borrow::Cow::Owned(key.to_string()),
+            vec![keyvalues_parser::Value::Str(std::borrow::Cow::Owned(
+                new_val.to_string(),
+            ))],
+        );
+        true
+    } else {
+        false
+    }
 }
 
 /// Scans all appmanifest_*.acf files and clears UpdateRequired / UpdateQueued / UpdatePaused
@@ -184,169 +218,87 @@ pub fn sanitize_installed_app_manifests() -> Result<usize> {
             let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
             if name.starts_with("appmanifest_") && name.ends_with(".acf") {
                 if let Ok(content) = fs::read_to_string(&p) {
-                    let mut installdir = None;
-                    for line in content.lines() {
-                        let trimmed = line.trim();
-                        let quotes: Vec<&str> = trimmed.split('"').collect();
-                        if quotes.len() >= 4 && quotes[1] == "installdir" {
-                            installdir = Some(quotes[3].to_string());
-                        }
-                    }
+                    let Ok(partial) = keyvalues_parser::parse(&content) else {
+                        continue;
+                    };
+                    let mut vdf = keyvalues_parser::Vdf::from(partial).into_owned();
+
+                    let installdir = if let keyvalues_parser::Value::Obj(ref obj) = vdf.value {
+                        obj.get("installdir")
+                            .and_then(|v| v.first())
+                            .and_then(|v| v.get_str())
+                            .map(|s| s.to_string())
+                    } else {
+                        None
+                    };
+
                     let game_dir = installdir
                         .as_ref()
                         .map(|dir| steamapps.join("common").join(dir));
                     let is_installed = game_dir.as_ref().map(|d| d.exists()).unwrap_or(false);
 
                     if is_installed {
-                        let mut skipping_section = false;
-                        let mut section_depth = 0;
-                        let mut has_auto_update_behavior = false;
-                        let mut new_lines = Vec::new();
-                        let mut changed = false;
+                        if let keyvalues_parser::Value::Obj(ref mut obj) = vdf.value {
+                            let mut changed = false;
 
-                        for line in content.lines() {
-                            let trimmed = line.trim();
-                            if skipping_section {
-                                if trimmed.contains('{') {
-                                    section_depth += 1;
+                            // 1. Remove temporary sections
+                            if obj.remove("StagedDepots").is_some() {
+                                changed = true;
+                            }
+                            if obj.remove("DlcDownloads").is_some() {
+                                changed = true;
+                            }
+
+                            // 2. Set StateFlags to 4 (fully installed)
+                            if set_vdf_str_field(obj, "StateFlags", "4") {
+                                changed = true;
+                            }
+
+                            // 3. Set AutoUpdateBehavior to 1 (only update on launch)
+                            if set_vdf_str_field(obj, "AutoUpdateBehavior", "1") {
+                                changed = true;
+                            }
+
+                            // 4. Zero download and staging counters
+                            for field in &[
+                                "BytesToDownload",
+                                "BytesDownloaded",
+                                "BytesToStage",
+                                "BytesStaged",
+                                "ScheduledAutoUpdate",
+                                "UpdateResult",
+                            ] {
+                                if set_vdf_str_field(obj, field, "0") {
+                                    changed = true;
                                 }
-                                if trimmed.contains('}') {
-                                    section_depth -= 1;
-                                    if section_depth == 0 {
-                                        skipping_section = false;
-                                        changed = true;
+                            }
+
+                            if changed {
+                                #[cfg(unix)]
+                                {
+                                    use std::os::unix::fs::PermissionsExt;
+                                    if let Ok(meta) = fs::metadata(&p) {
+                                        let mut perms = meta.permissions();
+                                        perms.set_mode(0o644);
+                                        let _ = fs::set_permissions(&p, perms);
                                     }
                                 }
-                                continue;
-                            }
-
-                            if trimmed.starts_with("\"StagedDepots\"")
-                                || trimmed.starts_with("\"DlcDownloads\"")
-                            {
-                                skipping_section = true;
-                                section_depth = 0;
-                                if trimmed.contains('{') {
-                                    section_depth += 1;
-                                }
-                                changed = true;
-                                continue;
-                            }
-
-                            if trimmed.starts_with("\"StateFlags\"") {
-                                if trimmed != "\"StateFlags\"\t\t\"4\""
-                                    && trimmed != "\"StateFlags\" \"4\""
+                                let _ = fs::write(&p, vdf.to_string());
+                                #[cfg(unix)]
                                 {
-                                    new_lines.push("\t\"StateFlags\"\t\t\"4\"".to_string());
-                                    changed = true;
-                                } else {
-                                    new_lines.push(line.to_string());
+                                    use std::os::unix::fs::PermissionsExt;
+                                    if let Ok(meta) = fs::metadata(&p) {
+                                        let mut perms = meta.permissions();
+                                        perms.set_mode(0o644);
+                                        let _ = fs::set_permissions(&p, perms);
+                                    }
                                 }
-                            } else if trimmed.starts_with("\"AutoUpdateBehavior\"") {
-                                has_auto_update_behavior = true;
-                                if trimmed != "\"AutoUpdateBehavior\"\t\t\"1\""
-                                    && trimmed != "\"AutoUpdateBehavior\" \"1\""
-                                {
-                                    new_lines.push("\t\"AutoUpdateBehavior\"\t\t\"1\"".to_string());
-                                    changed = true;
-                                } else {
-                                    new_lines.push(line.to_string());
-                                }
-                            } else if trimmed.starts_with("\"BytesToDownload\"") {
-                                if trimmed != "\"BytesToDownload\"\t\t\"0\""
-                                    && trimmed != "\"BytesToDownload\" \"0\""
-                                {
-                                    new_lines.push("\t\"BytesToDownload\"\t\t\"0\"".to_string());
-                                    changed = true;
-                                } else {
-                                    new_lines.push(line.to_string());
-                                }
-                            } else if trimmed.starts_with("\"BytesDownloaded\"") {
-                                if trimmed != "\"BytesDownloaded\"\t\t\"0\""
-                                    && trimmed != "\"BytesDownloaded\" \"0\""
-                                {
-                                    new_lines.push("\t\"BytesDownloaded\"\t\t\"0\"".to_string());
-                                    changed = true;
-                                } else {
-                                    new_lines.push(line.to_string());
-                                }
-                            } else if trimmed.starts_with("\"BytesToStage\"") {
-                                if trimmed != "\"BytesToStage\"\t\t\"0\""
-                                    && trimmed != "\"BytesToStage\" \"0\""
-                                {
-                                    new_lines.push("\t\"BytesToStage\"\t\t\"0\"".to_string());
-                                    changed = true;
-                                } else {
-                                    new_lines.push(line.to_string());
-                                }
-                            } else if trimmed.starts_with("\"BytesStaged\"") {
-                                if trimmed != "\"BytesStaged\"\t\t\"0\""
-                                    && trimmed != "\"BytesStaged\" \"0\""
-                                {
-                                    new_lines.push("\t\"BytesStaged\"\t\t\"0\"".to_string());
-                                    changed = true;
-                                } else {
-                                    new_lines.push(line.to_string());
-                                }
-                            } else if trimmed.starts_with("\"ScheduledAutoUpdate\"") {
-                                if trimmed != "\"ScheduledAutoUpdate\"\t\t\"0\""
-                                    && trimmed != "\"ScheduledAutoUpdate\" \"0\""
-                                {
-                                    new_lines
-                                        .push("\t\"ScheduledAutoUpdate\"\t\t\"0\"".to_string());
-                                    changed = true;
-                                } else {
-                                    new_lines.push(line.to_string());
-                                }
-                            } else if trimmed.starts_with("\"UpdateResult\"") {
-                                if trimmed != "\"UpdateResult\"\t\t\"0\""
-                                    && trimmed != "\"UpdateResult\" \"0\""
-                                {
-                                    new_lines.push("\t\"UpdateResult\"\t\t\"0\"".to_string());
-                                    changed = true;
-                                } else {
-                                    new_lines.push(line.to_string());
-                                }
-                            } else {
-                                new_lines.push(line.to_string());
-                            }
-                        }
-
-                        if !has_auto_update_behavior {
-                            if let Some(pos) = new_lines
-                                .iter()
-                                .position(|l| l.trim().starts_with("\"StateFlags\""))
-                            {
-                                new_lines.insert(
-                                    pos + 1,
-                                    "\t\"AutoUpdateBehavior\"\t\t\"1\"".to_string(),
+                                log::info!(
+                                    "Sanitized {} to StateFlags 4 & AutoUpdateBehavior 1 (ready to play)",
+                                    name
                                 );
-                                changed = true;
+                                fixed_count += 1;
                             }
-                        }
-
-                        if changed {
-                            let fixed_str = new_lines.join("\n") + "\n";
-                            #[cfg(unix)]
-                            {
-                                use std::os::unix::fs::PermissionsExt;
-                                if let Ok(meta) = fs::metadata(&p) {
-                                    let mut perms = meta.permissions();
-                                    perms.set_mode(0o644);
-                                    let _ = fs::set_permissions(&p, perms);
-                                }
-                            }
-                            let _ = fs::write(&p, fixed_str);
-                            #[cfg(unix)]
-                            {
-                                use std::os::unix::fs::PermissionsExt;
-                                if let Ok(meta) = fs::metadata(&p) {
-                                    let mut perms = meta.permissions();
-                                    perms.set_mode(0o644);
-                                    let _ = fs::set_permissions(&p, perms);
-                                }
-                            }
-                            log::info!("Sanitized {} to StateFlags 4 & AutoUpdateBehavior 1 (ready to play)", name);
-                            fixed_count += 1;
                         }
                     }
                 }
