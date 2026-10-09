@@ -182,33 +182,46 @@ crates/
 
 ## Compatibility Tool Options & The Architecture Selector
 
-In Steam, Nucleon registers compatibility tools with explicit **`(runner runtime + D3D translation layer + graphics driver)`** labels. You can choose either Apple's proprietary **GPTK 4** stack or the open-source **Wine + Direct3D Translation Layer + Vulkan Graphics Driver (KosmicKrisp)** stack:
+In Steam, Nucleon registers compatibility tools with explicit **`(runner runtime + D3D translation layer + graphics driver)`** labels. You can choose Apple's proprietary **GPTK 4** stack, the direct Metal **DXMT** translation layer for DirectX 11, or the open-source **Wine + Direct3D Translation Layer + Vulkan Graphics Driver (KosmicKrisp)** stack:
 
 ### Layered Graphics Architecture
 
 When translating Windows games to macOS Apple Silicon, graphics calls pass through distinct, modular layers:
 
 ```text
- [ Windows Game ] 
-       │  (Windows System Calls)
-       ▼
-    [ Wine ] 
-       │  (DirectX 9/11 Graphics Calls)
-       ▼
-    [ DXVK ] 
-       │  (Standard Vulkan Graphics Calls)
-       ▼
- [ KosmicKrisp ] 
-       │  (Apple Metal Graphics Calls)
-       ▼
- [ Mac Hardware ]
+ ┌────────────────────────────────────────────────────────────────────────┐
+ │                           [ Windows Game ]                             │
+ └───────────────────────────────────┬────────────────────────────────────┘
+                                     │ (Windows System Calls)
+                                     ▼
+ ┌────────────────────────────────────────────────────────────────────────┐
+ │                               [ Wine ]                                 │
+ └───────────┬───────────────────────┼───────────────────────┬────────────┘
+             │ (DX9/10/11 Calls)     │ (DirectX 11 Calls)    │ (DX12 Calls)
+             ▼                       ▼                       ▼
+      ┌──────────────┐         ┌──────────┐            ┌──────────────┐
+      │   [ DXVK ]   │         │ [ DXMT ] │            │[VKD3D-Proton]│
+      └──────┬───────┘         └────┬─────┘            └──────┬───────┘
+             │ (Vulkan Calls)       │ (Direct Metal Calls)    │ (Vulkan Calls)
+             ▼                      │                         ▼
+     [ KosmicKrisp Vulkan ]         │               [ KosmicKrisp Vulkan ]
+             │ (Metal Calls)        │                         │ (Metal Calls)
+             ▼                      ▼                         ▼
+ ┌────────────────────────────────────────────────────────────────────────┐
+ │                             [ Mac Metal ]                              │
+ └───────────────────────────────────┬────────────────────────────────────┘
+                                     ▼
+ ┌────────────────────────────────────────────────────────────────────────┐
+ │                            [ Mac Hardware ]                            │
+ └────────────────────────────────────────────────────────────────────────┘
 ```
 
 1. **Runner Runtime**: Handles Windows system calls, process management, and POSIX threading (`Wine` or `Apple GPTK Wine`).
-2. **Direct3D Translation Layer**: Translates Direct3D calls into standard Vulkan calls:
-   - **DXVK**: Direct3D 9, 10, and 11 -> Vulkan 1.4
-   - **VKD3D-Proton**: Direct3D 12 -> Vulkan 1.4
-   - **D7VK**: DirectDraw & Direct3D 1–7 -> Vulkan 1.4
+2. **Direct3D Translation Layers**:
+   - **DXMT** ([3Shain/dxmt](https://github.com/3Shain/dxmt)): Direct translation from Direct3D 11 & 10 into Apple Metal. Bypasses Vulkan for low CPU overhead and high performance on DX11 titles.
+   - **DXVK** ([doitsujin/dxvk](https://github.com/doitsujin/dxvk)): Direct3D 9, 10, and 11 -> Vulkan 1.4.
+   - **VKD3D-Proton** ([HansKristian-Work/vkd3d-proton](https://github.com/HansKristian-Work/vkd3d-proton)): Direct3D 12 -> Vulkan 1.4.
+   - **D7VK** ([AlpyneDreams/d7vk](https://github.com/AlpyneDreams/d7vk)): DirectDraw & Direct3D 1–7 -> Vulkan 1.4.
 3. **Graphics Driver (Vulkan to Metal)**:
    - **Mesa KosmicKrisp**: Implements a Khronos-conformant Vulkan 1.4 driver on Apple Silicon, translating Vulkan commands into native Apple Metal 4.
 4. **Mac Hardware**: Apple Silicon GPU executing native Metal instructions.
@@ -219,11 +232,12 @@ Alternatively, the **Apple GPTK 4** option translates Direct3D 11 & 12 directly 
 
 | Option Label | Tool ID | Runner Runtime | D3D Translation Layer | Graphics Driver | Best For |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **`Nucleon (Wine + Automatic Graphics Backend)`** | `nucleon` | Active Wine | *Auto-selected* | *Auto-selected* | **Recommended (Wine Default)**: Automatically inspects binary imports and routes to the optimal translation layer and driver. |
+| **`Nucleon (Wine + Automatic Graphics Backend)`** | `nucleon` | Active Wine | *Auto-selected* | *Auto-selected* | **Recommended (Wine Default)**: Automatically inspects binary imports and routes to the optimal translation layer and driver (routes DX11 to DXMT/DXVK). |
 | **`Nucleon (GPTK <version> + Apple D3DMetal)`** *(e.g. GPTK 4.0 Beta 2)* | `nucleon-gptk` | Apple GPTK Wine | **Apple D3DMetal** | Native Metal | **Apple Native**: Directly forces Apple Game Porting Toolkit with native D3DMetal translation for modern DirectX 11 & DirectX 12 games. |
-| **`Nucleon (Wine + DXVK + Mesa KosmicKrisp Vulkan <version>)`** | `nucleon-dxvk` | Active Wine | **DXVK** (D3D 9/10/11 -> Vulkan) | **Mesa KosmicKrisp** (Metal 4) | **DirectX 9/10/11 to Vulkan**: Translates Direct3D 9, 10, and 11 to Vulkan 1.4 and executes via KosmicKrisp on Metal. Ideal for DX11 titles. |
-| **`Nucleon (Wine + VKD3D-Proton + Mesa KosmicKrisp Vulkan <version>)`** | `nucleon-vkd3d` | Active Wine | **VKD3D-Proton** (D3D 12 -> Vulkan) | **Mesa KosmicKrisp** (Metal 4) | **DirectX 12 to Vulkan**: Translates Direct3D 12 to Vulkan 1.4 and executes via KosmicKrisp on Metal. |
-| **`Nucleon (Wine + DXVK/VKD3D + Mesa KosmicKrisp Vulkan <version>)`** | `nucleon-kosmickrisp` | Active Wine | **Auto D3D Layer** (DXVK / VKD3D / D7VK) | **Mesa KosmicKrisp** (Metal 4) | **Unified Vulkan Driver**: Automatically stages appropriate D3D translation layers over KosmicKrisp Vulkan. |
+| **`Nucleon (Wine + DXMT (<dx-version>) + Apple Metal)`** *(e.g. DX10-DX11)* | `nucleon-dxmt` | Active Wine | **DXMT** (D3D 11 -> Metal) | Native Metal | **DirectX 11 Direct to Metal**: Translates Direct3D 11 directly into Apple Metal via [3Shain/dxmt](https://github.com/3Shain/dxmt). Outstanding DX11 compatibility without Vulkan indirection. |
+| **`Nucleon (Wine + DXVK (<dx-version>) + Mesa KosmicKrisp Vulkan <version>)`** *(e.g. DX10-DX11)* | `nucleon-dxvk` | Active Wine | **DXVK** (D3D 9/10/11 -> Vulkan) | **Mesa KosmicKrisp** (Metal 4) | **DirectX 9/10/11 to Vulkan**: Translates Direct3D 9, 10, and 11 to Vulkan 1.4 and executes via KosmicKrisp on Metal. Ideal for DX11 titles. |
+| **`Nucleon (Wine + VKD3D-Proton (DX12) + Mesa KosmicKrisp Vulkan <version>)`** | `nucleon-vkd3d` | Active Wine | **VKD3D-Proton** (D3D 12 -> Vulkan) | **Mesa KosmicKrisp** (Metal 4) | **DirectX 12 to Vulkan**: Translates Direct3D 12 to Vulkan 1.4 and executes via KosmicKrisp on Metal. |
+| **`Nucleon (Wine + DXVK/VKD3D (<dx-range>) + Mesa KosmicKrisp Vulkan <version>)`** *(e.g. DX10-DX12)* | `nucleon-kosmickrisp` | Active Wine | **Auto D3D Layer** (DXVK / VKD3D / D7VK) | **Mesa KosmicKrisp** (Metal 4) | **Unified Vulkan Driver**: Automatically stages appropriate D3D translation layers over KosmicKrisp Vulkan. |
 | **`Nucleon (Wine + WineD3D OpenGL)`** | `nucleon-wine` | Active Wine | **WineD3D** | macOS OpenGL 4.1 | **Legacy OpenGL**: Direct manual selection of WineD3D for legacy DirectX 9, DirectX 10, and OpenGL titles. |
 
 ---

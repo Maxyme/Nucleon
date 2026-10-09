@@ -13,7 +13,7 @@ use crate::paths;
 use crate::runner;
 use crate::vdf;
 use crate::wine;
-use crate::{dxvk, vkd3d};
+use crate::{dxmt, dxvk, vkd3d};
 use anyhow::Result;
 use std::fs;
 use std::path::Path;
@@ -83,6 +83,22 @@ pub fn is_vkd3d_tool_registered() -> bool {
 
 pub fn registered_vkd3d_tool_display_name() -> Option<String> {
     let vdf_path = paths::steam_vkd3d_compat_tools_dir().join("compatibilitytool.vdf");
+    if vdf_path.is_file() {
+        if let Ok(content) = fs::read_to_string(&vdf_path) {
+            return extract_vdf_display_name(&content).map(|s| s.to_string());
+        }
+    }
+    None
+}
+
+pub fn is_dxmt_tool_registered() -> bool {
+    paths::steam_dxmt_compat_tools_dir()
+        .join("compatibilitytool.vdf")
+        .is_file()
+}
+
+pub fn registered_dxmt_tool_display_name() -> Option<String> {
+    let vdf_path = paths::steam_dxmt_compat_tools_dir().join("compatibilitytool.vdf");
     if vdf_path.is_file() {
         if let Ok(content) = fs::read_to_string(&vdf_path) {
             return extract_vdf_display_name(&content).map(|s| s.to_string());
@@ -206,15 +222,28 @@ pub fn install_compatibility_tool(runner_bin: &Path) -> Result<()> {
             .map(|v| format!(" {v}"))
             .unwrap_or_else(|| " 1.4".to_string());
 
-        let has_dxvk = dxvk::find_dxvk().is_some();
+        let dxvk_bundle = dxvk::find_dxvk();
+        let has_dxvk = dxvk_bundle.is_some();
+        let dxvk_range = dxvk_bundle
+            .as_ref()
+            .map(|b| b.supported_dx_range())
+            .unwrap_or("DX10-DX11");
+
         let has_vkd3d = vkd3d::find_vkd3d_proton().is_some();
 
         // 3a. Unified Wine + D3D Translation Layer + KosmicKrisp Vulkan tool
         let unified_d3d = match (has_dxvk, has_vkd3d) {
-            (true, true) => "DXVK/VKD3D",
-            (true, false) => "DXVK",
-            (false, true) => "VKD3D-Proton",
-            (false, false) => "D3D Translator",
+            (true, true) => {
+                let min_dx = if dxvk_range.starts_with("DX9") {
+                    "DX9"
+                } else {
+                    "DX10"
+                };
+                format!("DXVK/VKD3D ({min_dx}-DX12)")
+            }
+            (true, false) => format!("DXVK ({dxvk_range})"),
+            (false, true) => "VKD3D-Proton (DX12)".to_string(),
+            (false, false) => "D3D Translator".to_string(),
         };
         let unified_display_name =
             format!("Nucleon (Wine + {unified_d3d} + Mesa KosmicKrisp Vulkan{ver_suffix})");
@@ -233,8 +262,9 @@ pub fn install_compatibility_tool(runner_bin: &Path) -> Result<()> {
 
         // 3b. Explicit Wine + DXVK + KosmicKrisp Vulkan tool (Direct3D 9/10/11 -> Vulkan -> Metal)
         if has_dxvk {
-            let dxvk_display_name =
-                format!("Nucleon (Wine + DXVK + Mesa KosmicKrisp Vulkan{ver_suffix})");
+            let dxvk_display_name = format!(
+                "Nucleon (Wine + DXVK ({dxvk_range}) + Mesa KosmicKrisp Vulkan{ver_suffix})"
+            );
             vdf::write_tool_bundle_with_wine(
                 &dxvk_tool_dir,
                 "nucleon-dxvk",
@@ -250,8 +280,9 @@ pub fn install_compatibility_tool(runner_bin: &Path) -> Result<()> {
 
         // 3c. Explicit Wine + VKD3D-Proton + KosmicKrisp Vulkan tool (Direct3D 12 -> Vulkan -> Metal)
         if has_vkd3d {
-            let vkd3d_display_name =
-                format!("Nucleon (Wine + VKD3D-Proton + Mesa KosmicKrisp Vulkan{ver_suffix})");
+            let vkd3d_display_name = format!(
+                "Nucleon (Wine + VKD3D-Proton (DX12) + Mesa KosmicKrisp Vulkan{ver_suffix})"
+            );
             vdf::write_tool_bundle_with_wine(
                 &vkd3d_tool_dir,
                 "nucleon-vkd3d",
@@ -280,7 +311,29 @@ pub fn install_compatibility_tool(runner_bin: &Path) -> Result<()> {
         }
     }
 
-    // 4. Register single unified Wine compatibility tool: 'Nucleon (Wine + WineD3D OpenGL)' pointing to active desired Wine runtime
+    // 4. Register DXMT compatibility tool if detected: Nucleon (Wine + DXMT (DX11) + Apple Metal)
+    let dxmt_tool_dir = paths::steam_dxmt_compat_tools_dir();
+    if dxmt::is_dxmt_installed() {
+        let dxmt_bundle = dxmt::find_dxmt();
+        let dx_range = dxmt_bundle
+            .as_ref()
+            .map(|b| b.supported_dx_range())
+            .unwrap_or("DX11");
+        let dxmt_display_name = format!("Nucleon (Wine + DXMT ({dx_range}) + Apple Metal)");
+        vdf::write_tool_bundle_with_wine(
+            &dxmt_tool_dir,
+            "nucleon-dxmt",
+            &dxmt_display_name,
+            runner_bin,
+            Some("dxmt"),
+            wine_root,
+        )?;
+        log::info!("Registered Steam compatibility tool: {}", dxmt_display_name);
+    } else if dxmt_tool_dir.exists() {
+        let _ = fs::remove_dir_all(&dxmt_tool_dir);
+    }
+
+    // 5. Register single unified Wine compatibility tool: 'Nucleon (Wine + WineD3D OpenGL)' pointing to active desired Wine runtime
     let wine_primary_dir = paths::steam_wine_compat_tools_dir();
     if let Some(ref aw) = active_wine {
         vdf::write_tool_bundle_with_wine(

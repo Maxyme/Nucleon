@@ -26,8 +26,29 @@ impl DxvkBundle {
         self.x64_d3d11.is_some() || self.x86_d3d11.is_some()
     }
 
+    pub fn has_d3d10(&self) -> bool {
+        self.x64_d3d10core.is_some() || self.x86_d3d10core.is_some()
+    }
+
     pub fn has_d3d9(&self) -> bool {
         self.x64_d3d9.is_some() || self.x86_d3d9.is_some()
+    }
+
+    /// Returns the supported DirectX version range formatted for UI labels (e.g. "DX10-DX11" or "DX9-DX11").
+    pub fn supported_dx_range(&self) -> &'static str {
+        let has_9 = self.has_d3d9();
+        let has_10 = self.has_d3d10();
+        let has_11 = self.has_d3d11();
+
+        match (has_9, has_10, has_11) {
+            (true, true | false, true) => "DX9-DX11",
+            (true, true, false) => "DX9-DX10",
+            (true, false, false) => "DX9",
+            (false, true, true) => "DX10-DX11",
+            (false, false, true) => "DX11",
+            (false, true, false) => "DX10",
+            (false, false, false) => "DX10-DX11",
+        }
     }
 
     pub fn dll_count(&self) -> usize {
@@ -552,5 +573,37 @@ mod tests {
         assert_eq!(unstaged, 2);
         assert!(!sys32.join("d3d11.dll").exists());
         assert!(!syswow64.join("d3d11.dll").exists());
+    }
+
+    #[test]
+    fn test_dxvk_supported_dx_range() {
+        let mut bundle = DxvkBundle {
+            root: PathBuf::from("/tmp/dxvk"),
+            x64_d3d11: Some(PathBuf::from("/tmp/dxvk/x64/d3d11.dll")),
+            x64_d3d10core: Some(PathBuf::from("/tmp/dxvk/x64/d3d10core.dll")),
+            x64_d3d9: None,
+            x64_dxgi: Some(PathBuf::from("/tmp/dxvk/x64/dxgi.dll")),
+            x86_d3d11: None,
+            x86_d3d10core: None,
+            x86_d3d9: None,
+            x86_dxgi: None,
+            version: None,
+        };
+        // DX10 and DX11 present, no DX9
+        assert_eq!(bundle.supported_dx_range(), "DX10-DX11");
+
+        // Add DX9
+        bundle.x64_d3d9 = Some(PathBuf::from("/tmp/dxvk/x64/d3d9.dll"));
+        assert_eq!(bundle.supported_dx_range(), "DX9-DX11");
+
+        // Only DX9
+        bundle.x64_d3d10core = None;
+        bundle.x64_d3d11 = None;
+        assert_eq!(bundle.supported_dx_range(), "DX9");
+
+        // Only DX11
+        bundle.x64_d3d9 = None;
+        bundle.x64_d3d11 = Some(PathBuf::from("/tmp/dxvk/x64/d3d11.dll"));
+        assert_eq!(bundle.supported_dx_range(), "DX11");
     }
 }

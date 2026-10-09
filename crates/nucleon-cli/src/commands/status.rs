@@ -1,6 +1,6 @@
 use super::ui;
 use anyhow::Result;
-use nucleon_core::{d7vk, dxvk, guard, paths, runner, steam, vkd3d, wine};
+use nucleon_core::{d7vk, dxmt, dxvk, guard, paths, runner, steam, vkd3d, wine};
 use std::fs;
 
 pub fn run() -> Result<()> {
@@ -128,6 +128,25 @@ pub fn run() -> Result<()> {
         if let Some(name) = steam::registered_vkd3d_tool_display_name() {
             ui::tree_kv("├─", "VKD3D Tool in Steam UI:", format!("✓ '{name}'"));
         }
+    }
+    if steam::is_dxmt_tool_registered() {
+        if let Some(name) = steam::registered_dxmt_tool_display_name() {
+            ui::tree_kv("├─", "DXMT Tool in Steam UI:", format!("✓ '{name}'"));
+        }
+    }
+    if let Some(dxmt) = dxmt::find_dxmt() {
+        let ver = dxmt.version.as_deref().unwrap_or("detected");
+        ui::tree_kv(
+            "├─",
+            "DXMT (Direct3D 11 -> Metal):",
+            format!("✓ {} [{}]", dxmt.root.display(), ver),
+        );
+    } else {
+        ui::tree_kv(
+            "├─",
+            "DXMT (Direct3D 11 -> Metal):",
+            "○ Optional (run 'nucleon dxmt fetch' or 'nucleon setup --fetch-dxmt')",
+        );
     }
     if let Some(vkd3d) = vkd3d::find_vkd3d_proton() {
         let ver = vkd3d.version.as_deref().unwrap_or("detected");

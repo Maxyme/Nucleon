@@ -1,11 +1,11 @@
-use super::{d7vk, dxvk, kosmickrisp, ui, vkd3d};
+use super::{d7vk, dxmt, dxvk, kosmickrisp, ui, vkd3d};
 use anyhow::Result;
 use clap::Subcommand;
 use nucleon_core::runner;
 
 #[derive(Subcommand, Debug, Clone)]
 pub enum BackendsAction {
-    /// Inspect status of configured Wine graphical backends (KosmicKrisp, VKD3D-Proton, D7VK, DXVK)
+    /// Inspect status of configured Wine graphical backends (KosmicKrisp, VKD3D-Proton, D7VK, DXVK, DXMT)
     Status,
     /// Manage Mesa KosmicKrisp Vulkan driver and custom paths
     Kosmickrisp {
@@ -26,6 +26,11 @@ pub enum BackendsAction {
     Dxvk {
         #[command(subcommand)]
         action: dxvk::DxvkAction,
+    },
+    /// Manage DXMT (Direct3D 11 -> Apple Metal) translation layer
+    Dxmt {
+        #[command(subcommand)]
+        action: dxmt::DxmtAction,
     },
 }
 
@@ -77,8 +82,26 @@ pub fn run(action: BackendsAction) -> Result<()> {
             }
 
             // D7VK
-            ui::tree_kv("  └─", "D7VK (DirectDraw / Direct3D 1-7 -> Vulkan):", "");
+            ui::tree_kv("  ├─", "D7VK (DirectDraw / Direct3D 1-7 -> Vulkan):", "");
             if let Some(bundle) = nucleon_core::d7vk::find_d7vk() {
+                ui::tree_kv("  │   ├─", "Status:", "✓ Installed");
+                ui::tree_kv(
+                    "  │   ├─",
+                    "Version:",
+                    bundle.version.as_deref().unwrap_or("Detected"),
+                );
+                ui::tree_kv("  │   └─", "Location:", bundle.root.display().to_string());
+            } else {
+                ui::tree_kv(
+                    "  │   └─",
+                    "Status:",
+                    "○ Optional (run 'nucleon wine backends d7vk fetch')",
+                );
+            }
+
+            // DXMT
+            ui::tree_kv("  └─", "DXMT (Direct3D 11 -> Apple Metal):", "");
+            if let Some(bundle) = nucleon_core::dxmt::find_dxmt() {
                 ui::tree_kv("      ├─", "Status:", "✓ Installed");
                 ui::tree_kv(
                     "      ├─",
@@ -90,7 +113,7 @@ pub fn run(action: BackendsAction) -> Result<()> {
                 ui::tree_kv(
                     "      └─",
                     "Status:",
-                    "○ Optional (run 'nucleon wine backends d7vk fetch')",
+                    "○ Optional (run 'nucleon dxmt fetch')",
                 );
             }
 
@@ -115,10 +138,10 @@ pub fn run(action: BackendsAction) -> Result<()> {
             }
 
             println!(
-                "\nTranslation Flow: [Windows Game] -> [Wine] -> [DXVK / VKD3D] -> [KosmicKrisp Vulkan] -> [Mac Metal]"
+                "\nTranslation Flows:\n  • Vulkan Driver Flow: [Windows Game] -> [Wine] -> [DXVK / VKD3D] -> [KosmicKrisp Vulkan] -> [Mac Metal]\n  • Direct Metal Flow:  [Windows Game] -> [Wine] -> [DXMT (DX11)] -> [Mac Metal]"
             );
             println!(
-                "To manage individual components: nucleon wine backends <dxvk|vkd3d|d7vk|kosmickrisp> --help"
+                "To manage individual components: nucleon wine backends <dxvk|vkd3d|d7vk|dxmt|kosmickrisp> --help"
             );
             println!(
                 "Note: Apple GPTK 4 is an independent runner & D3DMetal backend (manage with: nucleon gptk --help)"
@@ -128,6 +151,7 @@ pub fn run(action: BackendsAction) -> Result<()> {
         BackendsAction::Vkd3d { action } => vkd3d::run(action)?,
         BackendsAction::D7vk { action } => d7vk::run(action)?,
         BackendsAction::Dxvk { action } => dxvk::run(action)?,
+        BackendsAction::Dxmt { action } => dxmt::run(action)?,
     }
 
     Ok(())

@@ -574,6 +574,36 @@ pub fn run_with_args(args: &[String]) -> Result<()> {
         }
     }
 
+    if active_engine == nucleon_core::detector::TargetEngine::Dxmt {
+        if let Some(dxmt) = nucleon_core::dxmt::find_dxmt() {
+            if let Ok(staged) =
+                nucleon_core::dxmt::stage_dxmt_into_prefix(&dxmt, &pfx_dir, Some(&runner_dir))
+            {
+                log_runner(&format!(
+                    "DXMT active ({} DLL(s) from {}): Direct3D 11 -> Apple Metal",
+                    staged,
+                    dxmt.root.display()
+                ));
+            }
+        } else {
+            log_runner(
+                "WARNING: DXMT tool selected, but DXMT is not installed. \
+                 Install via 'nucleon dxmt fetch' or set DXMT_PATH.",
+            );
+        }
+    } else {
+        if let Ok(removed) =
+            nucleon_core::dxmt::unstage_dxmt_from_prefix(&pfx_dir, Some(&runner_dir))
+        {
+            if removed > 0 {
+                log_runner(&format!(
+                    "Unstaged {} DXMT DLL(s) from prefix (restored builtin D3D11 for {:?})",
+                    removed, active_engine
+                ));
+            }
+        }
+    }
+
     let enable_hud = launch_override
         .as_ref()
         .and_then(|o| o.hud)

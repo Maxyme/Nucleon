@@ -574,8 +574,11 @@ pub fn resolve_runner_for_engine(engine: TargetEngine) -> Result<(PathBuf, Targe
             let assembled = assemble_runner(false, None, None)?;
             Ok((assembled, TargetEngine::Gptk))
         }
-        TargetEngine::KosmicKrisp | TargetEngine::Dxvk | TargetEngine::Vkd3d => {
-            // KosmicKrisp, DXVK, and VKD3D run under Wine configured with Mesa Vulkan 1.4 ICD
+        TargetEngine::KosmicKrisp
+        | TargetEngine::Dxmt
+        | TargetEngine::Dxvk
+        | TargetEngine::Vkd3d => {
+            // KosmicKrisp, DXMT, DXVK, and VKD3D run under Wine
             if let Some(staging) = find_wine_staging_runtime() {
                 return Ok((staging, engine));
             }
@@ -1200,6 +1203,36 @@ pub fn build_execution_env_for_engine(
                     lib_unix.display(),
                     lib_dir.display()
                 ),
+            );
+        }
+        TargetEngine::Dxmt => {
+            // DXMT (DirectX 11 -> Apple Metal)
+            // Maps d3d11, dxgi, d3d10core, and winemetal to native DXMT DLLs bridging directly to Metal
+            env.insert(
+                "WINEDLLOVERRIDES".to_string(),
+                "steamclient=n,b;steamclient64=n,b;lsteamclient=b;d3d11,dxgi,d3d10core,winemetal=n,b;nvapi64,nvngx=n,b".to_string(),
+            );
+
+            if enable_hud {
+                env.insert("MTL_HUD_ENABLED".to_string(), "1".to_string());
+            }
+
+            let lib_dir = runner_dir.join("lib");
+            let lib_unix = runner_dir.join("lib/wine/x86_64-unix");
+            let mut dyld_paths = vec![
+                steam_dir.to_string_lossy().to_string(),
+                lib_unix.to_string_lossy().to_string(),
+                lib_dir.to_string_lossy().to_string(),
+            ];
+            if let Some(dxmt) = crate::dxmt::find_dxmt() {
+                let dxmt_unix = dxmt.root.join("x86_64-unix");
+                if dxmt_unix.is_dir() {
+                    dyld_paths.push(dxmt_unix.to_string_lossy().to_string());
+                }
+            }
+            env.insert(
+                "DYLD_FALLBACK_LIBRARY_PATH".to_string(),
+                dyld_paths.join(":"),
             );
         }
         TargetEngine::WineStaging => {

@@ -1,7 +1,7 @@
 use super::ui;
 use anyhow::{bail, Result};
 use nucleon_core::{
-    d7vk, dxvk, guard, manifest, paths, prefix, runner, signatures, steam, vkd3d, wine,
+    d7vk, dxmt, dxvk, guard, manifest, paths, prefix, runner, signatures, steam, vkd3d, wine,
 };
 use std::fs;
 use std::io::{self, Write};
@@ -20,6 +20,8 @@ pub struct SetupArgs {
     pub d7vk_path: Option<PathBuf>,
     pub fetch_dxvk: bool,
     pub dxvk_path: Option<PathBuf>,
+    pub fetch_dxmt: bool,
+    pub dxmt_path: Option<PathBuf>,
     pub wine: Option<String>,
     pub wine_path: Option<PathBuf>,
     pub gptk_path: Option<PathBuf>,
@@ -615,6 +617,22 @@ pub fn run(mut args: SetupArgs) -> Result<()> {
         }
     }
 
+    if let Some(ref p) = args.dxmt_path {
+        match dxmt::set_custom_dxmt_path(p) {
+            Ok(bundle) => ui::success(format!(
+                "Registered custom DXMT path at {}",
+                bundle.root.display()
+            )),
+            Err(e) => ui::warn(format!("Failed to set DXMT path {}: {:#}", p.display(), e)),
+        }
+    } else if args.fetch_dxmt {
+        ui::header("Fetching DXMT (Direct3D 11 -> Apple Metal)...");
+        match dxmt::fetch_dxmt(None, None) {
+            Ok(bundle) => ui::success(format!("DXMT staged at {}", bundle.root.display())),
+            Err(e) => ui::warn(format!("Failed to fetch DXMT: {:#}", e)),
+        }
+    }
+
     if args.kosmickrisp || args.kosmickrisp_path.is_some() {
         std::env::set_var("KOSMICKRISP_FORCE", "1");
         let kk_icd = paths::kosmickrisp_dir().join("libkosmickrisp_icd.json");
@@ -737,6 +755,11 @@ pub fn run(mut args: SetupArgs) -> Result<()> {
                 ui::success(format!("Registered Steam compatibility tool: '{name}'"));
             }
         }
+        if steam::is_dxmt_tool_registered() {
+            if let Some(name) = steam::registered_dxmt_tool_display_name() {
+                ui::success(format!("Registered Steam compatibility tool: '{name}'"));
+            }
+        }
         if steam::is_wine_tool_registered() {
             let active_name = wine::get_active_wine_runtime()
                 .map(|r| {
@@ -847,6 +870,9 @@ pub fn run(mut args: SetupArgs) -> Result<()> {
         tool_lines.push(format!("     - '{name}'"));
     }
     if let Some(name) = steam::registered_vkd3d_tool_display_name() {
+        tool_lines.push(format!("     - '{name}'"));
+    }
+    if let Some(name) = steam::registered_dxmt_tool_display_name() {
         tool_lines.push(format!("     - '{name}'"));
     }
     tool_lines.push("     - 'Nucleon (Wine + WineD3D OpenGL)'".to_string());

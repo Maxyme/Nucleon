@@ -1,4 +1,5 @@
 use crate::d7vk;
+use crate::dxmt;
 use crate::dxvk;
 use crate::runner;
 use object::Object;
@@ -35,6 +36,7 @@ pub enum TargetEngine {
     Auto,
     Gptk,
     KosmicKrisp,
+    Dxmt,
     Dxvk,
     Vkd3d,
     WineStaging,
@@ -46,6 +48,7 @@ impl TargetEngine {
             TargetEngine::Auto => "auto",
             TargetEngine::Gptk => "gptk",
             TargetEngine::KosmicKrisp => "kosmickrisp",
+            TargetEngine::Dxmt => "dxmt",
             TargetEngine::Dxvk => "dxvk",
             TargetEngine::Vkd3d => "vkd3d",
             TargetEngine::WineStaging => "staging",
@@ -56,9 +59,10 @@ impl TargetEngine {
         match self {
             TargetEngine::Auto => "Wine + Automatic Graphics Backend",
             TargetEngine::Gptk => "GPTK + Apple D3DMetal",
-            TargetEngine::KosmicKrisp => "Wine + DXVK/VKD3D + Mesa KosmicKrisp Vulkan",
-            TargetEngine::Dxvk => "Wine + DXVK + Mesa KosmicKrisp Vulkan",
-            TargetEngine::Vkd3d => "Wine + VKD3D-Proton + Mesa KosmicKrisp Vulkan",
+            TargetEngine::KosmicKrisp => "Wine + DXVK/VKD3D (DX10-DX12) + Mesa KosmicKrisp Vulkan",
+            TargetEngine::Dxmt => "Wine + DXMT (DX11) + Apple Metal",
+            TargetEngine::Dxvk => "Wine + DXVK (DX10-DX11) + Mesa KosmicKrisp Vulkan",
+            TargetEngine::Vkd3d => "Wine + VKD3D-Proton (DX12) + Mesa KosmicKrisp Vulkan",
             TargetEngine::WineStaging => "Wine + WineD3D OpenGL",
         }
     }
@@ -67,6 +71,7 @@ impl TargetEngine {
         match s.to_lowercase().trim() {
             "auto" | "automatic" | "default" => Some(TargetEngine::Auto),
             "gptk" | "apple" | "d3dmetal" => Some(TargetEngine::Gptk),
+            "dxmt" => Some(TargetEngine::Dxmt),
             "dxvk" => Some(TargetEngine::Dxvk),
             "vkd3d" | "vkd3d-proton" => Some(TargetEngine::Vkd3d),
             "kosmickrisp" | "kk" | "kosmic" | "mesa" | "vulkan" => Some(TargetEngine::KosmicKrisp),
@@ -113,7 +118,9 @@ impl GraphicsApiInfo {
                 }
             }
             GraphicsApi::DirectX11 => {
-                if dxvk::is_dxvk_installed() && runner::is_kosmickrisp_installed() {
+                if dxmt::is_dxmt_installed() {
+                    TargetEngine::Dxmt
+                } else if dxvk::is_dxvk_installed() && runner::is_kosmickrisp_installed() {
                     TargetEngine::KosmicKrisp
                 } else {
                     TargetEngine::WineStaging
@@ -414,15 +421,19 @@ mod tests {
         assert_eq!(TargetEngine::Gptk.display_name(), "GPTK + Apple D3DMetal");
         assert_eq!(
             TargetEngine::KosmicKrisp.display_name(),
-            "Wine + DXVK/VKD3D + Mesa KosmicKrisp Vulkan"
+            "Wine + DXVK/VKD3D (DX10-DX12) + Mesa KosmicKrisp Vulkan"
+        );
+        assert_eq!(
+            TargetEngine::Dxmt.display_name(),
+            "Wine + DXMT (DX11) + Apple Metal"
         );
         assert_eq!(
             TargetEngine::Dxvk.display_name(),
-            "Wine + DXVK + Mesa KosmicKrisp Vulkan"
+            "Wine + DXVK (DX10-DX11) + Mesa KosmicKrisp Vulkan"
         );
         assert_eq!(
             TargetEngine::Vkd3d.display_name(),
-            "Wine + VKD3D-Proton + Mesa KosmicKrisp Vulkan"
+            "Wine + VKD3D-Proton (DX12) + Mesa KosmicKrisp Vulkan"
         );
         assert_eq!(
             TargetEngine::WineStaging.display_name(),
@@ -437,9 +448,13 @@ mod tests {
             engine: TargetEngine::Gptk,
             detected_dll: Some("d3d11.dll".into()),
         };
-        // Auto runner is for Wine only: DX11 routes to KosmicKrisp if installed or WineStaging
+        // Auto runner is for Wine only: DX11 routes to DXMT if installed, KosmicKrisp if DXVK+KosmicKrisp, or WineStaging
         let wine_eng = info_dx11.wine_engine();
-        assert!(wine_eng == TargetEngine::KosmicKrisp || wine_eng == TargetEngine::WineStaging);
+        assert!(
+            wine_eng == TargetEngine::Dxmt
+                || wine_eng == TargetEngine::KosmicKrisp
+                || wine_eng == TargetEngine::WineStaging
+        );
 
         let info_dx9 = GraphicsApiInfo {
             api: GraphicsApi::DirectX9OrOlder,

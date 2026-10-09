@@ -86,6 +86,10 @@ pub fn steam_vkd3d_compat_tools_dir() -> PathBuf {
     home_dir().join("Library/Application Support/Steam/compatibilitytools.d/nucleon-vkd3d")
 }
 
+pub fn steam_dxmt_compat_tools_dir() -> PathBuf {
+    home_dir().join("Library/Application Support/Steam/compatibilitytools.d/nucleon-dxmt")
+}
+
 pub fn steam_wine_compat_tools_dir() -> PathBuf {
     home_dir().join("Library/Application Support/Steam/compatibilitytools.d/nucleon-wine")
 }
@@ -112,6 +116,10 @@ pub fn d7vk_dir() -> PathBuf {
 
 pub fn dxvk_dir() -> PathBuf {
     support_dir().join("dxvk")
+}
+
+pub fn dxmt_dir() -> PathBuf {
+    support_dir().join("dxmt")
 }
 
 pub fn launch_agents_dir() -> PathBuf {
@@ -148,6 +156,7 @@ pub fn ensure_dirs() -> Result<()> {
         vkd3d_proton_dir(),
         d7vk_dir(),
         dxvk_dir(),
+        dxmt_dir(),
         launch_agents_dir(),
     ] {
         fs::create_dir_all(d)

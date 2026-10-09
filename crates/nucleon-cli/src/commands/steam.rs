@@ -15,7 +15,7 @@ pub enum SteamAction {
     Map {
         /// Steam Application ID (e.g. 601150)
         appid: u32,
-        /// Optional compatibility tool name (default: 'nucleon', or 'nucleon-gptk', 'nucleon-dxvk', 'nucleon-kosmickrisp', 'nucleon-wine')
+        /// Optional compatibility tool name (default: 'nucleon', or 'nucleon-gptk', 'nucleon-dxvk', 'nucleon-dxmt', 'nucleon-kosmickrisp', 'nucleon-wine')
         #[arg(long, short)]
         tool: Option<String>,
     },
