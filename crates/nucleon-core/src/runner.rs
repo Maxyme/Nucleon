@@ -816,6 +816,18 @@ pub fn format_gptk_version(raw_ver: &str) -> String {
     }
 }
 
+/// Formats a raw Vulkan API version (e.g. "1.4.0", "1.4.304", or "1.4")
+/// to a clean major.minor Vulkan version string (e.g. "1.4").
+pub fn format_vulkan_version(raw_ver: &str) -> String {
+    let trimmed = raw_ver.trim();
+    let parts: Vec<&str> = trimmed.split('.').collect();
+    if parts.len() >= 2 {
+        format!("{}.{}", parts[0], parts[1])
+    } else {
+        trimmed.to_string()
+    }
+}
+
 /// Recursively copies a directory tree including files, directories, and symlinks.
 fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
     fs::create_dir_all(dst)?;
@@ -1357,6 +1369,14 @@ mod tests {
         assert_eq!(format_gptk_version("v4.0"), "4.0");
         assert_eq!(format_gptk_version("4.0"), "4.0");
         assert_eq!(format_gptk_version("2.0"), "2.0");
+    }
+
+    #[test]
+    fn test_format_vulkan_version() {
+        assert_eq!(format_vulkan_version("1.4.0"), "1.4");
+        assert_eq!(format_vulkan_version("1.4.304"), "1.4");
+        assert_eq!(format_vulkan_version("1.3.275"), "1.3");
+        assert_eq!(format_vulkan_version("1.4"), "1.4");
     }
 
     #[test]

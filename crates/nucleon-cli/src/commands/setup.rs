@@ -642,9 +642,16 @@ pub fn run(mut args: SetupArgs) -> Result<()> {
             ));
         }
         if steam::is_kosmickrisp_tool_registered() {
-            ui::success(
-                "Registered Steam compatibility tool: 'Nucleon (Wine + Mesa KosmicKrisp Vulkan)'",
-            );
+            let kk_display =
+                steam::registered_kosmickrisp_tool_display_name().unwrap_or_else(|| {
+                    let ver = runner::get_kosmickrisp_info()
+                        .map(|i| runner::format_vulkan_version(&i.api_version))
+                        .unwrap_or_else(|| "1.4".to_string());
+                    format!("Nucleon (Wine + Mesa KosmicKrisp Vulkan {ver})")
+                });
+            ui::success(format!(
+                "Registered Steam compatibility tool: '{kk_display}'"
+            ));
         } else {
             ui::info("Steam compatibility tool 'Nucleon (Wine + Mesa KosmicKrisp Vulkan)': not registered (KosmicKrisp not detected; pass --kosmickrisp to enable)");
         }
@@ -741,6 +748,14 @@ pub fn run(mut args: SetupArgs) -> Result<()> {
         }
     });
 
+    let kk_banner_display =
+        steam::registered_kosmickrisp_tool_display_name().unwrap_or_else(|| {
+            let ver = runner::get_kosmickrisp_info()
+                .map(|i| runner::format_vulkan_version(&i.api_version))
+                .unwrap_or_else(|| "1.4".to_string());
+            format!("Nucleon (Wine + Mesa KosmicKrisp Vulkan {ver})")
+        });
+
     println!(
         r#"
 ==============================================================================
@@ -753,7 +768,7 @@ To use Nucleon in Steam:
   4. Compatibility tools available in Steam:
      - 'Nucleon (Wine + Automatic Graphics Backend)' [Default]
      - '{gptk_banner_display}'
-     - 'Nucleon (Wine + Mesa KosmicKrisp Vulkan)'
+     - '{kk_banner_display}'
      - 'Nucleon (Wine + WineD3D OpenGL)'
   5. Or launch directly from terminal: nucleon launch <AppID>"#
     );

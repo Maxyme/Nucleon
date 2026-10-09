@@ -101,10 +101,16 @@ pub fn run() -> Result<()> {
         println!("    ○ Mesa KosmicKrisp (Vulkan):     ○ Optional (run 'nucleon kosmickrisp set-path <DIR>' or install Vulkan SDK)");
     }
     if steam::is_kosmickrisp_tool_registered() {
+        let display_name = steam::registered_kosmickrisp_tool_display_name().unwrap_or_else(|| {
+            let ver = runner::get_kosmickrisp_info()
+                .map(|i| runner::format_vulkan_version(&i.api_version))
+                .unwrap_or_else(|| "1.4".to_string());
+            format!("Nucleon (Wine + Mesa KosmicKrisp Vulkan {ver})")
+        });
         ui::tree_kv(
             "├─",
             "Registered in Steam UI:",
-            "✓ 'Nucleon (Wine + Mesa KosmicKrisp Vulkan)'",
+            format!("✓ '{display_name}'"),
         );
     } else {
         ui::tree_kv(

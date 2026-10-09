@@ -48,6 +48,16 @@ pub fn is_kosmickrisp_tool_registered() -> bool {
         .is_file()
 }
 
+pub fn registered_kosmickrisp_tool_display_name() -> Option<String> {
+    let vdf_path = paths::steam_kosmickrisp_compat_tools_dir().join("compatibilitytool.vdf");
+    if vdf_path.is_file() {
+        if let Ok(content) = fs::read_to_string(&vdf_path) {
+            return extract_vdf_display_name(&content).map(|s| s.to_string());
+        }
+    }
+    None
+}
+
 pub fn is_wine_tool_registered() -> bool {
     paths::steam_wine_compat_tools_dir()
         .join("compatibilitytool.vdf")
@@ -152,15 +162,24 @@ pub fn install_compatibility_tool(runner_bin: &Path) -> Result<()> {
     // 3. Register KosmicKrisp compatibility tool if installed/detected (Wine only)
     let kk_tool_dir = paths::steam_kosmickrisp_compat_tools_dir();
     if runner::is_kosmickrisp_installed() {
+        let kk_info = runner::get_kosmickrisp_info();
+        let vulkan_ver = kk_info
+            .as_ref()
+            .map(|i| runner::format_vulkan_version(&i.api_version));
+        let display_name = if let Some(ref ver) = vulkan_ver {
+            format!("Nucleon (Wine + Mesa KosmicKrisp Vulkan {ver})")
+        } else {
+            "Nucleon (Wine + Mesa KosmicKrisp Vulkan 1.4)".to_string()
+        };
         vdf::write_tool_bundle_with_wine(
             &kk_tool_dir,
             "nucleon-kosmickrisp",
-            "Nucleon (Wine + Mesa KosmicKrisp Vulkan)",
+            &display_name,
             runner_bin,
             Some("kosmickrisp"),
             wine_root,
         )?;
-        log::info!("Registered Steam compatibility tool: Nucleon (Wine + Mesa KosmicKrisp Vulkan)");
+        log::info!("Registered Steam compatibility tool: {}", display_name);
     } else if kk_tool_dir.exists() {
         let _ = fs::remove_dir_all(&kk_tool_dir);
         log::info!("Cleaned up unregistered KosmicKrisp Steam tool bundle (not detected)");
