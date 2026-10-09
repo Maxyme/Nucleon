@@ -45,25 +45,7 @@ pub fn migrate_compat_mappings() -> Result<()> {
     }
 
     if modified {
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            if let Ok(meta) = fs::metadata(&config_path) {
-                let mut perms = meta.permissions();
-                perms.set_mode(0o644);
-                let _ = fs::set_permissions(&config_path, perms);
-            }
-        }
-        let _ = fs::write(&config_path, updated);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            if let Ok(meta) = fs::metadata(&config_path) {
-                let mut perms = meta.permissions();
-                perms.set_mode(0o644);
-                let _ = fs::set_permissions(&config_path, perms);
-            }
-        }
+        let _ = crate::fs_util::atomic_write_file(&config_path, updated);
     }
     Ok(())
 }
@@ -163,21 +145,7 @@ pub fn sync_library_folders() -> Result<Vec<u32>> {
         }
 
         if modified {
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                let mut write_perms = fs::metadata(lib_path)?.permissions();
-                write_perms.set_mode(0o644);
-                let _ = fs::set_permissions(lib_path, write_perms);
-            }
-            let _ = fs::write(lib_path, vdf.to_string());
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                let mut write_perms = fs::metadata(lib_path)?.permissions();
-                write_perms.set_mode(0o644);
-                let _ = fs::set_permissions(lib_path, write_perms);
-            }
+            crate::fs_util::atomic_write_file(lib_path, vdf.to_string())?;
             log::info!("Restored missing app entries in {}", lib_path.display());
         }
     }
@@ -274,25 +242,7 @@ pub fn sanitize_installed_app_manifests() -> Result<usize> {
                             }
 
                             if changed {
-                                #[cfg(unix)]
-                                {
-                                    use std::os::unix::fs::PermissionsExt;
-                                    if let Ok(meta) = fs::metadata(&p) {
-                                        let mut perms = meta.permissions();
-                                        perms.set_mode(0o644);
-                                        let _ = fs::set_permissions(&p, perms);
-                                    }
-                                }
-                                let _ = fs::write(&p, vdf.to_string());
-                                #[cfg(unix)]
-                                {
-                                    use std::os::unix::fs::PermissionsExt;
-                                    if let Ok(meta) = fs::metadata(&p) {
-                                        let mut perms = meta.permissions();
-                                        perms.set_mode(0o644);
-                                        let _ = fs::set_permissions(&p, perms);
-                                    }
-                                }
+                                let _ = crate::fs_util::atomic_write_file(&p, vdf.to_string());
                                 log::info!(
                                     "Sanitized {} to StateFlags 4 & AutoUpdateBehavior 1 (ready to play)",
                                     name
@@ -531,16 +481,7 @@ pub fn remove_nucleon_compat_mappings() -> Result<bool> {
     let content = fs::read_to_string(&config_path)?;
     let (new_content, modified) = unmap_all_nucleon_compat_mappings(&content);
     if modified {
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            if let Ok(meta) = fs::metadata(&config_path) {
-                let mut perms = meta.permissions();
-                perms.set_mode(0o644);
-                let _ = fs::set_permissions(&config_path, perms);
-            }
-        }
-        fs::write(&config_path, new_content)?;
+        crate::fs_util::atomic_write_file(&config_path, new_content)?;
     }
     Ok(modified)
 }

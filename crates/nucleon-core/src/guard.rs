@@ -58,7 +58,7 @@ pub fn save_guard_state(state: &GuardState) -> Result<()> {
     paths::ensure_dirs()?;
     let path = paths::guard_state();
     let data = serde_json::to_string_pretty(state)?;
-    fs::write(path, data)?;
+    crate::fs_util::atomic_write_file(path, data)?;
     Ok(())
 }
 

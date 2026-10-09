@@ -263,7 +263,7 @@ pub fn load_custom_wines() -> Vec<CustomWineRecord> {
 pub fn save_custom_wines(records: &[CustomWineRecord]) -> Result<()> {
     paths::ensure_dirs()?;
     let json = serde_json::to_string_pretty(records)?;
-    fs::write(custom_wines_file(), json)?;
+    crate::fs_util::atomic_write_file(custom_wines_file(), json)?;
     Ok(())
 }
 
@@ -732,7 +732,7 @@ pub fn set_active_wine(identifier_or_path: &str) -> Result<WineRuntime> {
         }
     }
 
-    fs::write(active_wine_selection_file(), runtime.id.as_bytes())
+    crate::fs_util::atomic_write_file(active_wine_selection_file(), runtime.id.as_bytes())
         .with_context(|| format!("Failed to write {}", active_wine_selection_file().display()))?;
 
     // Also update Steam's nucleon-wine/run shim if it exists so changes take effect immediately

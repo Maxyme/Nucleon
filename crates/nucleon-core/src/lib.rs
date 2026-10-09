@@ -1,5 +1,6 @@
 pub mod d7vk;
 pub mod detector;
+pub mod fs_util;
 pub mod guard;
 pub mod manifest;
 pub mod paths;
