@@ -36,18 +36,16 @@ pub fn handle(action: KosmickrispAction) -> Result<()> {
             }
 
             if let Some(info) = runner::get_kosmickrisp_info() {
-                println!("  Vulkan API Version:    {}", info.api_version);
-                println!("  ICD Manifest:          {}", info.icd_path.display());
-                println!("  Driver Library:        {}", info.library_path.display());
                 println!(
-                    "  Custom Active:         {}",
+                    "  Vulkan API Version:    {}\n  ICD Manifest:          {}\n  Driver Library:        {}\n  Custom Active:         {}\n  Driver Installed:      ✓ Yes",
+                    info.api_version,
+                    info.icd_path.display(),
+                    info.library_path.display(),
                     if info.is_custom { "Yes" } else { "No" }
                 );
-                println!("  Driver Installed:      ✓ Yes");
             } else {
-                println!("  Driver Installed:      ✗ Not detected");
                 println!(
-                    "\n  To configure custom KosmicKrisp: nucleon kosmickrisp set-path /path/to/driver"
+                    "  Driver Installed:      ✗ Not detected\n\n  To configure custom KosmicKrisp: nucleon kosmickrisp set-path /path/to/driver"
                 );
             }
         }

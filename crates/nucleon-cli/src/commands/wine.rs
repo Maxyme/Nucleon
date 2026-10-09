@@ -69,10 +69,15 @@ pub fn run(action: WineAction) -> Result<()> {
                     let active_marker = if is_active { " [ACTIVE]" } else { "" };
                     let symbol = if is_active { "●" } else { "○" };
                     println!(
-                        "  {} {:<16} - {} [{}] {}{}",
-                        symbol, rt.id, rt.name, ver, custom_marker, active_marker
+                        "  {} {:<16} - {} [{}] {}{}\n    Location: {}",
+                        symbol,
+                        rt.id,
+                        rt.name,
+                        ver,
+                        custom_marker,
+                        active_marker,
+                        rt.root.display()
                     );
-                    println!("    Location: {}", rt.root.display());
                 }
                 let active_name = active.as_ref().map(|a| a.name.as_str()).unwrap_or("None");
                 println!(
