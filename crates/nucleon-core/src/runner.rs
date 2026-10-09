@@ -1,5 +1,9 @@
+use crate::d7vk;
 use crate::detector::TargetEngine;
 use crate::paths;
+use crate::steam;
+use crate::vkd3d;
+use crate::wine;
 use anyhow::{bail, Context, Result};
 use std::collections::HashMap;
 use std::env;
@@ -19,7 +23,7 @@ pub struct RunnerInfo {
 pub fn find_gptk_runner() -> Option<PathBuf> {
     // 1. Check explicit environment variables
     for var in &["NUCLEON_GPTK_RUNNER", "NUCLEON_GPTK_PATH"] {
-        if let Ok(p) = std::env::var(var) {
+        if let Ok(p) = env::var(var) {
             let pb = PathBuf::from(p);
             if pb.join("bin/wine").is_file() && pb.join("lib/external/D3DMetal.framework").is_dir()
             {
@@ -51,7 +55,7 @@ pub fn find_gptk_runner() -> Option<PathBuf> {
 
 /// Returns the path to the active or default Wine runtime.
 pub fn find_wine_staging_runtime() -> Option<PathBuf> {
-    crate::wine::get_active_wine_runtime().map(|r| r.root)
+    wine::get_active_wine_runtime().map(|r| r.root)
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
@@ -323,19 +327,19 @@ pub fn clear_custom_kosmickrisp_path() -> Result<()> {
 /// Locates the Mesa KosmicKrisp Vulkan ICD manifest on macOS.
 pub fn find_kosmickrisp_icd() -> Option<PathBuf> {
     // 1. Check explicit environment variables
-    if let Ok(path) = std::env::var("VK_DRIVER_FILES") {
+    if let Ok(path) = env::var("VK_DRIVER_FILES") {
         let p = PathBuf::from(path);
         if p.is_file() {
             return Some(p);
         }
     }
-    if let Ok(path) = std::env::var("VK_ICD_FILENAMES") {
+    if let Ok(path) = env::var("VK_ICD_FILENAMES") {
         let p = PathBuf::from(path);
         if p.is_file() {
             return Some(p);
         }
     }
-    if let Ok(path) = std::env::var("KOSMICKRISP_ICD_PATH") {
+    if let Ok(path) = env::var("KOSMICKRISP_ICD_PATH") {
         let p = PathBuf::from(path);
         if p.is_file() {
             return Some(p);
@@ -365,7 +369,7 @@ pub fn find_kosmickrisp_icd() -> Option<PathBuf> {
     }
 
     // 3. Check VULKAN_SDK environment variable
-    if let Ok(sdk) = std::env::var("VULKAN_SDK") {
+    if let Ok(sdk) = env::var("VULKAN_SDK") {
         let sdk_icd = PathBuf::from(sdk).join("share/vulkan/icd.d/libkosmickrisp_icd.json");
         if sdk_icd.is_file() {
             return Some(sdk_icd);
@@ -395,7 +399,7 @@ pub fn find_kosmickrisp_icd() -> Option<PathBuf> {
 
 /// Locates the Mesa KosmicKrisp Vulkan driver dylib (`libvulkan_kosmickrisp.dylib`).
 pub fn find_kosmickrisp_driver_dylib() -> Option<PathBuf> {
-    if let Ok(path) = std::env::var("KOSMICKRISP_DRIVER_PATH") {
+    if let Ok(path) = env::var("KOSMICKRISP_DRIVER_PATH") {
         let p = PathBuf::from(path);
         if p.is_file() {
             return Some(p);
@@ -533,10 +537,10 @@ pub fn setup_kosmickrisp_shim() -> Result<PathBuf> {
 
 /// Returns true if the KosmicKrisp driver is detected on the system or forced via environment.
 pub fn is_kosmickrisp_installed() -> bool {
-    if std::env::var("KOSMICKRISP_DISABLE").is_ok() {
+    if env::var("KOSMICKRISP_DISABLE").is_ok() {
         return false;
     }
-    std::env::var("KOSMICKRISP_FORCE").is_ok()
+    env::var("KOSMICKRISP_FORCE").is_ok()
         || find_kosmickrisp_icd().is_some()
         || find_kosmickrisp_driver_dylib().is_some()
 }
@@ -703,7 +707,7 @@ pub fn find_gptk_components(custom_path: Option<&Path>) -> Result<Option<(PathBu
 
     // 2. Explicit environment variables
     for var in &["NUCLEON_GPTK_PATH", "GPTK_PATH"] {
-        if let Ok(val) = std::env::var(var) {
+        if let Ok(val) = env::var(var) {
             let p = PathBuf::from(val);
             if let Some(comps) = inspect_gptk_dir(&p) {
                 return Ok(Some(comps));
@@ -794,8 +798,7 @@ pub fn assemble_runner(
     }
 
     let wine_src = if let Some(custom) = custom_wine {
-        if let Some(rt) = crate::wine::inspect_wine_dir(custom, Some("custom"), Some("Custom Wine"))
-        {
+        if let Some(rt) = wine::inspect_wine_dir(custom, Some("custom"), Some("Custom Wine")) {
             rt.root
         } else {
             anyhow::bail!(
@@ -804,7 +807,7 @@ pub fn assemble_runner(
             );
         }
     } else {
-        crate::wine::get_active_wine_runtime()
+        wine::get_active_wine_runtime()
             .map(|r| r.root)
             .context("No compatible Wine runtime found. Install Game Porting Toolkit via Homebrew: brew tap gcenx/wine && brew install --cask --no-quarantine game-porting-toolkit")?
     };
@@ -844,7 +847,7 @@ pub fn assemble_runner(
     // Install overlay-shim.dylib
     let overlay_dst = paths::support_dir().join("overlay-shim.dylib");
     fs::write(&overlay_dst, overlay_shim::OVERLAY_SHIM_BYTES)?;
-    crate::steam::sign_binary(&overlay_dst)?;
+    steam::sign_binary(&overlay_dst)?;
 
     // Link current runner
     let cur = paths::current_runner();
@@ -908,7 +911,7 @@ pub fn build_execution_env_for_engine(
         );
         let cx_bin = runner_dir.join("bin");
         if cx_bin.is_dir() {
-            let cur_path = std::env::var("PATH").unwrap_or_default();
+            let cur_path = env::var("PATH").unwrap_or_default();
             env.insert(
                 "PATH".to_string(),
                 format!("{}:{}", cx_bin.display(), cur_path),
@@ -924,7 +927,7 @@ pub fn build_execution_env_for_engine(
             dyld_paths.push(cx_lib64.to_string_lossy().to_string());
         }
         if !dyld_paths.is_empty() {
-            if let Ok(cur_dyld) = std::env::var("DYLD_FALLBACK_LIBRARY_PATH") {
+            if let Ok(cur_dyld) = env::var("DYLD_FALLBACK_LIBRARY_PATH") {
                 dyld_paths.push(cur_dyld);
             }
             env.insert(
@@ -1067,13 +1070,13 @@ pub fn build_execution_env_for_engine(
             let mut overrides =
                 "steamclient=n,b;steamclient64=n,b;lsteamclient=b;winevulkan=b,n;vulkan-1=b,n;d3d11,dxgi,d3d10core,d3d9,d3d12,d3d12core=n,b"
                     .to_string();
-            if crate::d7vk::find_d7vk().is_some() {
+            if d7vk::find_d7vk().is_some() {
                 overrides.push_str(";ddraw=n,b");
             }
             env.insert("WINEDLLOVERRIDES".to_string(), overrides);
 
             // Configure VKD3D-Proton features if available
-            if crate::vkd3d::find_vkd3d_proton().is_some() {
+            if vkd3d::find_vkd3d_proton().is_some() {
                 env.insert("VKD3D_CONFIG".to_string(), "dxr11,dxr".to_string());
             }
 
@@ -1166,10 +1169,10 @@ mod tests {
         let icd_file = dir.path().join("test_icd.json");
         fs::write(&icd_file, "{}").unwrap();
 
-        std::env::set_var("VK_DRIVER_FILES", &icd_file);
+        env::set_var("VK_DRIVER_FILES", &icd_file);
         let found = find_kosmickrisp_icd();
         assert_eq!(found, Some(icd_file.clone()));
-        std::env::remove_var("VK_DRIVER_FILES");
+        env::remove_var("VK_DRIVER_FILES");
     }
 
     #[test]

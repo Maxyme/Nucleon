@@ -6,7 +6,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::{paths, steam};
+use crate::fs_util::atomic_write_file;
+use crate::{paths, signatures, steam};
 use serde::{Deserialize, Serialize};
 
 pub const GUARD_LABEL: &str = "com.nucleon.steam-guard";
@@ -58,7 +59,7 @@ pub fn save_guard_state(state: &GuardState) -> Result<()> {
     paths::ensure_dirs()?;
     let path = paths::guard_state();
     let data = serde_json::to_string_pretty(state)?;
-    crate::fs_util::atomic_write_file(path, data)?;
+    atomic_write_file(path, data)?;
     Ok(())
 }
 
@@ -83,7 +84,7 @@ pub fn check_guard_status() -> GuardStatus {
         }
     });
 
-    let detected_steam_build = crate::signatures::detect_installed_steam_build();
+    let detected_steam_build = signatures::detect_installed_steam_build();
     let signatures_cached = if let Some(b) = detected_steam_build {
         paths::signatures_dir().join(format!("{b}.json")).is_file()
     } else {
@@ -201,7 +202,7 @@ pub fn heal_steam(hook_source: Option<&Path>) -> Result<HealResult> {
     }
 
     // 6. Ensure signature DB exists for currently installed Steam build
-    if let Ok((cached_path, _)) = crate::signatures::ensure_signature_db_for_installed_steam() {
+    if let Ok((cached_path, _)) = signatures::ensure_signature_db_for_installed_steam() {
         if cached_path.is_file() {
             result.signatures_cached = true;
         }

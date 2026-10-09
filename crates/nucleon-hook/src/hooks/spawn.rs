@@ -1,8 +1,8 @@
+use crate::get_gum;
 use frida_gum::interceptor::Interceptor;
 use frida_gum::NativePointer;
-use std::ffi::{c_char, c_int, c_void, CStr};
-
 use log::info;
+use std::ffi::{c_char, c_int, c_void, CStr};
 
 pub static mut ORIG_POSIX_SPAWN: *mut c_void = std::ptr::null_mut();
 pub static mut ORIG_POSIX_SPAWNP: *mut c_void = std::ptr::null_mut();
@@ -125,7 +125,7 @@ pub unsafe extern "C" fn hook_execve(
 }
 
 pub fn install_spawn_hooks() -> Result<(), anyhow::Error> {
-    let gum = crate::get_gum();
+    let gum = get_gum();
     let mut interceptor = Interceptor::obtain(gum);
 
     unsafe {

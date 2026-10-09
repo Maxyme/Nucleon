@@ -8,9 +8,11 @@ pub use native_detect::*;
 pub use vdf_mapping::*;
 pub use webui::*;
 
+use crate::guard;
 use crate::paths;
 use crate::runner;
 use crate::vdf;
+use crate::wine;
 use anyhow::Result;
 use std::fs;
 use std::path::Path;
@@ -90,7 +92,7 @@ pub fn is_staging_tool_registered() -> bool {
 }
 
 pub fn install_compatibility_tool(runner_bin: &Path) -> Result<()> {
-    let active_wine = crate::wine::get_active_wine_runtime();
+    let active_wine = wine::get_active_wine_runtime();
     let wine_root = active_wine.as_ref().map(|w| w.root.as_path());
 
     // 1. Register Automatic tool: Nucleon (Wine + Automatic Graphics Backend)
@@ -262,8 +264,8 @@ pub fn unregister_from_steam_ui() -> Result<UnregisterSummary> {
     }
 
     // 5. If LaunchAgent is installed/loaded, uninstall it so it doesn't re-patch
-    if (crate::guard::is_launchagent_loaded() || crate::guard::is_launchagent_installed())
-        && crate::guard::uninstall_launchagent().is_ok()
+    if (guard::is_launchagent_loaded() || guard::is_launchagent_installed())
+        && guard::uninstall_launchagent().is_ok()
     {
         summary.launchagent_uninstalled = true;
     }

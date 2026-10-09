@@ -46,7 +46,7 @@ pub fn run(lines: usize, show_hook: bool, show_runner: bool, follow: bool) -> Re
             &hook_path
         };
         if !active_path.exists() {
-            let _ = fs::File::create(active_path);
+            let _ = File::create(active_path);
         }
         let mut file = File::open(active_path)?;
         let mut pos = file.seek(SeekFrom::End(0))?;

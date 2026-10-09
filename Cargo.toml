@@ -41,6 +41,7 @@ zstd = "0.13"
 
 [workspace.lints.rust]
 unsafe_code = "allow"
+unused_qualifications = "warn"
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }
@@ -49,3 +50,5 @@ suspicious = { level = "warn", priority = -1 }
 complexity = { level = "warn", priority = -1 }
 perf = { level = "warn", priority = -1 }
 style = { level = "warn", priority = -1 }
+wildcard_imports = "warn"
+single_component_path_imports = "warn"

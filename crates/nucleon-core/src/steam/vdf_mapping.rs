@@ -1,4 +1,5 @@
 use super::native_detect::find_native_mac_appids;
+use crate::fs_util::atomic_write_file;
 use crate::paths;
 use crate::runner;
 use anyhow::Result;
@@ -45,7 +46,7 @@ pub fn migrate_compat_mappings() -> Result<()> {
     }
 
     if modified {
-        let _ = crate::fs_util::atomic_write_file(&config_path, updated);
+        let _ = atomic_write_file(&config_path, updated);
     }
     Ok(())
 }
@@ -145,7 +146,7 @@ pub fn sync_library_folders() -> Result<Vec<u32>> {
         }
 
         if modified {
-            crate::fs_util::atomic_write_file(lib_path, vdf.to_string())?;
+            atomic_write_file(lib_path, vdf.to_string())?;
             log::info!("Restored missing app entries in {}", lib_path.display());
         }
     }
@@ -242,7 +243,7 @@ pub fn sanitize_installed_app_manifests() -> Result<usize> {
                             }
 
                             if changed {
-                                let _ = crate::fs_util::atomic_write_file(&p, vdf.to_string());
+                                let _ = atomic_write_file(&p, vdf.to_string());
                                 log::info!(
                                     "Sanitized {} to StateFlags 4 & AutoUpdateBehavior 1 (ready to play)",
                                     name
@@ -481,7 +482,7 @@ pub fn remove_nucleon_compat_mappings() -> Result<bool> {
     let content = fs::read_to_string(&config_path)?;
     let (new_content, modified) = unmap_all_nucleon_compat_mappings(&content);
     if modified {
-        crate::fs_util::atomic_write_file(&config_path, new_content)?;
+        atomic_write_file(&config_path, new_content)?;
     }
     Ok(modified)
 }

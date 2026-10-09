@@ -1,4 +1,6 @@
+use crate::fs_util::atomic_write_file;
 use crate::paths;
+use crate::vdf;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -263,7 +265,7 @@ pub fn load_custom_wines() -> Vec<CustomWineRecord> {
 pub fn save_custom_wines(records: &[CustomWineRecord]) -> Result<()> {
     paths::ensure_dirs()?;
     let json = serde_json::to_string_pretty(records)?;
-    crate::fs_util::atomic_write_file(custom_wines_file(), json)?;
+    atomic_write_file(custom_wines_file(), json)?;
     Ok(())
 }
 
@@ -732,14 +734,14 @@ pub fn set_active_wine(identifier_or_path: &str) -> Result<WineRuntime> {
         }
     }
 
-    crate::fs_util::atomic_write_file(active_wine_selection_file(), runtime.id.as_bytes())
+    atomic_write_file(active_wine_selection_file(), runtime.id.as_bytes())
         .with_context(|| format!("Failed to write {}", active_wine_selection_file().display()))?;
 
     // Also update Steam's nucleon-wine/run shim if it exists so changes take effect immediately
     let steam_wine_run = paths::home_dir()
         .join("Library/Application Support/Steam/compatibilitytools.d/nucleon-wine/run");
     if steam_wine_run.exists() {
-        let script = crate::vdf::generate_run_script_full(Some("staging"), Some(&runtime.root));
+        let script = vdf::generate_run_script_full(Some("staging"), Some(&runtime.root));
         let _ = fs::write(&steam_wine_run, script);
         #[cfg(unix)]
         {
@@ -772,7 +774,7 @@ pub fn clear_active_wine() -> Result<()> {
         let steam_wine_run = paths::home_dir()
             .join("Library/Application Support/Steam/compatibilitytools.d/nucleon-wine/run");
         if steam_wine_run.exists() {
-            let script = crate::vdf::generate_run_script_full(Some("staging"), Some(&primary.root));
+            let script = vdf::generate_run_script_full(Some("staging"), Some(&primary.root));
             let _ = fs::write(&steam_wine_run, script);
         }
     }

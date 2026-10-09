@@ -1,3 +1,4 @@
+use crate::get_gum;
 use frida_gum::interceptor::Interceptor;
 use frida_gum::NativePointer;
 use log::info;
@@ -114,7 +115,7 @@ pub fn install_compat_hooks(
     find_tool_addr: usize,
 ) -> Result<(), anyhow::Error> {
     info!("install_compat_hooks: init_addr=0x{:x}, is_enabled_addr=0x{:x}, oslist_gate=0x{:x}, find_tool_addr=0x{:x}", init_addr, is_enabled_addr, oslist_gate_addr, find_tool_addr);
-    let gum = crate::get_gum();
+    let gum = get_gum();
     let mut interceptor = Interceptor::obtain(gum);
 
     unsafe {

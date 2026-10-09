@@ -1,3 +1,5 @@
+use crate::d7vk;
+use crate::runner;
 use object::Object;
 use std::fs;
 use std::path::Path;
@@ -94,7 +96,7 @@ impl GraphicsApiInfo {
             | GraphicsApi::DirectX11
             | GraphicsApi::Vulkan
             | GraphicsApi::DirectX7OrOlder => {
-                if crate::runner::is_kosmickrisp_installed() {
+                if runner::is_kosmickrisp_installed() {
                     TargetEngine::KosmicKrisp
                 } else {
                     TargetEngine::WineStaging
@@ -222,7 +224,7 @@ pub fn inspect_pe_bytes(data: &[u8]) -> Result<GraphicsApiInfo, anyhow::Error> {
     // 6. DirectDraw / DirectX 1-7 (ddraw.dll)
     // Routes to KosmicKrisp if D7VK is installed, otherwise falls back to WineStaging (WineD3D).
     if let Some(dll) = imported_dlls.iter().find(|d| d.contains("ddraw")) {
-        let engine = if crate::d7vk::is_d7vk_installed() {
+        let engine = if d7vk::is_d7vk_installed() {
             TargetEngine::KosmicKrisp
         } else {
             TargetEngine::WineStaging

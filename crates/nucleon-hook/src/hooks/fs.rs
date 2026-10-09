@@ -1,3 +1,4 @@
+use crate::get_gum;
 use frida_gum::interceptor::Interceptor;
 use frida_gum::NativePointer;
 use log::info;
@@ -38,7 +39,7 @@ pub unsafe extern "C" fn hook_fchmod(fd: c_int, mode: libc::mode_t) -> c_int {
 }
 
 pub fn install_fs_hooks() -> Result<(), anyhow::Error> {
-    let gum = crate::get_gum();
+    let gum = get_gum();
     let mut interceptor = Interceptor::obtain(gum);
 
     unsafe {

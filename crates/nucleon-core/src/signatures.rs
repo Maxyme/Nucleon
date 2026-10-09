@@ -1,3 +1,4 @@
+use crate::paths;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -40,10 +41,10 @@ pub fn load_signature_db(path: &Path) -> Result<SignatureDb> {
 /// the package manifests in Steam.AppBundle.
 pub fn detect_installed_steam_build() -> Option<u64> {
     let manifest_candidates = [
-        crate::paths::home_dir().join("Library/Application Support/Steam/Steam.AppBundle/Steam/Contents/MacOS/package/steam_client_signed-2_osx.manifest"),
-        crate::paths::home_dir().join("Library/Application Support/Steam/Steam.AppBundle/Steam/Contents/MacOS/package/steam_client_osx.manifest"),
-        crate::paths::home_dir().join("Library/Application Support/Steam/package/steam_client_signed-2_osx.manifest"),
-        crate::paths::home_dir().join("Library/Application Support/Steam/package/steam_client_osx.manifest"),
+        paths::home_dir().join("Library/Application Support/Steam/Steam.AppBundle/Steam/Contents/MacOS/package/steam_client_signed-2_osx.manifest"),
+        paths::home_dir().join("Library/Application Support/Steam/Steam.AppBundle/Steam/Contents/MacOS/package/steam_client_osx.manifest"),
+        paths::home_dir().join("Library/Application Support/Steam/package/steam_client_signed-2_osx.manifest"),
+        paths::home_dir().join("Library/Application Support/Steam/package/steam_client_osx.manifest"),
     ];
 
     for path in &manifest_candidates {
@@ -250,7 +251,7 @@ pub fn scan_signatures_from_slice(
 /// 2. If missing, scans steamclient.dylib once, generates the JSON profile, saves it locally, and returns it.
 pub fn ensure_signature_db_for_installed_steam() -> Result<(PathBuf, SignatureDb)> {
     let build_id = detect_installed_steam_build().unwrap_or(0);
-    let signatures_dir = crate::paths::signatures_dir();
+    let signatures_dir = paths::signatures_dir();
     fs::create_dir_all(&signatures_dir)?;
 
     let cached_path = signatures_dir.join(format!("{build_id}.json"));
@@ -262,9 +263,8 @@ pub fn ensure_signature_db_for_installed_steam() -> Result<(PathBuf, SignatureDb
 
     // Cache miss: Locate steamclient.dylib on disk
     let steamclient_candidates = [
-        crate::paths::steam_data_dir()
-            .join("Steam.AppBundle/Steam/Contents/MacOS/steamclient.dylib"),
-        crate::paths::steam_app().join("Contents/MacOS/steamclient.dylib"),
+        paths::steam_data_dir().join("Steam.AppBundle/Steam/Contents/MacOS/steamclient.dylib"),
+        paths::steam_app().join("Contents/MacOS/steamclient.dylib"),
     ];
 
     let dylib_path = steamclient_candidates
@@ -459,9 +459,8 @@ mod tests {
     #[test]
     fn test_scan_real_steamclient_if_present() {
         let candidates = [
-            crate::paths::steam_data_dir()
-                .join("Steam.AppBundle/Steam/Contents/MacOS/steamclient.dylib"),
-            crate::paths::steam_app().join("Contents/MacOS/steamclient.dylib"),
+            paths::steam_data_dir().join("Steam.AppBundle/Steam/Contents/MacOS/steamclient.dylib"),
+            paths::steam_app().join("Contents/MacOS/steamclient.dylib"),
         ];
         if let Some(path) = candidates.iter().find(|p| p.is_file()) {
             let bytes = fs::read(path).expect("read steamclient.dylib");
