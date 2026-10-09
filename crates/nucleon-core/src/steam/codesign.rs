@@ -29,7 +29,27 @@ pub fn is_steam_installed() -> bool {
 }
 
 pub fn is_steam_patched() -> bool {
-    is_plist_dyld_injected(&paths::steam_info_plist(), "nucleon.dylib")
+    let plist = paths::steam_info_plist();
+    let hook_dylib = paths::steam_app().join("Contents/MacOS/nucleon.dylib");
+    hook_dylib.exists()
+        || is_plist_dyld_injected(&plist, "nucleon.dylib")
+        || is_plist_dyld_injected(&plist, "notproton.dylib")
+        || has_any_plist_dyld_insert(&plist)
+}
+
+pub fn has_any_plist_dyld_insert(plist_path: &Path) -> bool {
+    if !plist_path.exists() {
+        return false;
+    }
+    let Ok(value) = plist::Value::from_file(plist_path) else {
+        return false;
+    };
+    value
+        .as_dictionary()
+        .and_then(|dict| dict.get("LSEnvironment"))
+        .and_then(|ls_env| ls_env.as_dictionary())
+        .and_then(|ls_dict| ls_dict.get("DYLD_INSERT_LIBRARIES"))
+        .is_some()
 }
 
 pub fn is_plist_dyld_injected(plist_path: &Path, needle: &str) -> bool {
