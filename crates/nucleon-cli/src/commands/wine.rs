@@ -40,7 +40,7 @@ pub enum WineAction {
     Reset,
     /// Clear configured custom Wine path
     ClearPath,
-    /// Manage graphical translation backends (GPTK, KosmicKrisp, VKD3D-Proton, D7VK)
+    /// Manage Wine graphical translation backends (KosmicKrisp, VKD3D-Proton, D7VK)
     Backends {
         #[command(subcommand)]
         action: super::backends::BackendsAction,

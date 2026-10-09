@@ -396,22 +396,28 @@ NUCLEON_WINE=/Applications/CrossOver.app %command%
 NUCLEON_WINE=crossover %command%
 ```
 
-### Managing Graphics Translation Backends
+### Managing Wine Graphics Translation Backends
 
-All Direct3D and Vulkan graphics translation backends (Apple GPTK 4, Mesa KosmicKrisp, VKD3D-Proton, and D7VK) can be inspected and managed under the unified `backends` group:
+Wine's Direct3D and Vulkan graphics translation backends (Mesa KosmicKrisp, VKD3D-Proton, and D7VK) can be inspected and managed under the `wine backends` group:
 
 ```bash
-# Check status of all graphics backends at once:
+# Check status of Wine graphics translation backends:
 nucleon wine backends status
 # or directly:
 nucleon backends status
 
-# Manage specific backends:
-nucleon wine backends gptk status
+# Manage specific Wine backends:
 nucleon wine backends kosmickrisp status
 nucleon wine backends vkd3d fetch
 nucleon wine backends d7vk fetch
 ```
+
+> **Note on Apple GPTK 4:** Apple Game Porting Toolkit 4 provides both an evaluation Wine runner and the Apple D3DMetal backend (`D3DMetal.framework`). Because GPTK is a complete runner and backend (rather than an add-on backend for Wine), it is managed independently via the top-level `gptk` command:
+> ```bash
+> nucleon gptk status
+> nucleon gptk set-path /path/to/gptk
+> nucleon gptk clear-path
+> ```
 
 Nucleon automatically inspects and resolves nested CrossOver bundle paths (such as `CrossOver.app`, `Contents/SharedSupport/CrossOver`, `bin/wine`, and `bin/wine64`), detects its version, and configures the environment with `CX_ROOT`, `DYLD_FALLBACK_LIBRARY_PATH`, and DLL search paths.
 

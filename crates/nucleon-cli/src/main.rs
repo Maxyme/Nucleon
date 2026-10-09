@@ -76,12 +76,12 @@ enum Commands {
         #[command(subcommand)]
         action: WineAction,
     },
-    /// Manage graphical translation backends (GPTK, KosmicKrisp, VKD3D-Proton, D7VK)
+    /// Manage Wine graphical translation backends (KosmicKrisp, VKD3D-Proton, D7VK)
     Backends {
         #[command(subcommand)]
         action: BackendsAction,
     },
-    /// Manage Apple Game Porting Toolkit (GPTK) components and custom paths
+    /// Manage Apple Game Porting Toolkit 4 (runner & D3DMetal backend)
     Gptk {
         #[command(subcommand)]
         action: GptkAction,

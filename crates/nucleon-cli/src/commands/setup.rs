@@ -162,17 +162,17 @@ fn interactive_customize_menu(args: &mut SetupArgs) -> Result<()> {
         println!(
             r#"
 Customize Nucleon Setup Options:
-  [1] Runner Runtime:
-      1) Wine Runtime (Active/Default):         {selected_wine_display}
+  [1] Runner Runtimes:
+      1) Wine Runtime (Active/Default):                {selected_wine_display}
+      2) Apple Game Porting Toolkit 4 (Runner & D3DMetal): {gptk_status}
 
-  [2] Graphics Translation Backends:
-      2) Apple Game Porting Toolkit 4 (D3DMetal): {gptk_status}
-      3) Mesa KosmicKrisp (Vulkan 1.4):        {kk_status}
-      4) VKD3D-Proton (Direct3D 12 -> Vulkan): {vkd3d_status}
-      5) D7VK (DirectDraw/DX1-7 -> Vulkan):    {d7vk_status}
+  [2] Wine Graphics Translation Backends:
+      3) Mesa KosmicKrisp (Vulkan 1.4):                {kk_status}
+      4) VKD3D-Proton (Direct3D 12 -> Vulkan):         {vkd3d_status}
+      5) D7VK (DirectDraw/DX1-7 -> Vulkan):            {d7vk_status}
 
   [3] Setup Actions:
-      6) Toggle Force Rebuild:                 {} (re-assembles runner from scratch; rarely needed)
+      6) Toggle Force Rebuild:                         {} (re-assembles runner from scratch; rarely needed)
       7) Return to main menu and proceed
       8) Abort setup
 "#,
@@ -348,7 +348,7 @@ fn prompt_interactive_setup(args: &mut SetupArgs) -> Result<()> {
         .flatten()
         .is_some()
     {
-        "Apple GPTK 4 D3DMetal (Metal 4)"
+        "Apple GPTK 4 (Runner & D3DMetal)"
     } else {
         "None (run custom setup or help)"
     };
@@ -380,12 +380,12 @@ Nucleon configures the native macOS Steam client to download and launch Windows
 games using Apple Game Porting Toolkit 4, Wine, and Mesa KosmicKrisp.
 
 Current Detected Defaults:
-  • Runner Wine Runtime:      {wine_display}
-  • Primary Graphics Backend: {gptk_display}
-  • Optional Vulkan Driver:   {kk_display}
+  • Apple GPTK 4 (Runner & D3DMetal):  {gptk_display}
+  • Wine Runtime (Runner):             {wine_display}
+  • Wine Vulkan Driver (KosmicKrisp):  {kk_display}
 
 Options:
-  1) Proceed with setup (default: Wine: {wine_display}, GPTK: {gptk_display})
+  1) Proceed with setup (default: GPTK 4: {gptk_display}, Wine: {wine_display})
   2) Customize setup options (select Wine, configure GPTK / KosmicKrisp paths)
   3) Cancel setup
 "#
