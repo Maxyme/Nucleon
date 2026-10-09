@@ -3,9 +3,9 @@ mod commands;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use commands::{
-    backends::BackendsAction, d7vk::D7vkAction, gptk::GptkAction, guard::GuardAction,
-    kosmickrisp::KosmickrispAction, setup::SetupArgs, steam::SteamAction, vkd3d::Vkd3dAction,
-    wine::WineAction,
+    backends::BackendsAction, d7vk::D7vkAction, dxvk::DxvkAction, gptk::GptkAction,
+    guard::GuardAction, kosmickrisp::KosmickrispAction, setup::SetupArgs, steam::SteamAction,
+    vkd3d::Vkd3dAction, wine::WineAction,
 };
 use std::path::PathBuf;
 
@@ -51,6 +51,12 @@ enum Commands {
         /// Point to custom D7VK installation directory
         #[arg(long)]
         d7vk_path: Option<PathBuf>,
+        /// Automatically fetch and stage DXVK (Direct3D 9/10/11 -> Vulkan) from GitHub
+        #[arg(long)]
+        fetch_dxvk: bool,
+        /// Point to custom DXVK installation directory
+        #[arg(long)]
+        dxvk_path: Option<PathBuf>,
         /// Select desired Wine runtime flavor or path for Steam (e.g. staging, crossover, or /Applications/CrossOver.app)
         #[arg(long)]
         wine: Option<String>,
@@ -76,7 +82,7 @@ enum Commands {
         #[command(subcommand)]
         action: WineAction,
     },
-    /// Manage Wine graphical translation backends (KosmicKrisp, VKD3D-Proton, D7VK)
+    /// Manage Wine graphical translation backends (KosmicKrisp, VKD3D-Proton, D7VK, DXVK)
     Backends {
         #[command(subcommand)]
         action: BackendsAction,
@@ -100,6 +106,11 @@ enum Commands {
     D7vk {
         #[command(subcommand)]
         action: D7vkAction,
+    },
+    /// Manage DXVK (Direct3D 9/10/11 -> Vulkan 1.4) translation layer
+    Dxvk {
+        #[command(subcommand)]
+        action: DxvkAction,
     },
     /// Inspect Graphics API dependencies and recommended engine for an executable or game folder
     Detect {
@@ -183,6 +194,8 @@ fn main() -> Result<()> {
             vkd3d_path,
             fetch_d7vk,
             d7vk_path,
+            fetch_dxvk,
+            dxvk_path,
             wine,
             wine_path,
             gptk_path,
@@ -197,6 +210,8 @@ fn main() -> Result<()> {
             vkd3d_path,
             fetch_d7vk,
             d7vk_path,
+            fetch_dxvk,
+            dxvk_path,
             wine,
             wine_path,
             gptk_path,
@@ -210,6 +225,7 @@ fn main() -> Result<()> {
         Commands::Kosmickrisp { action } => commands::kosmickrisp::handle(action),
         Commands::Vkd3d { action } => commands::vkd3d::run(action),
         Commands::D7vk { action } => commands::d7vk::run(action),
+        Commands::Dxvk { action } => commands::dxvk::run(action),
         Commands::Detect { path } => commands::detect::run(&path),
         Commands::Launch { appid, hud, engine } => commands::launch::run_launch(appid, hud, engine),
         Commands::Validate { appid } => commands::launch::run_validate(appid),

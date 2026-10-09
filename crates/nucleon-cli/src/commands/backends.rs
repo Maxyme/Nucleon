@@ -1,11 +1,11 @@
-use super::{d7vk, kosmickrisp, ui, vkd3d};
+use super::{d7vk, dxvk, kosmickrisp, ui, vkd3d};
 use anyhow::Result;
 use clap::Subcommand;
 use nucleon_core::runner;
 
 #[derive(Subcommand, Debug, Clone)]
 pub enum BackendsAction {
-    /// Inspect status of configured Wine graphical backends (KosmicKrisp, VKD3D-Proton, D7VK)
+    /// Inspect status of configured Wine graphical backends (KosmicKrisp, VKD3D-Proton, D7VK, DXVK)
     Status,
     /// Manage Mesa KosmicKrisp Vulkan driver and custom paths
     Kosmickrisp {
@@ -21,6 +21,11 @@ pub enum BackendsAction {
     D7vk {
         #[command(subcommand)]
         action: d7vk::D7vkAction,
+    },
+    /// Manage DXVK (Direct3D 9/10/11 -> Vulkan 1.4) translation layer
+    Dxvk {
+        #[command(subcommand)]
+        action: dxvk::DxvkAction,
     },
 }
 
@@ -83,12 +88,31 @@ pub fn run(action: BackendsAction) -> Result<()> {
                 );
             }
 
-            println!("\nTo manage individual Wine backends: nucleon wine backends <kosmickrisp|vkd3d|d7vk> --help");
+            // 4. DXVK
+            ui::kv("DXVK (Direct3D 9/10/11 -> Vulkan):", "");
+            if let Some(bundle) = nucleon_core::dxvk::find_dxvk() {
+                ui::tree_kv("├─", "Status:", "✓ Installed");
+                ui::tree_kv(
+                    "├─",
+                    "Version:",
+                    bundle.version.as_deref().unwrap_or("Unknown"),
+                );
+                ui::tree_kv("└─", "Location:", format!("{}", bundle.root.display()));
+            } else {
+                ui::tree_kv(
+                    "└─",
+                    "Status:",
+                    "○ Optional (run 'nucleon wine backends dxvk fetch')",
+                );
+            }
+
+            println!("\nTo manage individual Wine backends: nucleon wine backends <kosmickrisp|vkd3d|d7vk|dxvk> --help");
             println!("Note: Apple GPTK 4 is an independent runner & D3DMetal backend (manage with: nucleon gptk --help)");
         }
         BackendsAction::Kosmickrisp { action } => kosmickrisp::handle(action)?,
         BackendsAction::Vkd3d { action } => vkd3d::run(action)?,
         BackendsAction::D7vk { action } => d7vk::run(action)?,
+        BackendsAction::Dxvk { action } => dxvk::run(action)?,
     }
 
     Ok(())

@@ -1,6 +1,7 @@
 pub mod backends;
 pub mod d7vk;
 pub mod detect;
+pub mod dxvk;
 pub mod gptk;
 pub mod guard;
 pub mod kosmickrisp;

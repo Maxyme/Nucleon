@@ -1,6 +1,6 @@
 use super::ui;
 use anyhow::Result;
-use nucleon_core::{d7vk, guard, paths, runner, steam, vkd3d, wine};
+use nucleon_core::{d7vk, dxvk, guard, paths, runner, steam, vkd3d, wine};
 use std::fs;
 
 pub fn run() -> Result<()> {
@@ -136,15 +136,29 @@ pub fn run() -> Result<()> {
     if let Some(d7vk) = d7vk::find_d7vk() {
         let ver = d7vk.version.as_deref().unwrap_or("detected");
         ui::tree_kv(
-            "└─",
+            "├─",
             "D7VK (DirectDraw / D3D 1-7):",
             format!("✓ {} [{}]", d7vk.root.display(), ver),
         );
     } else {
         ui::tree_kv(
-            "└─",
+            "├─",
             "D7VK (DirectDraw / D3D 1-7):",
             "○ Optional (run 'nucleon d7vk fetch' or 'nucleon setup --fetch-d7vk')",
+        );
+    }
+    if let Some(dxvk) = dxvk::find_dxvk() {
+        let ver = dxvk.version.as_deref().unwrap_or("detected");
+        ui::tree_kv(
+            "└─",
+            "DXVK (Direct3D 9/10/11):",
+            format!("✓ {} [{}]", dxvk.root.display(), ver),
+        );
+    } else {
+        ui::tree_kv(
+            "└─",
+            "DXVK (Direct3D 9/10/11):",
+            "○ Optional (run 'nucleon dxvk fetch' or 'nucleon setup --fetch-dxvk')",
         );
     }
 

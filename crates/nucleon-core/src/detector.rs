@@ -1,4 +1,5 @@
 use crate::d7vk;
+use crate::dxvk;
 use crate::runner;
 use object::Object;
 use std::fs;
@@ -87,16 +88,24 @@ pub struct GraphicsApiInfo {
 }
 
 impl GraphicsApiInfo {
-    /// DirectX 11, DirectX 12, Vulkan, DirectDraw/DX1–7 (via D7VK), and OpenGL (via Mesa Zink)
-    /// route to KosmicKrisp (Vulkan 1.4); DirectX 9 and DirectX 10 route to WineStaging (WineD3D / OpenGL).
+    /// DirectX 12, Vulkan, DirectDraw/DX1–7 (via D7VK), and OpenGL (via Mesa Zink)
+    /// route to KosmicKrisp (Vulkan 1.4); DirectX 11 routes to KosmicKrisp ONLY if DXVK
+    /// is installed, otherwise falling back to WineStaging (WineD3D / active Wine).
+    /// DirectX 10, DirectX 9, and legacy titles default to WineStaging (WineD3D).
     pub fn wine_engine(&self) -> TargetEngine {
         match self.api {
             GraphicsApi::DirectX12
-            | GraphicsApi::DirectX11
             | GraphicsApi::Vulkan
             | GraphicsApi::DirectX7OrOlder
             | GraphicsApi::OpenGL => {
                 if runner::is_kosmickrisp_installed() {
+                    TargetEngine::KosmicKrisp
+                } else {
+                    TargetEngine::WineStaging
+                }
+            }
+            GraphicsApi::DirectX11 => {
+                if dxvk::is_dxvk_installed() && runner::is_kosmickrisp_installed() {
                     TargetEngine::KosmicKrisp
                 } else {
                     TargetEngine::WineStaging

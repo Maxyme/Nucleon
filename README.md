@@ -105,6 +105,11 @@ Provides a Khronos-conformant Vulkan 1.4 driver on Apple Silicon, unlocking nati
   nucleon vkd3d fetch
   # or extract manually: nucleon vkd3d set-path /path/to/vkd3d-proton
   ```
+- **DXVK (Direct3D 9/10/11 -> Vulkan 1.4)**:
+  ```bash
+  nucleon dxvk fetch
+  # or extract manually: nucleon dxvk set-path /path/to/dxvk
+  ```
 - **D7VK (DirectDraw / DirectX 1–7 -> Vulkan 1.4)**:
   ```bash
   nucleon d7vk fetch
@@ -254,11 +259,11 @@ When using **`Nucleon (Wine + Automatic Graphics Backend)`**, Nucleon runs under
 | Graphics API | Imported DLLs | Dispatched Engine (Wine Only) | Pipeline Characteristics |
 | :--- | :--- | :--- | :--- |
 | **DirectX 12** | `d3d12.dll`, `dxgi.dll` | **Wine + Mesa KosmicKrisp Vulkan** | VKD3D-Proton Direct3D 12 -> Vulkan 1.4 on Metal 4 |
-| **DirectX 11** | `d3d11.dll`, `dxgi.dll` | **Wine + Mesa KosmicKrisp Vulkan** | DXVK Direct3D 11 -> Vulkan 1.4 on Metal 4 |
+| **DirectX 11** | `d3d11.dll`, `dxgi.dll` | **Wine + Mesa KosmicKrisp Vulkan** (w/ DXVK) / **WineD3D** | DXVK Direct3D 11 -> Vulkan 1.4 on Metal 4 (requires DXVK) |
 | **Vulkan 1.3 / 1.4** | `vulkan-1.dll` | **Wine + Mesa KosmicKrisp Vulkan** | Khronos-conformant Vulkan 1.4 driver on Metal 4 (Mesa NIR compiler) |
 | **DirectDraw / DX1–7** | `ddraw.dll` | **Wine + Mesa KosmicKrisp Vulkan** | D7VK translation directly to Vulkan 1.4 (bypasses OpenGL) |
-| **DirectX 10** | `d3d10.dll`, `d3d10_1.dll`, `d3d10core.dll` | **Wine + WineD3D OpenGL** | Full `wined3d` pipeline |
-| **DirectX 9 & Older** | `d3d9.dll`, `d3d8.dll` | **Wine + WineD3D OpenGL** | Upstream Wine legacy pipeline |
+| **DirectX 10** | `d3d10.dll`, `d3d10_1.dll`, `d3d10core.dll` | **Wine + WineD3D OpenGL** (or KosmicKrisp w/ DXVK) | Full `wined3d` pipeline or DXVK |
+| **DirectX 9 & Older** | `d3d9.dll`, `d3d8.dll` | **Wine + WineD3D OpenGL** (or KosmicKrisp w/ DXVK) | Upstream Wine legacy pipeline or DXVK |
 | **OpenGL** | `opengl32.dll` | **Wine + WineD3D OpenGL** | Native macOS OpenGL |
 
 > [!NOTE]
@@ -267,9 +272,10 @@ When using **`Nucleon (Wine + Automatic Graphics Backend)`**, Nucleon runs under
 #### How Dynamic Dispatch Works
 1. **PE Import Table Analysis**: When launching a title, `nucleon-runner` parses the Windows Portable Executable (PE) headers and Import Address Table (IAT) using the Rust `object` engine.
 2. **Wine Auto Dispatch**:
-   - Modern DX11/12, Vulkan, and D7VK titles route to Mesa KosmicKrisp (`VK_DRIVER_FILES=.../libkosmickrisp_icd.json`).
-   - Legacy DX9/10 titles route to WineD3D.
-   - If KosmicKrisp is not installed, Nucleon falls back to WineD3D with an informative log message.
+   - Modern DX12, Vulkan, and D7VK titles route to Mesa KosmicKrisp (`VK_DRIVER_FILES=.../libkosmickrisp_icd.json`).
+   - DirectX 11 titles route to Mesa KosmicKrisp when DXVK is installed, or fall back to WineD3D.
+   - Legacy DX9/10 titles route to WineD3D (or KosmicKrisp when DXVK is installed).
+   - If KosmicKrisp is not installed, Nucleon automatically falls back to WineD3D with an informative log message.
 3. **Manual Overrides**: You can override engine selection in Steam's Compatibility dropdown or via CLI using `--engine <auto|gptk|kosmickrisp|staging>` or the `NUCLEON_ENGINE` environment variable.
 
 ---
@@ -620,6 +626,43 @@ DirectDraw and early Direct3D (DirectX 1 to 7) titles run via D7VK over Vulkan 1
 #### 3. Verify Detection
 ```bash
 nucleon d7vk status
+```
+
+### Managing DXVK (Direct3D 9/10/11 for KosmicKrisp)
+
+Direct3D 9, 10, and 11 titles run via DXVK over Vulkan 1.4 on Mesa KosmicKrisp, translating Direct3D calls into Vulkan without needing deprecated macOS OpenGL:
+
+#### 1. Fetch Automatically or Download Release
+- **Option A: Automatic fetch via Nucleon CLI**
+  ```bash
+  nucleon dxvk fetch
+  ```
+- **Option B: Manual download from GitHub or Heroic tools**
+  Download release tarball from [doitsujin/dxvk Releases](https://github.com/doitsujin/dxvk/releases) or use existing Heroic DXVK tools (`~/Library/Application Support/heroic/tools/dxvk-macOS/`).
+
+#### 2. Configure Path
+- **Via CLI Subcommand:**
+  ```bash
+  nucleon dxvk set-path /path/to/extracted/dxvk
+  # or clear custom path:
+  nucleon dxvk clear-path
+  ```
+- **During Initial Setup:**
+  ```bash
+  nucleon setup --fetch-dxvk
+  # or point to existing path:
+  nucleon setup --dxvk-path /path/to/extracted/dxvk
+  ```
+- **Environment Variable:**
+  ```bash
+  export DXVK_PATH=/path/to/extracted/dxvk
+  ```
+
+#### 3. Verify Detection
+```bash
+nucleon dxvk status
+# or check all managed backends:
+nucleon backends status
 ```
 
 ### Background Steam Update Guard & LaunchAgent

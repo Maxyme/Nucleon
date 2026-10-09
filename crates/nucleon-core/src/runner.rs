@@ -1,5 +1,6 @@
 use crate::d7vk;
 use crate::detector::TargetEngine;
+use crate::dxvk;
 use crate::paths;
 use crate::steam;
 use crate::vkd3d;
@@ -1160,8 +1161,11 @@ pub fn build_execution_env_for_engine(
 
             // Wine DLL overrides: map Direct3D to DXVK/VKD3D/D7VK (n,b) and forward Vulkan to host KosmicKrisp
             let mut overrides =
-                "steamclient=n,b;steamclient64=n,b;lsteamclient=b;winevulkan=b,n;vulkan-1=b,n;d3d11,dxgi,d3d10core,d3d9,d3d12,d3d12core=n,b"
+                "steamclient=n,b;steamclient64=n,b;lsteamclient=b;winevulkan=b,n;vulkan-1=b,n;d3d12,d3d12core=n,b"
                     .to_string();
+            if dxvk::find_dxvk().is_some() {
+                overrides.push_str(";d3d11,dxgi,d3d10core,d3d9=n,b");
+            }
             if d7vk::find_d7vk().is_some() {
                 overrides.push_str(";ddraw=n,b");
             }

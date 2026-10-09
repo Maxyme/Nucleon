@@ -1,6 +1,8 @@
 use super::ui;
 use anyhow::{bail, Result};
-use nucleon_core::{d7vk, guard, manifest, paths, prefix, runner, signatures, steam, vkd3d, wine};
+use nucleon_core::{
+    d7vk, dxvk, guard, manifest, paths, prefix, runner, signatures, steam, vkd3d, wine,
+};
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -16,6 +18,8 @@ pub struct SetupArgs {
     pub vkd3d_path: Option<PathBuf>,
     pub fetch_d7vk: bool,
     pub d7vk_path: Option<PathBuf>,
+    pub fetch_dxvk: bool,
+    pub dxvk_path: Option<PathBuf>,
     pub wine: Option<String>,
     pub wine_path: Option<PathBuf>,
     pub gptk_path: Option<PathBuf>,
@@ -106,6 +110,18 @@ fn show_installation_guidance(component: &str) {
 --------------------------------------------------------------------------------"#
             );
         }
+        "dxvk" => {
+            println!(
+                r#"
+--------------------------------------------------------------------------------
+[!] DXVK (Direct3D 9/10/11 -> Vulkan 1.4) Not Detected:
+  To fetch official DXVK release binaries directly from GitHub:
+    nucleon dxvk fetch
+  Or extract manually and configure:
+    nucleon dxvk set-path /path/to/extracted/dxvk
+--------------------------------------------------------------------------------"#
+            );
+        }
         _ => {}
     }
 }
@@ -159,6 +175,14 @@ fn interactive_customize_menu(args: &mut SetupArgs) -> Result<()> {
             "○ Optional (not configured)"
         };
 
+        let dxvk_status = if args.fetch_dxvk {
+            "✓ Auto-fetch from GitHub"
+        } else if args.dxvk_path.is_some() || dxvk::find_dxvk().is_some() {
+            "✓ Detected / Custom path"
+        } else {
+            "○ Optional (not configured)"
+        };
+
         println!(
             r#"
 Customize Nucleon Setup Options:
@@ -170,11 +194,12 @@ Customize Nucleon Setup Options:
       3) Mesa KosmicKrisp (Vulkan 1.4):                {kk_status}
       4) VKD3D-Proton (Direct3D 12 -> Vulkan):         {vkd3d_status}
       5) D7VK (DirectDraw/DX1-7 -> Vulkan):            {d7vk_status}
+      6) DXVK (Direct3D 9/10/11 -> Vulkan):            {dxvk_status}
 
   [3] Setup Actions:
-      6) Toggle Force Rebuild:                         {} (re-assembles runner from scratch; rarely needed)
-      7) Return to main menu and proceed
-      8) Abort setup
+      7) Toggle Force Rebuild:                         {} (re-assembles runner from scratch; rarely needed)
+      8) Return to main menu and proceed
+      9) Abort setup
 "#,
             if args.force {
                 "Enabled"
@@ -183,7 +208,7 @@ Customize Nucleon Setup Options:
             }
         );
 
-        let choice = read_user_input("Select an option (1-8): ").unwrap_or_default();
+        let choice = read_user_input("Select an option (1-9): ").unwrap_or_default();
         match choice.as_str() {
             "1" => {
                 println!("\nConfigure Wine Runtime:");
@@ -331,12 +356,39 @@ Customize Nucleon Setup Options:
                 }
             }
             "6" => {
+                println!("\nConfigure DXVK (Direct3D 9/10/11 -> Vulkan):");
+                println!("  f) Automatically fetch latest from official GitHub release");
+                println!("  p) Set path to locally extracted DXVK directory");
+                println!("  h) View installation instructions");
+                println!("  d) Disable / keep optional");
+                let sub = read_user_input("Select (f/p/h/d): ")?;
+                match sub.to_lowercase().as_str() {
+                    "f" => {
+                        args.fetch_dxvk = true;
+                        ui::success("DXVK will be downloaded during setup.");
+                    }
+                    "p" => {
+                        let path_str = read_user_input("Enter path to DXVK directory: ")?;
+                        if !path_str.is_empty() {
+                            args.dxvk_path = Some(PathBuf::from(path_str));
+                            ui::success("DXVK path updated.");
+                        }
+                    }
+                    "h" => show_installation_guidance("dxvk"),
+                    "d" => {
+                        args.fetch_dxvk = false;
+                        args.dxvk_path = None;
+                    }
+                    _ => {}
+                }
+            }
+            "7" => {
                 args.force = !args.force;
                 ui::info(format!("Force rebuild set to: {}", args.force));
             }
-            "7" => break,
-            "8" => bail!("Setup aborted by user."),
-            _ => println!("Invalid option, please choose between 1 and 8."),
+            "8" => break,
+            "9" => bail!("Setup aborted by user."),
+            _ => println!("Invalid option, please choose between 1 and 9."),
         }
     }
     Ok(())
@@ -429,6 +481,8 @@ pub fn run(mut args: SetupArgs) -> Result<()> {
         || args.vkd3d_path.is_some()
         || args.fetch_d7vk
         || args.d7vk_path.is_some()
+        || args.fetch_dxvk
+        || args.dxvk_path.is_some()
         || args.wine.is_some()
         || args.wine_path.is_some()
         || args.gptk_path.is_some()
@@ -540,6 +594,22 @@ pub fn run(mut args: SetupArgs) -> Result<()> {
         match d7vk::fetch_d7vk(None, None) {
             Ok(bundle) => ui::success(format!("D7VK staged at {}", bundle.root.display())),
             Err(e) => ui::warn(format!("Failed to fetch D7VK: {:#}", e)),
+        }
+    }
+
+    if let Some(ref p) = args.dxvk_path {
+        match dxvk::set_custom_dxvk_path(p) {
+            Ok(bundle) => ui::success(format!(
+                "Registered custom DXVK path at {}",
+                bundle.root.display()
+            )),
+            Err(e) => ui::warn(format!("Failed to set DXVK path {}: {:#}", p.display(), e)),
+        }
+    } else if args.fetch_dxvk {
+        ui::header("Fetching DXVK (Direct3D 9/10/11 -> Vulkan)...");
+        match dxvk::fetch_dxvk(None, None) {
+            Ok(bundle) => ui::success(format!("DXVK staged at {}", bundle.root.display())),
+            Err(e) => ui::warn(format!("Failed to fetch DXVK: {:#}", e)),
         }
     }
 

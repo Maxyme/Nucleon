@@ -467,8 +467,9 @@ pub fn run_with_args(args: &[String]) -> Result<()> {
     prefix::ensure_prefix(&pfx_dir, &runner_dir)?;
 
     // Stage or unstage translation DLLs based on active engine:
-    // KosmicKrisp: stages VKD3D-Proton (Direct3D 12 -> Vulkan 1.4) and D7VK (DirectDraw / D3D 1-7 -> Vulkan 1.4)
-    // Other engines (e.g. GPTK): unstages VKD3D-Proton and D7VK to use native D3DMetal/WineD3D without DLL override conflicts
+    // KosmicKrisp: stages VKD3D-Proton (Direct3D 12 -> Vulkan 1.4), D7VK (DirectDraw / D3D 1-7 -> Vulkan 1.4),
+    // and DXVK (Direct3D 9/10/11 -> Vulkan 1.4)
+    // Other engines (e.g. GPTK): unstages VKD3D-Proton, D7VK, and DXVK to use native D3DMetal/WineD3D without DLL override conflicts
     if active_engine == nucleon_core::detector::TargetEngine::KosmicKrisp {
         if let Some(vkd3d) = nucleon_core::vkd3d::find_vkd3d_proton() {
             if let Ok(staged) =
@@ -495,6 +496,27 @@ pub fn run_with_args(args: &[String]) -> Result<()> {
                 ));
             }
         }
+
+        if let Some(dxvk) = nucleon_core::dxvk::find_dxvk() {
+            if let Ok(staged) = nucleon_core::dxvk::stage_dxvk_into_prefix(&dxvk, &pfx_dir) {
+                log_runner(&format!(
+                    "DXVK active ({} DLL(s) from {}): Direct3D 9/10/11 -> Vulkan 1.4 -> KosmicKrisp",
+                    staged,
+                    dxvk.root.display()
+                ));
+            }
+        } else {
+            let detection = nucleon_core::detector::detect_target_engine(&target_exe);
+            if detection.api == nucleon_core::detector::GraphicsApi::DirectX11 {
+                log_runner(
+                    "WARNING: KosmicKrisp has no Direct3D 11 translator active (DXVK not installed). \
+                     DirectX 11 titles will fail under WineD3D. \
+                     Recommended: Switch Steam compatibility tool to 'Nucleon (GPTK 4.0 Beta 2 + Apple D3DMetal)', \
+                     use a DXMT-enabled Wine runtime ('nucleon wine use wine-11.18-dxmt'), \
+                     or configure DXVK via 'nucleon wine backends dxvk set-path <DIR>'."
+                );
+            }
+        }
     } else {
         if let Ok(removed) =
             nucleon_core::vkd3d::unstage_vkd3d_proton_from_prefix(&pfx_dir, Some(&runner_dir))
@@ -512,6 +534,16 @@ pub fn run_with_args(args: &[String]) -> Result<()> {
             if removed > 0 {
                 log_runner(&format!(
                     "Unstaged {} D7VK DLL(s) from prefix (restored builtin ddraw for {:?})",
+                    removed, active_engine
+                ));
+            }
+        }
+        if let Ok(removed) =
+            nucleon_core::dxvk::unstage_dxvk_from_prefix(&pfx_dir, Some(&runner_dir))
+        {
+            if removed > 0 {
+                log_runner(&format!(
+                    "Unstaged {} DXVK DLL(s) from prefix (restored builtin D3D9/10/11 for {:?})",
                     removed, active_engine
                 ));
             }
