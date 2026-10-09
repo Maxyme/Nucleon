@@ -138,6 +138,19 @@ enum Commands {
         #[command(subcommand)]
         action: SteamAction,
     },
+    /// Map a Steam game (by AppID) to a Nucleon compatibility tool in Steam config.vdf
+    Map {
+        /// Steam Application ID (e.g. 601150)
+        appid: u32,
+        /// Optional tool name (default: 'nucleon')
+        #[arg(long, short)]
+        tool: Option<String>,
+    },
+    /// Unmap a Steam game (by AppID) from Steam config.vdf
+    Unmap {
+        /// Steam Application ID (e.g. 601150)
+        appid: u32,
+    },
     /// Remove Nucleon from Steam UI, compatibility tools, and game mappings
     Unregister,
     /// View Nucleon hook and runner logs
@@ -230,6 +243,8 @@ fn main() -> Result<()> {
         Commands::Launch { appid, hud, engine } => commands::launch::run_launch(appid, hud, engine),
         Commands::Validate { appid } => commands::launch::run_validate(appid),
         Commands::Steam { action } => commands::steam::run(action),
+        Commands::Map { appid, tool } => commands::steam::run(SteamAction::Map { appid, tool }),
+        Commands::Unmap { appid } => commands::steam::run(SteamAction::Unmap { appid }),
         Commands::Unregister => commands::steam::run_unregister(),
         Commands::Logs {
             lines,

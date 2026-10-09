@@ -11,6 +11,19 @@ pub enum SteamAction {
     Restore,
     /// Remove Nucleon compatibility tools, game mappings, and WebUI patches from Steam UI
     Unregister,
+    /// Map a Steam game (by AppID) to a Nucleon compatibility tool (e.g. 601150 for Devil May Cry 5)
+    Map {
+        /// Steam Application ID (e.g. 601150)
+        appid: u32,
+        /// Optional compatibility tool name (default: 'nucleon', or 'nucleon-gptk', 'nucleon-dxvk', 'nucleon-kosmickrisp', 'nucleon-wine')
+        #[arg(long, short)]
+        tool: Option<String>,
+    },
+    /// Unmap a Steam game (by AppID) from Steam config.vdf
+    Unmap {
+        /// Steam Application ID (e.g. 601150)
+        appid: u32,
+    },
 }
 
 pub fn run(action: SteamAction) -> Result<()> {
@@ -27,6 +40,22 @@ pub fn run(action: SteamAction) -> Result<()> {
         }
         SteamAction::Unregister => {
             run_unregister()?;
+        }
+        SteamAction::Map { appid, tool } => {
+            let tool_name = tool.as_deref().unwrap_or("nucleon");
+            steam::map_app_compat_tool(appid, Some(tool_name))?;
+            ui::success(format!(
+                "Successfully mapped AppID {appid} to '{tool_name}' in Steam config.vdf"
+            ));
+        }
+        SteamAction::Unmap { appid } => {
+            if steam::unmap_app_compat_tool(appid)? {
+                ui::success(format!(
+                    "Successfully unmapped AppID {appid} from Steam config.vdf"
+                ));
+            } else {
+                ui::info(format!("AppID {appid} was not mapped in Steam config.vdf"));
+            }
         }
     }
     Ok(())

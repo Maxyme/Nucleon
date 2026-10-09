@@ -487,6 +487,141 @@ pub fn remove_nucleon_compat_mappings() -> Result<bool> {
     Ok(modified)
 }
 
+/// Sets or updates a single AppID compatibility mapping in a KeyValues config text.
+pub fn set_compat_tool_mapping(content: &str, appid: u32, tool_name: &str) -> (String, bool) {
+    let Ok(partial) = keyvalues_parser::parse(content) else {
+        return (content.to_string(), false);
+    };
+    let mut vdf = keyvalues_parser::Vdf::from(partial).into_owned();
+
+    let compat_obj = if vdf.key == "CompatToolMapping" {
+        vdf.value.get_mut_obj()
+    } else if let keyvalues_parser::Value::Obj(ref mut root_obj) = vdf.value {
+        if let Some(found) = find_child_obj_mut(root_obj, "CompatToolMapping") {
+            Some(found)
+        } else {
+            let steam_obj = if vdf.key == "Steam" {
+                vdf.value.get_mut_obj()
+            } else {
+                find_child_obj_mut(root_obj, "Steam")
+            };
+            if let Some(steam) = steam_obj {
+                steam.insert(
+                    std::borrow::Cow::Borrowed("CompatToolMapping"),
+                    vec![keyvalues_parser::Value::Obj(keyvalues_parser::Obj::new())],
+                );
+                steam
+                    .get_mut("CompatToolMapping")
+                    .and_then(|v| v.first_mut())
+                    .and_then(|v| v.get_mut_obj())
+            } else {
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    let Some(compat) = compat_obj else {
+        return (content.to_string(), false);
+    };
+
+    let appid_key = appid.to_string();
+    let mut entry_obj = keyvalues_parser::Obj::new();
+    entry_obj.insert(
+        std::borrow::Cow::Borrowed("name"),
+        vec![keyvalues_parser::Value::Str(std::borrow::Cow::Owned(
+            tool_name.to_string(),
+        ))],
+    );
+    entry_obj.insert(
+        std::borrow::Cow::Borrowed("config"),
+        vec![keyvalues_parser::Value::Str(std::borrow::Cow::Borrowed(""))],
+    );
+    entry_obj.insert(
+        std::borrow::Cow::Borrowed("priority"),
+        vec![keyvalues_parser::Value::Str(std::borrow::Cow::Borrowed(
+            "250",
+        ))],
+    );
+
+    compat.insert(
+        std::borrow::Cow::Owned(appid_key),
+        vec![keyvalues_parser::Value::Obj(entry_obj)],
+    );
+
+    (vdf.to_string(), true)
+}
+
+/// Removes a single AppID compatibility mapping from KeyValues config text.
+pub fn remove_single_compat_tool_mapping(content: &str, appid: u32) -> (String, bool) {
+    let Ok(partial) = keyvalues_parser::parse(content) else {
+        return (content.to_string(), false);
+    };
+    let mut vdf = keyvalues_parser::Vdf::from(partial).into_owned();
+
+    let compat_obj = if vdf.key == "CompatToolMapping" {
+        vdf.value.get_mut_obj()
+    } else if let keyvalues_parser::Value::Obj(ref mut root_obj) = vdf.value {
+        find_child_obj_mut(root_obj, "CompatToolMapping")
+    } else {
+        None
+    };
+
+    let Some(compat) = compat_obj else {
+        return (content.to_string(), false);
+    };
+
+    let appid_key = appid.to_string();
+    if compat.remove(appid_key.as_str()).is_some() {
+        (vdf.to_string(), true)
+    } else {
+        (content.to_string(), false)
+    }
+}
+
+/// Explicitly maps an AppID to a Nucleon compatibility tool in Steam's config.vdf.
+pub fn map_app_compat_tool(appid: u32, tool_name: Option<&str>) -> Result<()> {
+    let config_path = paths::steam_data_dir().join("config/config.vdf");
+    if !config_path.is_file() {
+        anyhow::bail!("Steam config.vdf not found at {}", config_path.display());
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = fs::metadata(&config_path) {
+            let mut perms = meta.permissions();
+            perms.set_mode(0o644);
+            let _ = fs::set_permissions(&config_path, perms);
+        }
+    }
+
+    let content = fs::read_to_string(&config_path)?;
+    let chosen_tool = tool_name.unwrap_or("nucleon");
+    let (new_content, modified) = set_compat_tool_mapping(&content, appid, chosen_tool);
+    if modified {
+        atomic_write_file(&config_path, new_content)?;
+        log::info!("Mapped AppID {appid} to '{chosen_tool}' in config.vdf");
+    }
+    Ok(())
+}
+
+/// Removes an AppID compatibility tool mapping from Steam's config.vdf.
+pub fn unmap_app_compat_tool(appid: u32) -> Result<bool> {
+    let config_path = paths::steam_data_dir().join("config/config.vdf");
+    if !config_path.is_file() {
+        return Ok(false);
+    }
+    let content = fs::read_to_string(&config_path)?;
+    let (new_content, removed) = remove_single_compat_tool_mapping(&content, appid);
+    if removed {
+        atomic_write_file(&config_path, new_content)?;
+        log::info!("Removed AppID {appid} mapping from config.vdf");
+    }
+    Ok(removed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -749,5 +884,43 @@ mod tests {
             !result.contains("\"11111\""),
             "Wine mapping must be removed"
         );
+    }
+
+    #[test]
+    fn test_set_and_remove_single_compat_tool_mapping() {
+        let sample = r#""InstallConfigStore"
+{
+	"Software"
+	{
+		"Valve"
+		{
+			"Steam"
+			{
+				"CompatToolMapping"
+				{
+					"690790"
+					{
+						"name"		"nucleon-kosmickrisp"
+						"config"		""
+						"priority"		"250"
+					}
+				}
+			}
+		}
+	}
+}
+"#;
+        // Map Devil May Cry 5 (601150)
+        let (mapped, mod1) = set_compat_tool_mapping(sample, 601150, "nucleon");
+        assert!(mod1);
+        assert!(mapped.contains("\"601150\""));
+        assert!(mapped.contains("\"690790\""));
+        assert!(mapped.contains("\"nucleon\""));
+
+        // Remove Devil May Cry 5 (601150)
+        let (unmapped, mod2) = remove_single_compat_tool_mapping(&mapped, 601150);
+        assert!(mod2);
+        assert!(!unmapped.contains("\"601150\""));
+        assert!(unmapped.contains("\"690790\""));
     }
 }

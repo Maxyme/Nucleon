@@ -29,7 +29,14 @@ pub unsafe extern "C" fn hook_compat_init(this: *mut c_void, arg1: *mut c_void) 
 pub unsafe extern "C" fn hook_is_enabled(this: *mut c_void, appid: u32) -> bool {
     let orig_fn: extern "C" fn(*mut c_void, u32) -> bool = std::mem::transmute(ORIG_IS_ENABLED);
     force_enable_compat_manager(this);
-    orig_fn(this, appid)
+    let ret = orig_fn(this, appid);
+    if !ret && appid != 0 {
+        let appid_str = appid.to_string();
+        if !nucleon_core::steam::native_detect::is_app_native_mac(&appid_str) {
+            return true;
+        }
+    }
+    ret
 }
 
 /// Inline detour for CCompatManager::FindToolForTargetApp.
@@ -39,14 +46,30 @@ pub unsafe extern "C" fn hook_is_enabled(this: *mut c_void, appid: u32) -> bool 
 pub unsafe extern "C" fn hook_find_tool(this: *mut c_void, appid: u32) -> *mut c_void {
     let orig_fn: extern "C" fn(*mut c_void, u32) -> *mut c_void =
         std::mem::transmute(ORIG_FIND_TOOL);
-    orig_fn(this, appid)
+    let tool = orig_fn(this, appid);
+    if !tool.is_null() || appid == 0 {
+        return tool;
+    }
+
+    // Only route to registered nucleon tool if this is NOT a native macOS game.
+    // This enables installing and playing Windows-only titles without "invalid platform" errors,
+    // while strictly leaving native macOS titles to execute natively.
+    let appid_str = appid.to_string();
+    if !nucleon_core::steam::native_detect::is_app_native_mac(&appid_str) {
+        let fallback = find_registered_nucleon_tool(this);
+        if !fallback.is_null() {
+            return fallback;
+        }
+    }
+
+    std::ptr::null_mut()
 }
 
 /// Finds the registered Nucleon compatibility tool entry in CCompatManager.
+/// Prefers 'nucleon' (the auto-detect router), falling back to any 'nucleon-*' tool.
 ///
 /// # Safety
 /// Caller must pass a valid or null pointer `compat_mgr`.
-#[allow(dead_code)]
 pub unsafe fn find_registered_nucleon_tool(compat_mgr: *mut c_void) -> *mut c_void {
     if compat_mgr.is_null() {
         return std::ptr::null_mut();
@@ -65,18 +88,26 @@ pub unsafe fn find_registered_nucleon_tool(compat_mgr: *mut c_void) -> *mut c_vo
         }
 
         let stride = 0x130;
+        let mut prefix_match: *mut c_void = std::ptr::null_mut();
+
         for i in 0..count {
             let entry = array_ptr.add(i as usize * stride);
             for &name_off in &[0x40, 0x8, 0x30, 0x48] {
                 let name_ptr = *(entry.add(name_off) as *const *const c_char);
                 if !name_ptr.is_null() && (name_ptr as usize) > 0x1000 {
                     if let Ok(name) = CStr::from_ptr(name_ptr).to_str() {
-                        if name == "nucleon" || name.starts_with("nucleon-") {
+                        if name == "nucleon" {
                             return entry as *mut c_void;
+                        } else if prefix_match.is_null() && name.starts_with("nucleon-") {
+                            prefix_match = entry as *mut c_void;
                         }
                     }
                 }
             }
+        }
+
+        if !prefix_match.is_null() {
+            return prefix_match;
         }
     }
 

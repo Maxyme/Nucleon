@@ -161,7 +161,27 @@ pub fn find_native_mac_appids() -> HashSet<String> {
     find_native_mac_appids_in(&dirs)
 }
 
-/// Checks if an installed Steam game with the given AppID is a native macOS game.
+/// Inspects Steam's local appcache/appinfo.vdf to determine if an AppID supports macOS natively.
+pub fn is_app_supported_on_macos_in_appinfo(appid: u32) -> Option<bool> {
+    let appinfo_path = paths::steam_data_dir().join("appcache/appinfo.vdf");
+    if !appinfo_path.exists() {
+        return None;
+    }
+    let data = fs::read(&appinfo_path).ok()?;
+    let needle = appid.to_le_bytes();
+    let idx = memchr::memmem::find(&data, &needle)?;
+    let size = if idx + 8 <= data.len() {
+        u32::from_le_bytes(data[idx + 4..idx + 8].try_into().ok()?) as usize
+    } else {
+        4096
+    };
+    let scan_len = std::cmp::min(data.len() - idx, std::cmp::max(size, 4096));
+    let chunk = &data[idx..idx + scan_len];
+    Some(memchr::memmem::find(chunk, b"macos").is_some())
+}
+
+/// Checks if a Steam game with the given AppID is a native macOS game,
+/// checking installed game files first and falling back to appcache/appinfo.vdf.
 pub fn is_app_native_mac(appid: &str) -> bool {
     let dirs = find_steamapps_dirs();
     for steamapps in &dirs {
@@ -185,6 +205,13 @@ pub fn is_app_native_mac(appid: &str) -> bool {
             }
         }
     }
+
+    if let Ok(num) = appid.parse::<u32>() {
+        if let Some(is_native) = is_app_supported_on_macos_in_appinfo(num) {
+            return is_native;
+        }
+    }
+
     false
 }
 
@@ -310,5 +337,17 @@ mod tests {
         assert!(detected.contains("1002"));
         assert!(!detected.contains("2001"));
         assert!(!detected.contains("3001"));
+    }
+
+    #[test]
+    fn test_is_app_supported_on_macos_in_appinfo_when_present() {
+        // Devil May Cry 5 (601150) is Windows-only; Stellaris (281990) has native macOS
+        if paths::steam_data_dir()
+            .join("appcache/appinfo.vdf")
+            .exists()
+        {
+            assert_eq!(is_app_supported_on_macos_in_appinfo(601150), Some(false));
+            assert_eq!(is_app_supported_on_macos_in_appinfo(281990), Some(true));
+        }
     }
 }
