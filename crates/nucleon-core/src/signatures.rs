@@ -37,29 +37,46 @@ pub fn load_signature_db(path: &Path) -> Result<SignatureDb> {
     Ok(db)
 }
 
+/// Parses the Steam build number from the text content of a Steam package manifest.
+/// Uses `keyvalues-parser` to navigate the VDF structure, falling back to line inspection.
+pub fn parse_steam_manifest_build(content: &str) -> Option<u64> {
+    if let Ok(partial) = keyvalues_parser::parse(content) {
+        let vdf = keyvalues_parser::Vdf::from(partial);
+        if let keyvalues_parser::Value::Obj(ref root_obj) = vdf.value {
+            if let Some(keyvalues_parser::Value::Str(version_str)) =
+                root_obj.get("version").and_then(|v| v.first())
+            {
+                if let Ok(v) = version_str.trim().parse::<u64>() {
+                    return Some(v);
+                }
+            }
+        }
+    }
+
+    // Fallback: line-by-line inspection if non-standard or partial VDF
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("\"version\"") {
+            let parts: Vec<&str> = trimmed.split_whitespace().collect();
+            if parts.len() >= 2 {
+                let v_str = parts[1].trim_matches('"');
+                if let Ok(v) = v_str.parse::<u64>() {
+                    return Some(v);
+                }
+            }
+        }
+    }
+
+    None
+}
+
 /// Detects the currently installed Steam client build number by inspecting
 /// the package manifests in Steam.AppBundle.
 pub fn detect_installed_steam_build() -> Option<u64> {
-    let manifest_candidates = [
-        paths::home_dir().join("Library/Application Support/Steam/Steam.AppBundle/Steam/Contents/MacOS/package/steam_client_signed-2_osx.manifest"),
-        paths::home_dir().join("Library/Application Support/Steam/Steam.AppBundle/Steam/Contents/MacOS/package/steam_client_osx.manifest"),
-        paths::home_dir().join("Library/Application Support/Steam/package/steam_client_signed-2_osx.manifest"),
-        paths::home_dir().join("Library/Application Support/Steam/package/steam_client_osx.manifest"),
-    ];
-
-    for path in &manifest_candidates {
-        if let Ok(content) = fs::read_to_string(path) {
-            for line in content.lines() {
-                let trimmed = line.trim();
-                if trimmed.starts_with("\"version\"") {
-                    let parts: Vec<&str> = trimmed.split_whitespace().collect();
-                    if parts.len() >= 2 {
-                        let v_str = parts[1].trim_matches('"');
-                        if let Ok(v) = v_str.parse::<u64>() {
-                            return Some(v);
-                        }
-                    }
-                }
+    for path in paths::steam_client_manifest_candidates() {
+        if let Ok(content) = fs::read_to_string(&path) {
+            if let Some(build) = parse_steam_manifest_build(&content) {
+                return Some(build);
             }
         }
     }
@@ -494,6 +511,31 @@ mod tests {
                 Some("0x6962f0")
             );
         }
+    }
+
+    #[test]
+    fn test_parse_steam_manifest_build() {
+        let sample_vdf = r#"
+"osx"
+{
+	"version"		"1788652215"
+	"ostype"		"macos1015"
+	"tenfoot_images_all"
+	{
+		"file"		"tenfoot_images_all.zip.86419c7a56c12dd107b5e0d46f50c8a9b121f3cc"
+		"size"		"6582204"
+	}
+}
+"#;
+        assert_eq!(parse_steam_manifest_build(sample_vdf), Some(1788652215));
+
+        // Fallback test: malformed VDF with line match
+        let malformed = "unclosed block {\n \"version\" \"1234567\"\n";
+        assert_eq!(parse_steam_manifest_build(malformed), Some(1234567));
+
+        // Missing version
+        let no_version = "\"osx\" { \"other\" \"value\" }";
+        assert_eq!(parse_steam_manifest_build(no_version), None);
     }
 
     #[test]
