@@ -5,7 +5,7 @@ use nucleon_core::runner;
 use std::fs;
 use std::path::PathBuf;
 
-#[derive(Subcommand)]
+#[derive(Subcommand, Debug, Clone)]
 pub enum KosmickrispAction {
     /// Show current Mesa KosmicKrisp driver configuration and detected status
     Status,

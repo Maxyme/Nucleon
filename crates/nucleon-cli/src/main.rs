@@ -3,8 +3,9 @@ mod commands;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use commands::{
-    d7vk::D7vkAction, gptk::GptkAction, guard::GuardAction, kosmickrisp::KosmickrispAction,
-    setup::SetupArgs, steam::SteamAction, vkd3d::Vkd3dAction, wine::WineAction,
+    backends::BackendsAction, d7vk::D7vkAction, gptk::GptkAction, guard::GuardAction,
+    kosmickrisp::KosmickrispAction, setup::SetupArgs, steam::SteamAction, vkd3d::Vkd3dAction,
+    wine::WineAction,
 };
 use std::path::PathBuf;
 
@@ -74,6 +75,11 @@ enum Commands {
     Wine {
         #[command(subcommand)]
         action: WineAction,
+    },
+    /// Manage graphical translation backends (GPTK, KosmicKrisp, VKD3D-Proton, D7VK)
+    Backends {
+        #[command(subcommand)]
+        action: BackendsAction,
     },
     /// Manage Apple Game Porting Toolkit (GPTK) components and custom paths
     Gptk {
@@ -199,6 +205,7 @@ fn main() -> Result<()> {
         Commands::Status => commands::status::run(),
         Commands::Guard { action } => commands::guard::run(action),
         Commands::Wine { action } => commands::wine::run(action),
+        Commands::Backends { action } => commands::backends::run(action),
         Commands::Gptk { action } => commands::gptk::run(action),
         Commands::Kosmickrisp { action } => commands::kosmickrisp::handle(action),
         Commands::Vkd3d { action } => commands::vkd3d::run(action),

@@ -40,6 +40,11 @@ pub enum WineAction {
     Reset,
     /// Clear configured custom Wine path
     ClearPath,
+    /// Manage graphical translation backends (GPTK, KosmicKrisp, VKD3D-Proton, D7VK)
+    Backends {
+        #[command(subcommand)]
+        action: super::backends::BackendsAction,
+    },
 }
 
 pub fn run(action: WineAction) -> Result<()> {
@@ -166,6 +171,7 @@ pub fn run(action: WineAction) -> Result<()> {
             wine::clear_custom_wine_path()?;
             ui::success("Cleared custom Wine path configuration.");
         }
+        WineAction::Backends { action } => super::backends::run(action)?,
     }
 
     Ok(())

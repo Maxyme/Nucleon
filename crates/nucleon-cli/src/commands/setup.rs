@@ -162,41 +162,30 @@ fn interactive_customize_menu(args: &mut SetupArgs) -> Result<()> {
         println!(
             r#"
 Customize Nucleon Setup Options:
-  1) Apple Game Porting Toolkit 4 (GPTK 4): {gptk_status}
-  2) Wine Runtime:                         {selected_wine_display}
-  3) Mesa KosmicKrisp (Vulkan 1.4):        {kk_status}
-  4) VKD3D-Proton (Direct3D 12 -> Vulkan): {vkd3d_status}
-  5) D7VK (DirectDraw/DX1-7 -> Vulkan):    {d7vk_status}
-  6) Toggle Force Rebuild:                 {}
-  7) Return to main menu and proceed
-  8) Abort setup
+  [1] Runner Runtime:
+      1) Wine Runtime (Active/Default):         {selected_wine_display}
+
+  [2] Graphics Translation Backends:
+      2) Apple Game Porting Toolkit 4 (D3DMetal): {gptk_status}
+      3) Mesa KosmicKrisp (Vulkan 1.4):        {kk_status}
+      4) VKD3D-Proton (Direct3D 12 -> Vulkan): {vkd3d_status}
+      5) D7VK (DirectDraw/DX1-7 -> Vulkan):    {d7vk_status}
+
+  [3] Setup Actions:
+      6) Toggle Force Rebuild:                 {} (re-assembles runner from scratch; rarely needed)
+      7) Return to main menu and proceed
+      8) Abort setup
 "#,
-            if args.force { "Enabled" } else { "Disabled" }
+            if args.force {
+                "Enabled"
+            } else {
+                "Disabled (recommended)"
+            }
         );
 
         let choice = read_user_input("Select an option (1-8): ").unwrap_or_default();
         match choice.as_str() {
             "1" => {
-                println!("\nConfigure Apple GPTK 4:");
-                println!(
-                    "Enter directory path containing D3DMetal.framework and libd3dshared.dylib,"
-                );
-                println!("or type 'help' for instructions, or press Enter to keep current:");
-                let input = read_user_input("> ")?;
-                if input.eq_ignore_ascii_case("help") {
-                    show_installation_guidance("gptk");
-                } else if !input.is_empty() {
-                    let p = PathBuf::from(&input);
-                    if runner::inspect_gptk_dir(&p).is_some() {
-                        args.gptk_path = Some(p);
-                        ui::success("GPTK path validated and updated.");
-                    } else {
-                        ui::warn(format!("Could not find D3DMetal.framework in '{}'.", input));
-                        show_installation_guidance("gptk");
-                    }
-                }
-            }
-            "2" => {
                 println!("\nConfigure Wine Runtime:");
                 if wine_runtimes.is_empty() {
                     ui::warn("No Wine runtimes automatically detected on this system.");
@@ -230,6 +219,26 @@ Customize Nucleon Setup Options:
                     } else {
                         args.wine = Some(input);
                         ui::success("Wine preference updated.");
+                    }
+                }
+            }
+            "2" => {
+                println!("\nConfigure Apple Game Porting Toolkit 4 (GPTK 4 / D3DMetal):");
+                println!(
+                    "Enter directory path containing D3DMetal.framework and libd3dshared.dylib,"
+                );
+                println!("or type 'help' for instructions, or press Enter to keep current:");
+                let input = read_user_input("> ")?;
+                if input.eq_ignore_ascii_case("help") {
+                    show_installation_guidance("gptk");
+                } else if !input.is_empty() {
+                    let p = PathBuf::from(&input);
+                    if runner::inspect_gptk_dir(&p).is_some() {
+                        args.gptk_path = Some(p);
+                        ui::success("GPTK path validated and updated.");
+                    } else {
+                        ui::warn(format!("Could not find D3DMetal.framework in '{}'.", input));
+                        show_installation_guidance("gptk");
                     }
                 }
             }
@@ -334,6 +343,34 @@ Customize Nucleon Setup Options:
 }
 
 fn prompt_interactive_setup(args: &mut SetupArgs) -> Result<()> {
+    let gptk_display = if runner::find_gptk_components(args.gptk_path.as_deref())
+        .ok()
+        .flatten()
+        .is_some()
+    {
+        "Apple GPTK 4 D3DMetal (Metal 4)"
+    } else {
+        "None (run custom setup or help)"
+    };
+
+    let wine_display = if let Some(ref w) = args.wine {
+        format!("{w} (override)")
+    } else if let Some(active) = wine::get_active_wine_runtime() {
+        format!(
+            "{} [{}]",
+            active.name,
+            active.version.as_deref().unwrap_or("detected")
+        )
+    } else {
+        "None (run custom setup or help)".to_string()
+    };
+
+    let kk_display = if args.kosmickrisp || runner::is_kosmickrisp_installed() {
+        "Mesa KosmicKrisp Vulkan 1.4"
+    } else {
+        "None (optional)"
+    };
+
     println!(
         r#"
 ================================================================================
@@ -342,41 +379,16 @@ fn prompt_interactive_setup(args: &mut SetupArgs) -> Result<()> {
 Nucleon configures the native macOS Steam client to download and launch Windows
 games using Apple Game Porting Toolkit 4, Wine, and Mesa KosmicKrisp.
 
-Current Detected Configuration:
-  • Apple GPTK 4 (D3DMetal):  {}
-  • Active Wine Runtime:      {}
-  • Mesa KosmicKrisp (Vulkan):{}
+Current Detected Defaults:
+  • Runner Wine Runtime:      {wine_display}
+  • Primary Graphics Backend: {gptk_display}
+  • Optional Vulkan Driver:   {kk_display}
 
 Options:
-  1) Proceed with setup (default)
+  1) Proceed with setup (default: Wine: {wine_display}, GPTK: {gptk_display})
   2) Customize setup options (select Wine, configure GPTK / KosmicKrisp paths)
   3) Cancel setup
-"#,
-        if runner::find_gptk_components(args.gptk_path.as_deref())
-            .ok()
-            .flatten()
-            .is_some()
-        {
-            "✓ Detected"
-        } else {
-            "✗ Not detected (help available in customize)"
-        },
-        if let Some(ref w) = args.wine {
-            format!("{w} (override)")
-        } else if let Some(active) = wine::get_active_wine_runtime() {
-            format!(
-                "{} [{}]",
-                active.name,
-                active.version.as_deref().unwrap_or("detected")
-            )
-        } else {
-            "✗ None detected (help available in customize)".to_string()
-        },
-        if args.kosmickrisp || runner::is_kosmickrisp_installed() {
-            "✓ Detected / Enabled"
-        } else {
-            "○ Optional (not detected)"
-        }
+"#
     );
 
     let choice = read_user_input("Select an option [1]: ").unwrap_or_default();

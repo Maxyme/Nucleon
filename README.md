@@ -177,7 +177,12 @@ crates/
 
 ## Compatibility Tool Options & The Architecture Selector
 
-In Steam, Nucleon registers compatibility tools with clear **`(runtime + graphics translation backend)`** labels so you always know exactly which Wine runtime and graphics translation pipeline each game is running on:
+In Steam, Nucleon registers compatibility tools with explicit **`(runner runtime + graphics translation backend)`** labels. These dropdown options are dynamically composed of the available runner and graphics backends configured on your system by Nucleon:
+
+- **Runner Runtime**: The supervisor process and Wine environment that executes the game (e.g. your active Wine runtime such as Wine-Staging / CrossOver, or Apple's GPTK Wine environment).
+- **Graphics Translation Backend**: The Direct3D/Vulkan translation pipeline configured for that tool (e.g. Apple D3DMetal, Mesa KosmicKrisp Vulkan 1.4, or WineD3D OpenGL).
+
+If an optional backend is not detected or configured (such as KosmicKrisp), its corresponding tool is cleanly omitted from the Steam dropdown until configured.
 
 ### Steam Compatibility Dropdown Options
 
@@ -389,6 +394,23 @@ nucleon setup --wine-path /Applications/CrossOver.app
 NUCLEON_WINE=/Applications/CrossOver.app %command%
 # or by identifier:
 NUCLEON_WINE=crossover %command%
+```
+
+### Managing Graphics Translation Backends
+
+All Direct3D and Vulkan graphics translation backends (Apple GPTK 4, Mesa KosmicKrisp, VKD3D-Proton, and D7VK) can be inspected and managed under the unified `backends` group:
+
+```bash
+# Check status of all graphics backends at once:
+nucleon wine backends status
+# or directly:
+nucleon backends status
+
+# Manage specific backends:
+nucleon wine backends gptk status
+nucleon wine backends kosmickrisp status
+nucleon wine backends vkd3d fetch
+nucleon wine backends d7vk fetch
 ```
 
 Nucleon automatically inspects and resolves nested CrossOver bundle paths (such as `CrossOver.app`, `Contents/SharedSupport/CrossOver`, `bin/wine`, and `bin/wine64`), detects its version, and configures the environment with `CX_ROOT`, `DYLD_FALLBACK_LIBRARY_PATH`, and DLL search paths.

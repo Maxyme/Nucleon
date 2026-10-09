@@ -1,3 +1,4 @@
+pub mod backends;
 pub mod d7vk;
 pub mod detect;
 pub mod gptk;
