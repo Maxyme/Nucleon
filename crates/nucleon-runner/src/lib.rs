@@ -477,6 +477,16 @@ pub fn run_with_args(args: &[String]) -> Result<()> {
         || active_engine == nucleon_core::detector::TargetEngine::Vkd3d;
 
     if is_vulkan_engine {
+        // Unstage DXMT before staging DXVK so DXMT unstage doesn't overwrite DXVK
+        if let Ok(removed) = nucleon_core::dxmt::unstage_dxmt_from_prefix(&pfx_dir, None) {
+            if removed > 0 {
+                log_runner(&format!(
+                    "Unstaged {} DXMT DLL(s) from prefix for {:?}",
+                    removed, active_engine
+                ));
+            }
+        }
+
         if active_engine == nucleon_core::detector::TargetEngine::Vkd3d
             || active_engine == nucleon_core::detector::TargetEngine::KosmicKrisp
         {
@@ -541,7 +551,30 @@ pub fn run_with_args(args: &[String]) -> Result<()> {
                 }
             }
         }
+    } else if active_engine == nucleon_core::detector::TargetEngine::Dxmt {
+        // Unstage Vulkan translation layers before staging DXMT
+        let _ = nucleon_core::vkd3d::unstage_vkd3d_proton_from_prefix(&pfx_dir, None);
+        let _ = nucleon_core::d7vk::unstage_d7vk_from_prefix(&pfx_dir, None);
+        let _ = nucleon_core::dxvk::unstage_dxvk_from_prefix(&pfx_dir, None);
+
+        if let Some(dxmt) = nucleon_core::dxmt::find_dxmt() {
+            if let Ok(staged) =
+                nucleon_core::dxmt::stage_dxmt_into_prefix(&dxmt, &pfx_dir, Some(&runner_dir))
+            {
+                log_runner(&format!(
+                    "DXMT active ({} DLL(s) from {}): Direct3D 11 -> Apple Metal",
+                    staged,
+                    dxmt.root.display()
+                ));
+            }
+        } else {
+            log_runner(
+                "WARNING: DXMT tool selected, but DXMT is not installed. \
+                 Install via 'nucleon dxmt fetch' or set DXMT_PATH.",
+            );
+        }
     } else {
+        // Gptk or WineStaging: unstage all translation layers and restore builtin DLLs
         if let Ok(removed) =
             nucleon_core::vkd3d::unstage_vkd3d_proton_from_prefix(&pfx_dir, Some(&runner_dir))
         {
@@ -572,26 +605,6 @@ pub fn run_with_args(args: &[String]) -> Result<()> {
                 ));
             }
         }
-    }
-
-    if active_engine == nucleon_core::detector::TargetEngine::Dxmt {
-        if let Some(dxmt) = nucleon_core::dxmt::find_dxmt() {
-            if let Ok(staged) =
-                nucleon_core::dxmt::stage_dxmt_into_prefix(&dxmt, &pfx_dir, Some(&runner_dir))
-            {
-                log_runner(&format!(
-                    "DXMT active ({} DLL(s) from {}): Direct3D 11 -> Apple Metal",
-                    staged,
-                    dxmt.root.display()
-                ));
-            }
-        } else {
-            log_runner(
-                "WARNING: DXMT tool selected, but DXMT is not installed. \
-                 Install via 'nucleon dxmt fetch' or set DXMT_PATH.",
-            );
-        }
-    } else {
         if let Ok(removed) =
             nucleon_core::dxmt::unstage_dxmt_from_prefix(&pfx_dir, Some(&runner_dir))
         {
@@ -649,20 +662,10 @@ pub fn run_with_args(args: &[String]) -> Result<()> {
         None
     };
 
-    // If steam.exe exists in the prefix, wrap game arguments through steam.exe
-    let steam_shim = pfx_dir.join("drive_c/Program Files (x86)/Steam/steam.exe");
-    let wine_args: Vec<String> = if steam_shim.is_file() {
-        let mut wrapped = vec!["C:\\Program Files (x86)\\Steam\\steam.exe".to_string()];
-        wrapped.extend(game_args.clone());
-        wrapped
-    } else {
-        game_args.clone()
-    };
-
-    log_runner(&format!("Launching game with Wine: {:?}", wine_args));
+    log_runner(&format!("Launching game with Wine: {:?}", game_args));
 
     let mut cmd = Command::new(&wine_bin);
-    cmd.args(&wine_args);
+    cmd.args(&game_args);
 
     for (k, v) in exec_env {
         cmd.env(k, v);
