@@ -68,10 +68,20 @@ pub fn run() -> Result<()> {
         println!("    ○ Apple GPTK 4 (DX11/12):        ✗ Not found (run 'nucleon setup' or 'nucleon gptk set-path <DIR>')");
     }
     if steam::is_gptk_tool_registered() {
+        let display_name = steam::registered_gptk_tool_display_name().unwrap_or_else(|| {
+            if let Some(v) = runner::detect_gptk_version(None) {
+                format!(
+                    "Nucleon (GPTK {} + Apple D3DMetal)",
+                    runner::format_gptk_version(&v)
+                )
+            } else {
+                "Nucleon (GPTK + Apple D3DMetal)".to_string()
+            }
+        });
         ui::tree_kv(
             "└─",
             "Registered in Steam UI:",
-            "✓ 'Nucleon (GPTK + Apple D3DMetal)'",
+            format!("✓ '{display_name}'"),
         );
     } else {
         ui::tree_kv(

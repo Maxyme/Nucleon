@@ -32,6 +32,16 @@ pub fn is_gptk_tool_registered() -> bool {
             .is_file()
 }
 
+pub fn registered_gptk_tool_display_name() -> Option<String> {
+    let vdf_path = paths::steam_gptk_compat_tools_dir().join("compatibilitytool.vdf");
+    if vdf_path.is_file() {
+        if let Ok(content) = fs::read_to_string(&vdf_path) {
+            return extract_vdf_display_name(&content).map(|s| s.to_string());
+        }
+    }
+    None
+}
+
 pub fn is_kosmickrisp_tool_registered() -> bool {
     paths::steam_kosmickrisp_compat_tools_dir()
         .join("compatibilitytool.vdf")
@@ -108,17 +118,26 @@ pub fn install_compatibility_tool(runner_bin: &Path) -> Result<()> {
     )?;
     log::info!("Registered Steam compatibility tool: Nucleon (Wine + Automatic Graphics Backend)");
 
-    // 2. Register explicit separate GPTK tool: Nucleon (GPTK + Apple D3DMetal)
+    // 2. Register explicit separate GPTK tool with detected version: Nucleon (GPTK <version> + Apple D3DMetal)
     let gptk_tool_dir = paths::steam_gptk_compat_tools_dir();
     if runner::find_gptk_runner().is_some() {
+        let gptk_ver = runner::detect_gptk_version(None);
+        let display_name = if let Some(ref ver) = gptk_ver {
+            format!(
+                "Nucleon (GPTK {} + Apple D3DMetal)",
+                runner::format_gptk_version(ver)
+            )
+        } else {
+            "Nucleon (GPTK + Apple D3DMetal)".to_string()
+        };
         vdf::write_tool_bundle_with_engine(
             &gptk_tool_dir,
             "nucleon-gptk",
-            "Nucleon (GPTK + Apple D3DMetal)",
+            &display_name,
             runner_bin,
             Some("gptk"),
         )?;
-        log::info!("Registered Steam compatibility tool: Nucleon (GPTK + Apple D3DMetal)");
+        log::info!("Registered Steam compatibility tool: {}", display_name);
     } else if gptk_tool_dir.exists() {
         let _ = fs::remove_dir_all(&gptk_tool_dir);
     }

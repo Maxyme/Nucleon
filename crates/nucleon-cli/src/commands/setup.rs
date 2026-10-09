@@ -1,6 +1,6 @@
 use super::ui;
 use anyhow::{bail, Result};
-use nucleon_core::{d7vk, guard, manifest, paths, runner, signatures, steam, vkd3d, wine};
+use nucleon_core::{d7vk, guard, manifest, paths, prefix, runner, signatures, steam, vkd3d, wine};
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -627,7 +627,19 @@ pub fn run(mut args: SetupArgs) -> Result<()> {
             ui::success("Registered Steam compatibility tool: 'Nucleon (Wine + Automatic Graphics Backend)'");
         }
         if steam::is_gptk_tool_registered() {
-            ui::success("Registered Steam compatibility tool: 'Nucleon (GPTK + Apple D3DMetal)'");
+            let gptk_display = steam::registered_gptk_tool_display_name().unwrap_or_else(|| {
+                if let Some(v) = runner::detect_gptk_version(args.gptk_path.as_deref()) {
+                    format!(
+                        "Nucleon (GPTK {} + Apple D3DMetal)",
+                        runner::format_gptk_version(&v)
+                    )
+                } else {
+                    "Nucleon (GPTK + Apple D3DMetal)".to_string()
+                }
+            });
+            ui::success(format!(
+                "Registered Steam compatibility tool: '{gptk_display}'"
+            ));
         }
         if steam::is_kosmickrisp_tool_registered() {
             ui::success(
@@ -670,6 +682,16 @@ pub fn run(mut args: SetupArgs) -> Result<()> {
         }
     }
 
+    // 5c. Sandbox user shell folders across all existing game prefixes (eliminates Desktop/Downloads permission popups)
+    if let Ok(isolated) = prefix::isolate_all_steam_game_prefixes() {
+        if isolated > 0 {
+            ui::success(format!(
+                "Isolated user shell folders in {} existing Steam game prefix(es) (preventing macOS Desktop/Downloads permission popups)",
+                isolated
+            ));
+        }
+    }
+
     // 6. Patch Steam.app if hook dylib is available
     let hook_dylib = super::find_hook_dylib();
     if let Some(ref dylib) = hook_dylib {
@@ -708,6 +730,17 @@ pub fn run(mut args: SetupArgs) -> Result<()> {
         }
     }
 
+    let gptk_banner_display = steam::registered_gptk_tool_display_name().unwrap_or_else(|| {
+        if let Some(v) = runner::detect_gptk_version(args.gptk_path.as_deref()) {
+            format!(
+                "Nucleon (GPTK {} + Apple D3DMetal)",
+                runner::format_gptk_version(&v)
+            )
+        } else {
+            "Nucleon (GPTK + Apple D3DMetal)".to_string()
+        }
+    });
+
     println!(
         r#"
 ==============================================================================
@@ -719,7 +752,7 @@ To use Nucleon in Steam:
   3. Clicking 'Install' begins downloading and routes the game via Nucleon.
   4. Compatibility tools available in Steam:
      - 'Nucleon (Wine + Automatic Graphics Backend)' [Default]
-     - 'Nucleon (GPTK + Apple D3DMetal)'
+     - '{gptk_banner_display}'
      - 'Nucleon (Wine + Mesa KosmicKrisp Vulkan)'
      - 'Nucleon (Wine + WineD3D OpenGL)'
   5. Or launch directly from terminal: nucleon launch <AppID>"#

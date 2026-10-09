@@ -29,10 +29,78 @@ pub fn ensure_prefix(prefix_dir: &Path, runner_dir: &Path) -> Result<()> {
             .status();
     }
 
+    isolate_user_shell_folders(prefix_dir)?;
     configure_prefix_registry(prefix_dir, runner_dir)?;
     stage_bridge_libraries(prefix_dir)?;
 
     Ok(())
+}
+
+/// Isolates user shell folders (Desktop, Downloads, Documents, etc.) inside the Wine prefix.
+/// By default, Wine symlinks these to the user's macOS host directories (`/Users/<user>/Desktop`,
+/// `/Users/<user>/Downloads`), which triggers invasive macOS TCC privacy permission prompts
+/// ("nucleon would like to access files in your Desktop/Downloads folder") when games start.
+///
+/// Replacing these symlinks with local isolated directories inside `drive_c/users/<user>/`
+/// prevents any host directory access and eliminates TCC permission dialogs.
+pub fn isolate_user_shell_folders(prefix_dir: &Path) -> Result<()> {
+    let users_dir = prefix_dir.join("drive_c/users");
+    if !users_dir.is_dir() {
+        return Ok(());
+    }
+
+    let folders = [
+        "Desktop",
+        "Downloads",
+        "Documents",
+        "Music",
+        "Pictures",
+        "Videos",
+    ];
+
+    if let Ok(entries) = fs::read_dir(&users_dir) {
+        for entry in entries.flatten() {
+            let user_path = entry.path();
+            if user_path.is_dir() {
+                for folder in &folders {
+                    let target = user_path.join(folder);
+                    // Check if target is a symlink (or broken symlink)
+                    if target.is_symlink() {
+                        let _ = fs::remove_file(&target);
+                        let _ = fs::create_dir_all(&target);
+                        log::info!(
+                            "Isolated Wine user folder: replaced symlink at {} with local directory",
+                            target.display()
+                        );
+                    } else if !target.exists() {
+                        let _ = fs::create_dir_all(&target);
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Isolates user shell folders across all existing game prefixes in the Steam library.
+pub fn isolate_all_steam_game_prefixes() -> Result<usize> {
+    let compatdata = paths::steam_compat_data_dir();
+    let mut count = 0;
+    if compatdata.is_dir() {
+        if let Ok(entries) = fs::read_dir(&compatdata) {
+            for entry in entries.flatten() {
+                let p = entry.path();
+                if p.is_dir() {
+                    let pfx = p.join("pfx");
+                    if pfx.is_dir() && isolate_user_shell_folders(&pfx).is_ok() {
+                        count += 1;
+                    }
+                }
+            }
+        }
+    }
+    Ok(count)
 }
 
 pub fn configure_prefix_registry(prefix_dir: &Path, runner_dir: &Path) -> Result<()> {
@@ -59,6 +127,17 @@ pub fn configure_prefix_registry(prefix_dir: &Path, runner_dir: &Path) -> Result
 
 [HKEY_CURRENT_USER\Software\Wine\WineDbg]
 "ShowCrashDialog"=dword:00000000
+
+[HKEY_CURRENT_USER\Software\Wine\DllOverrides]
+"winemenubuilder.exe"=""
+
+[HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders]
+"Desktop"="%USERPROFILE%\\Desktop"
+"Personal"="%USERPROFILE%\\Documents"
+"{374DE290-123F-4565-9164-39C4925E467B}"="%USERPROFILE%\\Downloads"
+"My Music"="%USERPROFILE%\\Music"
+"My Pictures"="%USERPROFILE%\\Pictures"
+"My Video"="%USERPROFILE%\\Videos"
 "#;
 
     fs::write(&reg_file, reg_content)?;
@@ -207,5 +286,43 @@ mod tests {
         assert!(sys32.is_dir());
         let syswow64 = prefix_dir.path().join("drive_c/windows/syswow64");
         assert!(syswow64.is_dir());
+    }
+
+    #[test]
+    fn test_isolate_user_shell_folders() {
+        let prefix_dir = tempdir().unwrap();
+        let user_dir = prefix_dir.path().join("drive_c/users/testuser");
+        fs::create_dir_all(&user_dir).unwrap();
+
+        // Create a dummy host directory outside the prefix
+        let host_dir = tempdir().unwrap();
+        let host_desktop = host_dir.path().join("Desktop");
+        let host_downloads = host_dir.path().join("Downloads");
+        fs::create_dir_all(&host_desktop).unwrap();
+        fs::create_dir_all(&host_downloads).unwrap();
+
+        // Simulate Wine's symlinks
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(&host_desktop, user_dir.join("Desktop")).unwrap();
+            std::os::unix::fs::symlink(&host_downloads, user_dir.join("Downloads")).unwrap();
+            assert!(user_dir.join("Desktop").is_symlink());
+            assert!(user_dir.join("Downloads").is_symlink());
+        }
+
+        isolate_user_shell_folders(prefix_dir.path()).unwrap();
+
+        let desktop = user_dir.join("Desktop");
+        let downloads = user_dir.join("Downloads");
+        let documents = user_dir.join("Documents");
+
+        assert!(desktop.is_dir());
+        assert!(!desktop.is_symlink(), "Desktop must no longer be a symlink");
+        assert!(downloads.is_dir());
+        assert!(
+            !downloads.is_symlink(),
+            "Downloads must no longer be a symlink"
+        );
+        assert!(documents.is_dir());
     }
 }

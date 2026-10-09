@@ -747,6 +747,75 @@ pub fn find_gptk_components(custom_path: Option<&Path>) -> Result<Option<(PathBu
     Ok(None)
 }
 
+/// Detects the version of Apple Game Porting Toolkit (GPTK) from D3DMetal.framework
+/// plists (version.plist / Info.plist) or directory naming conventions.
+pub fn detect_gptk_version(custom_path: Option<&Path>) -> Option<String> {
+    // 1. Try to inspect D3DMetal.framework plists
+    if let Ok(Some((fw, _))) = find_gptk_components(custom_path) {
+        let candidates = [
+            fw.join("Resources/version.plist"),
+            fw.join("Versions/Current/Resources/version.plist"),
+            fw.join("version.plist"),
+            fw.join("Resources/Info.plist"),
+            fw.join("Versions/Current/Resources/Info.plist"),
+            fw.join("Info.plist"),
+        ];
+
+        for c in &candidates {
+            if c.is_file() {
+                if let Ok(plist::Value::Dictionary(dict)) = plist::Value::from_file(c) {
+                    if let Some(plist::Value::String(ver)) = dict.get("CFBundleShortVersionString")
+                    {
+                        let trimmed = ver.trim();
+                        if !trimmed.is_empty() {
+                            return Some(trimmed.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 2. Fallback to runner directory name or custom path naming
+    let paths_to_check = [
+        custom_path.map(Path::to_path_buf),
+        find_gptk_runner(),
+        Some(paths::runners_dir().join("gptk-4-beta2")),
+        Some(paths::runners_dir().join("gptk-4")),
+    ];
+
+    for p_opt in paths_to_check.into_iter().flatten() {
+        let p_str = p_opt.to_string_lossy().to_lowercase();
+        if p_str.contains("gptk-4-beta2") || p_str.contains("4.0b2") || p_str.contains("4.0_beta_2")
+        {
+            return Some("4.0b2".to_string());
+        } else if p_str.contains("gptk-4") || p_str.contains("4.0") {
+            return Some("4.0".to_string());
+        } else if p_str.contains("gptk-2") || p_str.contains("2.0") {
+            return Some("2.0".to_string());
+        }
+    }
+
+    None
+}
+
+/// Formats the raw GPTK version into a clean, human-readable display string for Steam dropdowns.
+/// e.g. "4.0b2" -> "4.0 Beta 2", "4.0" -> "4.0", "2.0" -> "2.0"
+pub fn format_gptk_version(raw_ver: &str) -> String {
+    let lower = raw_ver.to_lowercase();
+    if lower == "4.0b2" || lower == "4.0-beta2" || lower == "4.0_beta_2" {
+        "4.0 Beta 2".to_string()
+    } else if lower == "4.0b1" || lower == "4.0-beta1" || lower == "4.0_beta_1" {
+        "4.0 Beta 1".to_string()
+    } else if lower == "2.0b1" || lower == "2.0-beta1" {
+        "2.0 Beta 1".to_string()
+    } else if let Some(stripped) = lower.strip_prefix('v') {
+        stripped.to_string()
+    } else {
+        raw_ver.to_string()
+    }
+}
+
 /// Recursively copies a directory tree including files, directories, and symlinks.
 fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
     fs::create_dir_all(dst)?;
@@ -1277,5 +1346,39 @@ mod tests {
         let val: serde_json::Value = serde_json::from_str(&icd_content).unwrap();
         assert_eq!(val["ICD"]["api_version"], "1.4.2");
         assert_eq!(val["ICD"]["library_path"], dylib_path.to_str().unwrap());
+    }
+
+    #[test]
+    fn test_format_gptk_version() {
+        assert_eq!(format_gptk_version("4.0b2"), "4.0 Beta 2");
+        assert_eq!(format_gptk_version("4.0-beta2"), "4.0 Beta 2");
+        assert_eq!(format_gptk_version("4.0b1"), "4.0 Beta 1");
+        assert_eq!(format_gptk_version("2.0b1"), "2.0 Beta 1");
+        assert_eq!(format_gptk_version("v4.0"), "4.0");
+        assert_eq!(format_gptk_version("4.0"), "4.0");
+        assert_eq!(format_gptk_version("2.0"), "2.0");
+    }
+
+    #[test]
+    fn test_detect_gptk_version_from_plist() {
+        let dir = tempdir().unwrap();
+        let fw = dir.path().join("D3DMetal.framework");
+        let res = fw.join("Resources");
+        fs::create_dir_all(&res).unwrap();
+        let shared = dir.path().join("libd3dshared.dylib");
+        fs::write(&shared, "fake").unwrap();
+
+        let plist_content = r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleShortVersionString</key>
+    <string>4.0b2</string>
+</dict>
+</plist>"#;
+        fs::write(res.join("version.plist"), plist_content).unwrap();
+
+        let detected = detect_gptk_version(Some(dir.path()));
+        assert_eq!(detected, Some("4.0b2".to_string()));
     }
 }

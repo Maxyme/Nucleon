@@ -189,7 +189,7 @@ If an optional backend is not detected or configured (such as KosmicKrisp), its 
 | Option Label | Tool ID | Runner Runtime | Graphics Translation Backend | Best For |
 | :--- | :--- | :--- | :--- | :--- |
 | **`Nucleon (Wine + Automatic Graphics Backend)`** | `nucleon` | Active Wine | *Auto-detected* (KosmicKrisp / WineD3D) | **Recommended (Wine Default)**: Runs on Wine only. Automatically inspects binary imports and routes to the optimal Wine graphics backend (KosmicKrisp Vulkan for DX11/12/Vulkan vs WineD3D for legacy). |
-| **`Nucleon (GPTK + Apple D3DMetal)`** | `nucleon-gptk` | Apple GPTK Wine | **Apple D3DMetal** (Metal 4, MSync, MetalFX) | **Separate Option**: Directly forces Apple Game Porting Toolkit 4 Wine with native D3DMetal translation for modern DirectX 11 & DirectX 12 games. |
+| **`Nucleon (GPTK <version> + Apple D3DMetal)`** *(e.g. GPTK 4.0 Beta 2)* | `nucleon-gptk` | Apple GPTK Wine | **Apple D3DMetal** (Metal 4, MSync, MetalFX) | **Separate Option**: Directly forces Apple Game Porting Toolkit Wine with native D3DMetal translation for modern DirectX 11 & DirectX 12 games. The detected GPTK version is dynamically reflected in the label. |
 | **`Nucleon (Wine + Mesa KosmicKrisp Vulkan)`** | `nucleon-kosmickrisp` | Active Wine | **Mesa KosmicKrisp Vulkan 1.4** (VKD3D-Proton / D7VK / DXVK) | Direct manual selection of Vulkan 1.4 driver on Metal 4 under Wine. Translates DX12 via VKD3D-Proton, DirectDraw/DX1–7 via D7VK, and native Vulkan. |
 | **`Nucleon (Wine + WineD3D OpenGL)`** | `nucleon-wine` | Active Wine (Staging/CrossOver/etc.) | **WineD3D (macOS OpenGL 4.1)** | Direct manual selection of WineD3D for legacy DirectX 9, DirectX 10, and OpenGL titles. |
 
@@ -427,6 +427,16 @@ Nucleon automatically inspects and resolves nested CrossOver bundle paths (such 
 - **Kernel-level Process Table Tracking**: Uses `sysinfo` to monitor running processes directly via OS APIs instead of polling `/bin/ps` every 500ms.
 - **Recursive Process Tree Termination (`kill_tree`)**: When a termination signal (`SIGTERM` or Steam "Stop") is received, Nucleon traverses the process hierarchy to recursively terminate the child process and all its descendants.
 - **Prefix Isolation**: Identifies and terminates orphaned background Wine processes associated with the prefix while leaving unrelated system processes untouched.
+
+### Sandboxed User Folders (Zero Invasive Permissions)
+
+By default, legacy Wine symlinks user shell folders (`Desktop`, `Downloads`, `Documents`) to the host Mac's `~/Desktop` and `~/Downloads`, which causes macOS Sequoia TCC to display invasive privacy permission prompts (*"nucleon would like to access files in your Desktop/Downloads folder"*) whenever games launch.
+
+Nucleon automatically sandboxes each Wine prefix:
+- **Symlink Elimination**: Replaces host `Desktop`, `Downloads`, and `Documents` symlinks with local isolated directories inside `drive_c/users/<user>/`.
+- **Registry Confinement**: Redirects Windows `User Shell Folders` strictly inside `%USERPROFILE%`.
+- **Menu Builder Disabled**: Suppresses `winemenubuilder.exe` to prevent Wine from attempting to register shortcuts on the host Mac Desktop.
+- **Result**: Windows games and Wine run in a clean, self-contained sandbox with **zero Desktop or Downloads permission prompts**.
 
 ### Remaining unsafe Code (By Design)
 The remaining unsafe blocks are strictly confined to places where foreign binary interaction is inherently required:
