@@ -119,117 +119,48 @@ pub const DEFAULT_ARM64_TEMPLATE_JSON: &str = include_str!("../../../assets/temp
 
 /// Extracts the ARM64 slice from a Mach-O binary (supporting Fat/Universal and single-arch binaries).
 pub fn extract_arm64_slice(dylib_bytes: &[u8]) -> Result<&[u8]> {
+    use object::macho;
+    use object::read::macho::{FatArch, MachHeader, MachOFatFile32, MachOFatFile64};
+    use object::Architecture;
+
     if dylib_bytes.len() < 8 {
         anyhow::bail!("File too small to be a valid Mach-O binary");
     }
 
-    let magic = u32::from_be_bytes([
-        dylib_bytes[0],
-        dylib_bytes[1],
-        dylib_bytes[2],
-        dylib_bytes[3],
-    ]);
-
-    if magic == 0xcafebabe {
-        let nfat_arch = u32::from_be_bytes([
-            dylib_bytes[4],
-            dylib_bytes[5],
-            dylib_bytes[6],
-            dylib_bytes[7],
-        ]) as usize;
-
-        for i in 0..nfat_arch {
-            let offset_entry = 8 + i * 20;
-            if dylib_bytes.len() < offset_entry + 20 {
-                break;
-            }
-            let cputype = u32::from_be_bytes([
-                dylib_bytes[offset_entry],
-                dylib_bytes[offset_entry + 1],
-                dylib_bytes[offset_entry + 2],
-                dylib_bytes[offset_entry + 3],
-            ]);
-            let offset = u32::from_be_bytes([
-                dylib_bytes[offset_entry + 8],
-                dylib_bytes[offset_entry + 9],
-                dylib_bytes[offset_entry + 10],
-                dylib_bytes[offset_entry + 11],
-            ]) as usize;
-            let size = u32::from_be_bytes([
-                dylib_bytes[offset_entry + 12],
-                dylib_bytes[offset_entry + 13],
-                dylib_bytes[offset_entry + 14],
-                dylib_bytes[offset_entry + 15],
-            ]) as usize;
-
-            // CPU_TYPE_ARM64 = 0x0100000C
-            if cputype == 0x0100000c && dylib_bytes.len() >= offset + size {
-                return Ok(&dylib_bytes[offset..offset + size]);
+    // 1. Try parsing as a 32-bit Universal (Fat) binary (0xcafebabe)
+    if let Ok(fat) = MachOFatFile32::parse(dylib_bytes) {
+        for arch in fat.arches() {
+            if arch.architecture() == Architecture::Aarch64 {
+                return arch
+                    .data(dylib_bytes)
+                    .map_err(|e| anyhow::anyhow!("Corrupt arm64 slice in universal binary: {e}"));
             }
         }
         anyhow::bail!("arm64 slice not found in Mach-O universal binary");
     }
 
-    if magic == 0xcafebabf {
-        let nfat_arch = u32::from_be_bytes([
-            dylib_bytes[4],
-            dylib_bytes[5],
-            dylib_bytes[6],
-            dylib_bytes[7],
-        ]) as usize;
-
-        for i in 0..nfat_arch {
-            let offset_entry = 8 + i * 32;
-            if dylib_bytes.len() < offset_entry + 32 {
-                break;
-            }
-            let cputype = u32::from_be_bytes([
-                dylib_bytes[offset_entry],
-                dylib_bytes[offset_entry + 1],
-                dylib_bytes[offset_entry + 2],
-                dylib_bytes[offset_entry + 3],
-            ]);
-            let offset = u64::from_be_bytes([
-                dylib_bytes[offset_entry + 8],
-                dylib_bytes[offset_entry + 9],
-                dylib_bytes[offset_entry + 10],
-                dylib_bytes[offset_entry + 11],
-                dylib_bytes[offset_entry + 12],
-                dylib_bytes[offset_entry + 13],
-                dylib_bytes[offset_entry + 14],
-                dylib_bytes[offset_entry + 15],
-            ]) as usize;
-            let size = u64::from_be_bytes([
-                dylib_bytes[offset_entry + 16],
-                dylib_bytes[offset_entry + 17],
-                dylib_bytes[offset_entry + 18],
-                dylib_bytes[offset_entry + 19],
-                dylib_bytes[offset_entry + 20],
-                dylib_bytes[offset_entry + 21],
-                dylib_bytes[offset_entry + 22],
-                dylib_bytes[offset_entry + 23],
-            ]) as usize;
-
-            // CPU_TYPE_ARM64 = 0x0100000C
-            if cputype == 0x0100000c && dylib_bytes.len() >= offset + size {
-                return Ok(&dylib_bytes[offset..offset + size]);
+    // 2. Try parsing as a 64-bit Universal (Fat) binary (0xcafebabf)
+    if let Ok(fat) = MachOFatFile64::parse(dylib_bytes) {
+        for arch in fat.arches() {
+            if arch.architecture() == Architecture::Aarch64 {
+                return arch.data(dylib_bytes).map_err(|e| {
+                    anyhow::anyhow!("Corrupt arm64 slice in 64-bit universal binary: {e}")
+                });
             }
         }
         anyhow::bail!("arm64 slice not found in Mach-O 64-bit universal binary");
     }
 
-    // Single 64-bit Mach-O binary check (MH_MAGIC_64 = 0xfeedfacf)
-    let magic_le = u32::from_le_bytes([
-        dylib_bytes[0],
-        dylib_bytes[1],
-        dylib_bytes[2],
-        dylib_bytes[3],
-    ]);
-    if magic_le == 0xfeedfacf {
-        return Ok(dylib_bytes);
+    // 3. Check if it's already a single-arch 64-bit ARM64 Mach-O binary
+    if let Ok(header) = macho::MachHeader64::<object::Endianness>::parse(dylib_bytes, 0) {
+        let is_arm64 = header.cputype(object::Endianness::Little) == macho::CPU_TYPE_ARM64
+            || header.cputype(object::Endianness::Big) == macho::CPU_TYPE_ARM64;
+        if is_arm64 {
+            return Ok(dylib_bytes);
+        }
     }
 
-    anyhow::bail!("Unsupported Mach-O magic: 0x{:08x}", magic);
+    anyhow::bail!("Unsupported or non-arm64 Mach-O binary");
 }
 
 /// Matches an Array of Bytes (AOB) with ?? wildcards against memory slice using memchr acceleration.
@@ -437,6 +368,27 @@ mod tests {
         let slice = extract_arm64_slice(&buf).expect("should extract arm64 slice");
         assert_eq!(slice.len(), 0x30);
         assert_eq!(slice[0], 0x42);
+    }
+
+    #[test]
+    fn test_extract_arm64_slice_fat64_universal() {
+        let mut buf = vec![0u8; 0x100];
+        buf[0..4].copy_from_slice(&0xcafebabfu32.to_be_bytes());
+        buf[4..8].copy_from_slice(&1u32.to_be_bytes());
+
+        // Arch 0: arm64 in 64-bit fat header (each entry is 32 bytes)
+        buf[8..12].copy_from_slice(&0x0100000cu32.to_be_bytes()); // cputype
+        buf[12..16].copy_from_slice(&0u32.to_be_bytes()); // cpusubtype
+        buf[16..24].copy_from_slice(&0x50u64.to_be_bytes()); // offset (8 bytes)
+        buf[24..32].copy_from_slice(&0x20u64.to_be_bytes()); // size (8 bytes)
+        buf[32..36].copy_from_slice(&14u32.to_be_bytes()); // align (4 bytes)
+        buf[36..40].copy_from_slice(&0u32.to_be_bytes()); // reserved (4 bytes)
+
+        buf[0x50..0x70].fill(0x77);
+
+        let slice = extract_arm64_slice(&buf).expect("should extract arm64 slice from fat64");
+        assert_eq!(slice.len(), 0x20);
+        assert_eq!(slice[0], 0x77);
     }
 
     #[test]
