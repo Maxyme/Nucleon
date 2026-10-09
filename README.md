@@ -3,9 +3,9 @@
 **Nucleon** enables the native macOS Steam client to download and run Windows games (DirectX, Vulkan, and legacy Direct3D/openGL) directly from the Steam library. 
 It adds a steam play compatibility tab in the game property to allow choosing a runtime and graphical backend.
 
-Note, a runner and graphical backend is required, such as Apple Game Porting Toolkit (GPTK 4) or wine with Mesa KosmicKrisp (Vulkan 1.4 and Zink for OpenGL). These can easily be setup within **Nucleon**.
+Note, a runner and graphical backend is required, such as [Apple Game Porting Toolkit - GPTK](https://developer.apple.com/games/game-porting-toolkit/)) or [wine](https://www.winehq.org/) with a selected D3D layer and Mesa KosmicKrisp. These can easily be setup within **Nucleon**.
 
-No external launcher application, virtual machine, or emulation container required. Nucleon requires **no commercial software** (CrossOver is optional) and can run most DX11 & DX12 games using GPTK 4. Other directX versions can be run using either dxvk or D7VK.
+No external launcher application, virtual machine, or emulation container required. Nucleon requires **no commercial software** (CrossOver is optional) and can run most games using GPTK 4 or Wine.
 
 ---
 
@@ -24,7 +24,7 @@ sudo cp nucleon-release/nucleon /usr/local/bin/
 ```
 
 #### Option B: Build from Source
-Building from source requires the [Rust](https://rustup.rs/) toolchain (Rust 1.80 or newer), Xcode Command Line Tools, and `just`:
+Building from source requires the [Rust](https://rustup.rs/) toolchain (Rust 1.80 or newer), [Xcode Command Line Tools](https://developer.apple.com/documentation/xcode/installing-the-command-line-tools), and [just](https://github.com/casey/just):
 
 ```bash
 # Install Rust toolchain (if not already installed)
@@ -63,8 +63,9 @@ Recommended for modern DirectX 11 and DirectX 12 games requiring Apple's native 
 
 ---
 
-### 3. Install Wine Runtimes
+### 3. (optional) Installing Wine Runtimes
 
+Nucleon can also run games using Wine and various D3D layers.
 Nucleon automatically detects installed Wine versions (including Wine-Staging or CrossOver), or you can install or link a custom Wine build:
 
 ```bash
@@ -85,9 +86,11 @@ nucleon wine add my-wine /path/to/wine --use-now
 
 ---
 
-### 4. Optional Graphics Translation Backends
+### 4. (optional) Installing Graphics Translation Backends
 
-#### A. Mesa KosmicKrisp (Vulkan 1.4 ICD on Metal 4 & OpenGL via Zink) — Recommended First
+Nucleon has the option of using specifc Graphics Translation Backends and vulkan drivers when using wine.
+
+#### A. Mesa KosmicKrisp (Vulkan 1.4 ICD on Metal 4 & OpenGL via Zink)
 Provides a Khronos-conformant Vulkan 1.4 driver on Apple Silicon, unlocking native Vulkan, VKD3D-Proton (DirectX 12), D7VK (DirectDraw / DX1–7), DXVK, and modern OpenGL 4.6 via Zink.
 1. Install KosmicKrisp via the [LunarG Vulkan SDK](https://vulkan.lunarg.com/sdk/home#mac) or build from Mesa.
 2. If installed in standard locations (`/opt/homebrew`, `/usr/local`, or `/Library/Frameworks/Vulkan.framework`), Nucleon detects it automatically. Otherwise, point Nucleon to your ICD JSON or driver directory:
@@ -138,11 +141,8 @@ Setup automates:
 3. Ad-hoc signing of Steam's binary for dynamic library interposing.
 4. Installation of the background Steam Update Guard LaunchAgent (`com.nucleon.steam-guard`).
 
-Restart Steam:
-```bash
-pkill steam_osx && open -a /Applications/Steam.app
-```
-Right-click any Windows game in your Steam Library -> **Properties** -> **Compatibility** -> select your preferred **Nucleon** compatibility tool!
+Restart Steam.
+Then right-click any Windows game in your Steam Library -> **Properties** -> **Compatibility** -> select your preferred **Nucleon** compatibility tool!
 
 ---
 
