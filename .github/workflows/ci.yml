@@ -91,24 +91,20 @@ jobs:
         run: |
           cargo build --release --target aarch64-apple-darwin \
             -p nucleon-cli \
-            -p nucleon-runner \
             -p nucleon-hook
 
       - name: Ad-hoc sign release binaries for Apple Silicon
         run: |
           RELEASE_DIR="target/aarch64-apple-darwin/release"
           codesign -fs - "${RELEASE_DIR}/nucleon"
-          codesign -fs - "${RELEASE_DIR}/nucleon-runner"
           codesign -fs - "${RELEASE_DIR}/libnucleon.dylib"
 
       - name: Verify Mach-O thin arm64 format & ad-hoc signatures
         run: |
           RELEASE_DIR="target/aarch64-apple-darwin/release"
           file "${RELEASE_DIR}/nucleon"
-          file "${RELEASE_DIR}/nucleon-runner"
           file "${RELEASE_DIR}/libnucleon.dylib"
           codesign -dv "${RELEASE_DIR}/nucleon"
-          codesign -dv "${RELEASE_DIR}/nucleon-runner"
           codesign -dv "${RELEASE_DIR}/libnucleon.dylib"
 
       - name: Package release bundle
@@ -116,9 +112,9 @@ jobs:
           BUNDLE_DIR="nucleon-macos-arm64"
           mkdir -p "${BUNDLE_DIR}/assets"
 
-          # Distribute binaries and hook
+          # Distribute single binary, backwards-compatible runner symlink, and hook
           cp target/aarch64-apple-darwin/release/nucleon "${BUNDLE_DIR}/"
-          cp target/aarch64-apple-darwin/release/nucleon-runner "${BUNDLE_DIR}/"
+          ln -sf nucleon "${BUNDLE_DIR}/nucleon-runner"
           cp target/aarch64-apple-darwin/release/libnucleon.dylib "${BUNDLE_DIR}/"
 
           # Distribute manifests and AoB templates

@@ -1,11 +1,13 @@
 use super::ui;
-use anyhow::Result;
+use anyhow::{bail, Result};
 use nucleon_core::{d7vk, guard, manifest, paths, runner, signatures, steam, vkd3d, wine};
 use std::fs;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Default)]
 pub struct SetupArgs {
+    pub non_interactive: bool,
     pub force: bool,
     pub kosmickrisp: bool,
     pub kosmickrisp_path: Option<PathBuf>,
@@ -20,7 +22,410 @@ pub struct SetupArgs {
     pub bridge_path: Option<PathBuf>,
 }
 
-pub fn run(args: SetupArgs) -> Result<()> {
+fn read_user_input(prompt: &str) -> io::Result<String> {
+    print!("{prompt}");
+    io::stdout().flush()?;
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+    Ok(input.trim().to_string())
+}
+
+fn show_installation_guidance(component: &str) {
+    match component {
+        "gptk" => {
+            println!(
+                r#"
+--------------------------------------------------------------------------------
+[!] Apple Game Porting Toolkit 4 (D3DMetal) Not Detected:
+  Apple GPTK translates DirectX 11 and DirectX 12 games directly into Apple Metal.
+  To install Apple GPTK:
+    1. Download 'Game_Porting_Toolkit_4.0_beta_2.dmg' (or latest) from:
+       https://developer.apple.com/games/game-porting-toolkit/
+    2. Mount the dmg and extract components:
+       mkdir -p "$HOME/Developer/gptk"
+       cp -R "/Volumes/Game Porting Toolkit 4.0 beta 2/redist/lib/external/D3DMetal.framework" "$HOME/Developer/gptk/"
+       cp "/Volumes/Game Porting Toolkit 4.0 beta 2/redist/lib/external/libd3dshared.dylib" "$HOME/Developer/gptk/"
+    3. Register with Nucleon:
+       nucleon gptk set-path "$HOME/Developer/gptk"
+--------------------------------------------------------------------------------"#
+            );
+        }
+        "wine" => {
+            println!(
+                r#"
+--------------------------------------------------------------------------------
+[!] Wine Runtime Not Detected:
+  Nucleon requires a 64-bit Wine runtime (such as Wine-Staging or CrossOver).
+  To install Wine:
+    • Open-source Wine-Staging via Homebrew:
+        brew install --cask wine-staging
+    • Or if you have CrossOver installed in /Applications, Nucleon detects it automatically:
+        nucleon wine use crossover
+    • Or register any custom Wine installation:
+        nucleon wine add my-wine /path/to/wine --use-now
+--------------------------------------------------------------------------------"#
+            );
+        }
+        "kosmickrisp" => {
+            println!(
+                r#"
+--------------------------------------------------------------------------------
+[!] Mesa KosmicKrisp Vulkan Driver Not Detected:
+  KosmicKrisp provides a Khronos-conformant Vulkan 1.4 driver on Metal 4 for
+  Apple Silicon, enabling VKD3D-Proton (Direct3D 12) and D7VK (DirectDraw/DX1-7).
+  To install KosmicKrisp:
+    1. Download the macOS LunarG Vulkan SDK installer from:
+       https://vulkan.lunarg.com/sdk/home#mac
+    2. Run the installer (it installs into /Library/Frameworks/Vulkan.framework or /usr/local).
+    3. If installed to a custom directory, register it with Nucleon:
+       nucleon kosmickrisp set-path /path/to/libkosmickrisp_icd.json
+--------------------------------------------------------------------------------"#
+            );
+        }
+        "vkd3d" => {
+            println!(
+                r#"
+--------------------------------------------------------------------------------
+[!] VKD3D-Proton (Direct3D 12 -> Vulkan 1.4) Not Detected:
+  To install official VKD3D-Proton release binaries directly from GitHub:
+    nucleon vkd3d fetch
+  Or extract manually and configure:
+    nucleon vkd3d set-path /path/to/extracted/vkd3d-proton
+--------------------------------------------------------------------------------"#
+            );
+        }
+        "d7vk" => {
+            println!(
+                r#"
+--------------------------------------------------------------------------------
+[!] D7VK (DirectDraw / Direct3D 1-7 -> Vulkan 1.4) Not Detected:
+  To fetch official D7VK release binaries directly from GitHub:
+    nucleon d7vk fetch
+  Or extract manually and configure:
+    nucleon d7vk set-path /path/to/extracted/d7vk
+--------------------------------------------------------------------------------"#
+            );
+        }
+        _ => {}
+    }
+}
+
+fn interactive_customize_menu(args: &mut SetupArgs) -> Result<()> {
+    loop {
+        let gptk_status = match runner::find_gptk_components(args.gptk_path.as_deref()) {
+            Ok(Some(_)) => "✓ Detected",
+            _ => "✗ Not detected",
+        };
+
+        let wine_runtimes = wine::discover_wine_runtimes();
+        let selected_wine_display = if let Some(ref w) = args.wine {
+            format!("{w} (override)")
+        } else if let Some(ref wp) = args.wine_path {
+            format!("{} (custom path)", wp.display())
+        } else if let Some(active) = wine::get_active_wine_runtime() {
+            format!(
+                "{} [{}]",
+                active.name,
+                active.version.as_deref().unwrap_or("detected")
+            )
+        } else if !wine_runtimes.is_empty() {
+            format!("{} (auto)", wine_runtimes[0].name)
+        } else {
+            "✗ None detected".to_string()
+        };
+
+        let kk_detected = runner::is_kosmickrisp_installed();
+        let kk_status = if args.kosmickrisp_path.is_some() {
+            "✓ Custom path configured"
+        } else if args.kosmickrisp || kk_detected {
+            "✓ Enabled / Detected"
+        } else {
+            "○ Optional (not enabled)"
+        };
+
+        let vkd3d_status = if args.fetch_vkd3d {
+            "✓ Auto-fetch from GitHub"
+        } else if args.vkd3d_path.is_some() || vkd3d::find_vkd3d_proton().is_some() {
+            "✓ Detected / Custom path"
+        } else {
+            "○ Optional (not configured)"
+        };
+
+        let d7vk_status = if args.fetch_d7vk {
+            "✓ Auto-fetch from GitHub"
+        } else if args.d7vk_path.is_some() || d7vk::find_d7vk().is_some() {
+            "✓ Detected / Custom path"
+        } else {
+            "○ Optional (not configured)"
+        };
+
+        println!(
+            r#"
+Customize Nucleon Setup Options:
+  1) Apple Game Porting Toolkit 4 (GPTK 4): {gptk_status}
+  2) Wine Runtime:                         {selected_wine_display}
+  3) Mesa KosmicKrisp (Vulkan 1.4):        {kk_status}
+  4) VKD3D-Proton (Direct3D 12 -> Vulkan): {vkd3d_status}
+  5) D7VK (DirectDraw/DX1-7 -> Vulkan):    {d7vk_status}
+  6) Toggle Force Rebuild:                 {}
+  7) Return to main menu and proceed
+  8) Abort setup
+"#,
+            if args.force { "Enabled" } else { "Disabled" }
+        );
+
+        let choice = read_user_input("Select an option (1-8): ").unwrap_or_default();
+        match choice.as_str() {
+            "1" => {
+                println!("\nConfigure Apple GPTK 4:");
+                println!(
+                    "Enter directory path containing D3DMetal.framework and libd3dshared.dylib,"
+                );
+                println!("or type 'help' for instructions, or press Enter to keep current:");
+                let input = read_user_input("> ")?;
+                if input.eq_ignore_ascii_case("help") {
+                    show_installation_guidance("gptk");
+                } else if !input.is_empty() {
+                    let p = PathBuf::from(&input);
+                    if runner::inspect_gptk_dir(&p).is_some() {
+                        args.gptk_path = Some(p);
+                        ui::success("GPTK path validated and updated.");
+                    } else {
+                        ui::warn(format!("Could not find D3DMetal.framework in '{}'.", input));
+                        show_installation_guidance("gptk");
+                    }
+                }
+            }
+            "2" => {
+                println!("\nConfigure Wine Runtime:");
+                if wine_runtimes.is_empty() {
+                    ui::warn("No Wine runtimes automatically detected on this system.");
+                    show_installation_guidance("wine");
+                } else {
+                    println!("Discovered Wine runtimes:");
+                    for (i, rt) in wine_runtimes.iter().enumerate() {
+                        println!(
+                            "  {}) {} [{}] ({})",
+                            i + 1,
+                            rt.name,
+                            rt.version.as_deref().unwrap_or("unknown"),
+                            rt.root.display()
+                        );
+                    }
+                }
+                println!("\nEnter a number (1-{}), a runtime name/ID (e.g. 'crossover'), a path, or press Enter to keep current:", wine_runtimes.len());
+                let input = read_user_input("> ")?;
+                if !input.is_empty() {
+                    if let Ok(idx) = input.parse::<usize>() {
+                        if idx > 0 && idx <= wine_runtimes.len() {
+                            args.wine = Some(wine_runtimes[idx - 1].id.clone());
+                            ui::success(format!("Selected Wine: {}", wine_runtimes[idx - 1].name));
+                            continue;
+                        }
+                    }
+                    let p = PathBuf::from(&input);
+                    if p.is_dir() && wine::inspect_wine_dir(&p, None, None).is_some() {
+                        args.wine_path = Some(p);
+                        ui::success("Custom Wine path updated.");
+                    } else {
+                        args.wine = Some(input);
+                        ui::success("Wine preference updated.");
+                    }
+                }
+            }
+            "3" => {
+                println!("\nConfigure Mesa KosmicKrisp Vulkan Driver:");
+                println!("  e) Enable with auto-detected/standard path");
+                println!("  p) Set custom path to libkosmickrisp_icd.json or driver directory");
+                println!("  h) View installation instructions");
+                println!("  d) Disable KosmicKrisp");
+                let sub = read_user_input("Select (e/p/h/d): ")?;
+                match sub.to_lowercase().as_str() {
+                    "e" => {
+                        args.kosmickrisp = true;
+                        if !runner::is_kosmickrisp_installed() {
+                            show_installation_guidance("kosmickrisp");
+                        } else {
+                            ui::success("KosmicKrisp enabled.");
+                        }
+                    }
+                    "p" => {
+                        let path_str =
+                            read_user_input("Enter path to KosmicKrisp ICD JSON or directory: ")?;
+                        if !path_str.is_empty() {
+                            args.kosmickrisp_path = Some(PathBuf::from(path_str));
+                            args.kosmickrisp = true;
+                            ui::success("KosmicKrisp path updated.");
+                        }
+                    }
+                    "h" => show_installation_guidance("kosmickrisp"),
+                    "d" => {
+                        args.kosmickrisp = false;
+                        args.kosmickrisp_path = None;
+                        ui::info("KosmicKrisp disabled.");
+                    }
+                    _ => {}
+                }
+            }
+            "4" => {
+                println!("\nConfigure VKD3D-Proton (Direct3D 12 -> Vulkan):");
+                println!("  f) Automatically fetch latest from official GitHub release");
+                println!("  p) Set path to locally extracted VKD3D-Proton directory");
+                println!("  h) View installation instructions");
+                println!("  d) Disable / keep optional");
+                let sub = read_user_input("Select (f/p/h/d): ")?;
+                match sub.to_lowercase().as_str() {
+                    "f" => {
+                        args.fetch_vkd3d = true;
+                        ui::success("VKD3D-Proton will be downloaded during setup.");
+                    }
+                    "p" => {
+                        let path_str = read_user_input("Enter path to VKD3D-Proton directory: ")?;
+                        if !path_str.is_empty() {
+                            args.vkd3d_path = Some(PathBuf::from(path_str));
+                            ui::success("VKD3D-Proton path updated.");
+                        }
+                    }
+                    "h" => show_installation_guidance("vkd3d"),
+                    "d" => {
+                        args.fetch_vkd3d = false;
+                        args.vkd3d_path = None;
+                    }
+                    _ => {}
+                }
+            }
+            "5" => {
+                println!("\nConfigure D7VK (DirectDraw / Direct3D 1-7 -> Vulkan):");
+                println!("  f) Automatically fetch latest from official GitHub release");
+                println!("  p) Set path to locally extracted D7VK directory");
+                println!("  h) View installation instructions");
+                println!("  d) Disable / keep optional");
+                let sub = read_user_input("Select (f/p/h/d): ")?;
+                match sub.to_lowercase().as_str() {
+                    "f" => {
+                        args.fetch_d7vk = true;
+                        ui::success("D7VK will be downloaded during setup.");
+                    }
+                    "p" => {
+                        let path_str = read_user_input("Enter path to D7VK directory: ")?;
+                        if !path_str.is_empty() {
+                            args.d7vk_path = Some(PathBuf::from(path_str));
+                            ui::success("D7VK path updated.");
+                        }
+                    }
+                    "h" => show_installation_guidance("d7vk"),
+                    "d" => {
+                        args.fetch_d7vk = false;
+                        args.d7vk_path = None;
+                    }
+                    _ => {}
+                }
+            }
+            "6" => {
+                args.force = !args.force;
+                ui::info(format!("Force rebuild set to: {}", args.force));
+            }
+            "7" => break,
+            "8" => bail!("Setup aborted by user."),
+            _ => println!("Invalid option, please choose between 1 and 8."),
+        }
+    }
+    Ok(())
+}
+
+fn prompt_interactive_setup(args: &mut SetupArgs) -> Result<()> {
+    println!(
+        r#"
+================================================================================
+                    Welcome to Nucleon Setup
+================================================================================
+Nucleon configures the native macOS Steam client to download and launch Windows
+games using Apple Game Porting Toolkit 4, Wine, and Mesa KosmicKrisp.
+
+Current Detected Configuration:
+  • Apple GPTK 4 (D3DMetal):  {}
+  • Active Wine Runtime:      {}
+  • Mesa KosmicKrisp (Vulkan):{}
+
+Options:
+  1) Proceed with setup (default)
+  2) Customize setup options (select Wine, configure GPTK / KosmicKrisp paths)
+  3) Cancel setup
+"#,
+        if runner::find_gptk_components(args.gptk_path.as_deref())
+            .ok()
+            .flatten()
+            .is_some()
+        {
+            "✓ Detected"
+        } else {
+            "✗ Not detected (help available in customize)"
+        },
+        if let Some(ref w) = args.wine {
+            format!("{w} (override)")
+        } else if let Some(active) = wine::get_active_wine_runtime() {
+            format!(
+                "{} [{}]",
+                active.name,
+                active.version.as_deref().unwrap_or("detected")
+            )
+        } else {
+            "✗ None detected (help available in customize)".to_string()
+        },
+        if args.kosmickrisp || runner::is_kosmickrisp_installed() {
+            "✓ Detected / Enabled"
+        } else {
+            "○ Optional (not detected)"
+        }
+    );
+
+    let choice = read_user_input("Select an option [1]: ").unwrap_or_default();
+    match choice.as_str() {
+        "" | "1" => {
+            // Verify minimum prerequisites and show instructions if missing
+            if runner::find_gptk_components(args.gptk_path.as_deref())
+                .ok()
+                .flatten()
+                .is_none()
+            {
+                show_installation_guidance("gptk");
+            }
+            if wine::get_active_wine_runtime().is_none()
+                && wine::discover_wine_runtimes().is_empty()
+            {
+                show_installation_guidance("wine");
+            }
+            Ok(())
+        }
+        "2" => {
+            interactive_customize_menu(args)?;
+            Ok(())
+        }
+        "3" => bail!("Setup cancelled by user."),
+        _ => {
+            println!("Invalid selection, proceeding with default setup...");
+            Ok(())
+        }
+    }
+}
+
+pub fn run(mut args: SetupArgs) -> Result<()> {
+    let has_explicit_flags = args.force
+        || args.kosmickrisp
+        || args.kosmickrisp_path.is_some()
+        || args.fetch_vkd3d
+        || args.vkd3d_path.is_some()
+        || args.fetch_d7vk
+        || args.d7vk_path.is_some()
+        || args.wine.is_some()
+        || args.wine_path.is_some()
+        || args.gptk_path.is_some()
+        || args.bridge_path.is_some();
+
+    if !args.non_interactive && !has_explicit_flags {
+        prompt_interactive_setup(&mut args)?;
+    }
+
     ui::header("Setting up Nucleon with Wine and GPTK 4...");
     paths::ensure_dirs()?;
 
@@ -198,6 +603,9 @@ pub fn run(args: SetupArgs) -> Result<()> {
             PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/release/nucleon-runner");
         if target_runner.exists() {
             fs::copy(&target_runner, &runner_bin)?;
+        } else {
+            // Consolidated single binary: nucleon acts as its own runner via multi-call or 'runner' subcommand
+            fs::copy(&current_exe, &runner_bin)?;
         }
     }
 

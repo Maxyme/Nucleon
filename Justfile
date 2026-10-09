@@ -9,9 +9,10 @@ default: build
 # Build all release binaries and universal hook dylib
 build: build-hook build-bins
 
-# Build CLI and runner release binaries
+# Build CLI release binary (single binary embedding runner)
 build-bins:
-    cargo build --release -p nucleon-cli -p nucleon-runner
+	cargo build --release -p nucleon-cli
+	ln -sf nucleon {{target_dir}}/nucleon-runner
 
 # Build universal Mach-O hook dylib (arm64 + x86_64)
 build-hook:
@@ -89,21 +90,20 @@ check: fmt-check lint test
 
 # Build and package the release bundle (thin arm64) for Apple Silicon
 package:
-    @echo "==> Building thin arm64 release binaries and hook..."
-    cargo build --release --target aarch64-apple-darwin -p nucleon-cli -p nucleon-runner -p nucleon-hook
-    @echo "==> Applying ad-hoc codesignatures..."
-    codesign -fs - target/aarch64-apple-darwin/release/nucleon
-    codesign -fs - target/aarch64-apple-darwin/release/nucleon-runner
-    codesign -fs - target/aarch64-apple-darwin/release/libnucleon.dylib
-    @echo "==> Assembling release bundle directory..."
-    rm -rf target/nucleon-macos-arm64 target/nucleon-macos-arm64.tar.gz
-    mkdir -p target/nucleon-macos-arm64/assets
-    cp target/aarch64-apple-darwin/release/nucleon target/nucleon-macos-arm64/
-    cp target/aarch64-apple-darwin/release/nucleon-runner target/nucleon-macos-arm64/
-    cp target/aarch64-apple-darwin/release/libnucleon.dylib target/nucleon-macos-arm64/
-    cp assets/bridge-manifest.json target/nucleon-macos-arm64/assets/
-    cp assets/template.json target/nucleon-macos-arm64/assets/
-    cp README.md target/nucleon-macos-arm64/ 2>/dev/null || true
-    tar -czvf target/nucleon-macos-arm64.tar.gz -C target/nucleon-macos-arm64 .
-    @echo "✓ Release bundle created at target/nucleon-macos-arm64.tar.gz"
+	@echo "==> Building thin arm64 release binary and hook..."
+	cargo build --release --target aarch64-apple-darwin -p nucleon-cli -p nucleon-hook
+	@echo "==> Applying ad-hoc codesignatures..."
+	codesign -fs - target/aarch64-apple-darwin/release/nucleon
+	codesign -fs - target/aarch64-apple-darwin/release/libnucleon.dylib
+	@echo "==> Assembling release bundle directory..."
+	rm -rf target/nucleon-macos-arm64 target/nucleon-macos-arm64.tar.gz
+	mkdir -p target/nucleon-macos-arm64/assets
+	cp target/aarch64-apple-darwin/release/nucleon target/nucleon-macos-arm64/
+	ln -sf nucleon target/nucleon-macos-arm64/nucleon-runner
+	cp target/aarch64-apple-darwin/release/libnucleon.dylib target/nucleon-macos-arm64/
+	cp assets/bridge-manifest.json target/nucleon-macos-arm64/assets/
+	cp assets/template.json target/nucleon-macos-arm64/assets/
+	cp README.md target/nucleon-macos-arm64/ 2>/dev/null || true
+	tar -czvf target/nucleon-macos-arm64.tar.gz -C target/nucleon-macos-arm64 .
+	@echo "✓ Release bundle created at target/nucleon-macos-arm64.tar.gz"
 

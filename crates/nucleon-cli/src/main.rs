@@ -23,6 +23,9 @@ struct Cli {
 enum Commands {
     /// Perform end-to-end setup of Nucleon, Wine runtime, Apple GPTK 4, and Steam compatibility tool
     Setup {
+        /// Run setup non-interactively with defaults or provided flags (skips the interactive prompt)
+        #[arg(short = 'y', long)]
+        non_interactive: bool,
         /// Force re-assembly of runner and reinstall of components
         #[arg(short, long)]
         force: bool,
@@ -135,14 +138,37 @@ enum Commands {
         #[arg(short, long)]
         follow: bool,
     },
+    /// Internal compatibility tool runner invoked by Steam (or via symlink 'nucleon-runner')
+    #[command(external_subcommand)]
+    Runner(Vec<String>),
 }
 
 fn main() -> Result<()> {
     env_logger::init();
+
+    // Multi-call binary support: if invoked as 'nucleon-runner', dispatch directly to runner
+    let raw_args: Vec<String> = std::env::args().collect();
+    if let Some(arg0) = raw_args.first() {
+        let exe_name = std::path::Path::new(arg0)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("");
+        if exe_name == "nucleon-runner" {
+            return nucleon_runner::run_with_args(&raw_args);
+        }
+    }
+
+    // Direct invocation via 'nucleon runner <verb> [args...]'
+    if raw_args.len() >= 2 && raw_args[1] == "runner" {
+        let mut runner_args = vec![raw_args[0].clone()];
+        runner_args.extend_from_slice(&raw_args[2..]);
+        return nucleon_runner::run_with_args(&runner_args);
+    }
     let cli = Cli::parse();
 
     match cli.command {
         Commands::Setup {
+            non_interactive,
             force,
             kosmickrisp,
             kosmickrisp_path,
@@ -156,6 +182,7 @@ fn main() -> Result<()> {
             gptk_path,
             bridge_path,
         } => commands::setup::run(SetupArgs {
+            non_interactive,
             force,
             kosmickrisp,
             kosmickrisp_path,
@@ -187,5 +214,6 @@ fn main() -> Result<()> {
             runner,
             follow,
         } => commands::logs::run(lines, hook, runner, follow),
+        Commands::Runner(args) => nucleon_runner::run_with_args(&args),
     }
 }

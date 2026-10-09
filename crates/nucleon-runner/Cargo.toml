@@ -4,6 +4,10 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[lib]
+name = "nucleon_runner"
+path = "src/lib.rs"
+
 [[bin]]
 name = "nucleon-runner"
 path = "src/main.rs"

@@ -10,6 +10,7 @@ path = "src/main.rs"
 
 [dependencies]
 nucleon-core = { path = "../nucleon-core" }
+nucleon-runner = { path = "../nucleon-runner" }
 anyhow = { workspace = true }
 clap = { workspace = true }
 log = { workspace = true }
