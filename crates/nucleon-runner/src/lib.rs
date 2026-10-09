@@ -409,9 +409,11 @@ pub fn run_with_args(args: &[String]) -> Result<()> {
     // Resolve optimal runner for selected engine
     let (mut runner_dir, active_engine) = runner::resolve_runner_for_engine(engine)?;
 
-    // If running under Wine (WineStaging, KosmicKrisp, or Auto), allow per-game NUCLEON_WINE launch override or NUCLEON_WINE_PATH
+    // If running under Wine (WineStaging, KosmicKrisp, Dxvk, Vkd3d, or Auto), allow per-game NUCLEON_WINE launch override or NUCLEON_WINE_PATH
     if active_engine == nucleon_core::detector::TargetEngine::WineStaging
         || active_engine == nucleon_core::detector::TargetEngine::KosmicKrisp
+        || active_engine == nucleon_core::detector::TargetEngine::Dxvk
+        || active_engine == nucleon_core::detector::TargetEngine::Vkd3d
         || active_engine == nucleon_core::detector::TargetEngine::Auto
     {
         if let Ok(wine_override) = env::var("NUCLEON_WINE") {
@@ -467,24 +469,37 @@ pub fn run_with_args(args: &[String]) -> Result<()> {
     prefix::ensure_prefix(&pfx_dir, &runner_dir)?;
 
     // Stage or unstage translation DLLs based on active engine:
-    // KosmicKrisp: stages VKD3D-Proton (Direct3D 12 -> Vulkan 1.4), D7VK (DirectDraw / D3D 1-7 -> Vulkan 1.4),
+    // KosmicKrisp / Dxvk / Vkd3d: stages VKD3D-Proton (Direct3D 12 -> Vulkan 1.4), D7VK (DirectDraw / D3D 1-7 -> Vulkan 1.4),
     // and DXVK (Direct3D 9/10/11 -> Vulkan 1.4)
     // Other engines (e.g. GPTK): unstages VKD3D-Proton, D7VK, and DXVK to use native D3DMetal/WineD3D without DLL override conflicts
-    if active_engine == nucleon_core::detector::TargetEngine::KosmicKrisp {
-        if let Some(vkd3d) = nucleon_core::vkd3d::find_vkd3d_proton() {
-            if let Ok(staged) =
-                nucleon_core::vkd3d::stage_vkd3d_proton_into_prefix(&vkd3d, &pfx_dir)
-            {
-                log_runner(&format!(
-                    "VKD3D-Proton active ({} DLL(s) from {}): Direct3D 12 -> Vulkan 1.4 -> KosmicKrisp",
-                    staged,
-                    vkd3d.root.display()
-                ));
+    let is_vulkan_engine = active_engine == nucleon_core::detector::TargetEngine::KosmicKrisp
+        || active_engine == nucleon_core::detector::TargetEngine::Dxvk
+        || active_engine == nucleon_core::detector::TargetEngine::Vkd3d;
+
+    if is_vulkan_engine {
+        if active_engine == nucleon_core::detector::TargetEngine::Vkd3d
+            || active_engine == nucleon_core::detector::TargetEngine::KosmicKrisp
+        {
+            if let Some(vkd3d) = nucleon_core::vkd3d::find_vkd3d_proton() {
+                if let Ok(staged) =
+                    nucleon_core::vkd3d::stage_vkd3d_proton_into_prefix(&vkd3d, &pfx_dir)
+                {
+                    log_runner(&format!(
+                        "VKD3D-Proton active ({} DLL(s) from {}): Direct3D 12 -> Vulkan 1.4 -> KosmicKrisp",
+                        staged,
+                        vkd3d.root.display()
+                    ));
+                }
+            } else if active_engine == nucleon_core::detector::TargetEngine::Vkd3d {
+                log_runner(
+                    "WARNING: VKD3D-Proton tool selected, but VKD3D-Proton is not installed. \
+                     Install via 'nucleon wine backends vkd3d fetch' or set VKD3D_PROTON_PATH.",
+                );
+            } else {
+                log_runner(
+                    "VKD3D-Proton not installed. Point to an extracted path via 'nucleon vkd3d set-path <DIR>' or set VKD3D_PROTON_PATH to enable Direct3D 12 on KosmicKrisp."
+                );
             }
-        } else {
-            log_runner(
-                "VKD3D-Proton not installed. Point to an extracted path via 'nucleon vkd3d set-path <DIR>' or set VKD3D_PROTON_PATH to enable Direct3D 12 on KosmicKrisp."
-            );
         }
 
         if let Some(d7vk) = nucleon_core::d7vk::find_d7vk() {
@@ -497,24 +512,33 @@ pub fn run_with_args(args: &[String]) -> Result<()> {
             }
         }
 
-        if let Some(dxvk) = nucleon_core::dxvk::find_dxvk() {
-            if let Ok(staged) = nucleon_core::dxvk::stage_dxvk_into_prefix(&dxvk, &pfx_dir) {
-                log_runner(&format!(
-                    "DXVK active ({} DLL(s) from {}): Direct3D 9/10/11 -> Vulkan 1.4 -> KosmicKrisp",
-                    staged,
-                    dxvk.root.display()
-                ));
-            }
-        } else {
-            let detection = nucleon_core::detector::detect_target_engine(&target_exe);
-            if detection.api == nucleon_core::detector::GraphicsApi::DirectX11 {
+        if active_engine == nucleon_core::detector::TargetEngine::Dxvk
+            || active_engine == nucleon_core::detector::TargetEngine::KosmicKrisp
+        {
+            if let Some(dxvk) = nucleon_core::dxvk::find_dxvk() {
+                if let Ok(staged) = nucleon_core::dxvk::stage_dxvk_into_prefix(&dxvk, &pfx_dir) {
+                    log_runner(&format!(
+                        "DXVK active ({} DLL(s) from {}): Direct3D 9/10/11 -> Vulkan 1.4 -> KosmicKrisp",
+                        staged,
+                        dxvk.root.display()
+                    ));
+                }
+            } else if active_engine == nucleon_core::detector::TargetEngine::Dxvk {
                 log_runner(
-                    "WARNING: KosmicKrisp has no Direct3D 11 translator active (DXVK not installed). \
-                     DirectX 11 titles will fail under WineD3D. \
-                     Recommended: Switch Steam compatibility tool to 'Nucleon (GPTK 4.0 Beta 2 + Apple D3DMetal)', \
-                     use a DXMT-enabled Wine runtime ('nucleon wine use wine-11.18-dxmt'), \
-                     or configure DXVK via 'nucleon wine backends dxvk set-path <DIR>'."
+                    "WARNING: DXVK tool selected, but DXVK is not installed. \
+                     Install via 'nucleon wine backends dxvk fetch' or set DXVK_PATH.",
                 );
+            } else {
+                let detection = nucleon_core::detector::detect_target_engine(&target_exe);
+                if detection.api == nucleon_core::detector::GraphicsApi::DirectX11 {
+                    log_runner(
+                        "WARNING: KosmicKrisp has no Direct3D 11 translator active (DXVK not installed). \
+                         DirectX 11 titles will fail under WineD3D. \
+                         Recommended: Switch Steam compatibility tool to 'Nucleon (GPTK 4.0 Beta 2 + Apple D3DMetal)', \
+                         use a DXMT-enabled Wine runtime ('nucleon wine use wine-11.18-dxmt'), \
+                         or configure DXVK via 'nucleon wine backends dxvk set-path <DIR>'."
+                    );
+                }
             }
         }
     } else {

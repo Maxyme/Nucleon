@@ -35,6 +35,8 @@ pub enum TargetEngine {
     Auto,
     Gptk,
     KosmicKrisp,
+    Dxvk,
+    Vkd3d,
     WineStaging,
 }
 
@@ -44,6 +46,8 @@ impl TargetEngine {
             TargetEngine::Auto => "auto",
             TargetEngine::Gptk => "gptk",
             TargetEngine::KosmicKrisp => "kosmickrisp",
+            TargetEngine::Dxvk => "dxvk",
+            TargetEngine::Vkd3d => "vkd3d",
             TargetEngine::WineStaging => "staging",
         }
     }
@@ -52,7 +56,9 @@ impl TargetEngine {
         match self {
             TargetEngine::Auto => "Wine + Automatic Graphics Backend",
             TargetEngine::Gptk => "GPTK + Apple D3DMetal",
-            TargetEngine::KosmicKrisp => "Wine + Mesa KosmicKrisp Vulkan",
+            TargetEngine::KosmicKrisp => "Wine + DXVK/VKD3D + Mesa KosmicKrisp Vulkan",
+            TargetEngine::Dxvk => "Wine + DXVK + Mesa KosmicKrisp Vulkan",
+            TargetEngine::Vkd3d => "Wine + VKD3D-Proton + Mesa KosmicKrisp Vulkan",
             TargetEngine::WineStaging => "Wine + WineD3D OpenGL",
         }
     }
@@ -61,6 +67,8 @@ impl TargetEngine {
         match s.to_lowercase().trim() {
             "auto" | "automatic" | "default" => Some(TargetEngine::Auto),
             "gptk" | "apple" | "d3dmetal" => Some(TargetEngine::Gptk),
+            "dxvk" => Some(TargetEngine::Dxvk),
+            "vkd3d" | "vkd3d-proton" => Some(TargetEngine::Vkd3d),
             "kosmickrisp" | "kk" | "kosmic" | "mesa" | "vulkan" => Some(TargetEngine::KosmicKrisp),
             "staging" | "wine-staging" | "wine" => Some(TargetEngine::WineStaging),
             _ => None,
@@ -373,6 +381,8 @@ mod tests {
         assert_eq!(TargetEngine::parse("default"), Some(TargetEngine::Auto));
         assert_eq!(TargetEngine::parse("gptk"), Some(TargetEngine::Gptk));
         assert_eq!(TargetEngine::parse("apple"), Some(TargetEngine::Gptk));
+        assert_eq!(TargetEngine::parse("dxvk"), Some(TargetEngine::Dxvk));
+        assert_eq!(TargetEngine::parse("vkd3d"), Some(TargetEngine::Vkd3d));
         assert_eq!(
             TargetEngine::parse("kosmickrisp"),
             Some(TargetEngine::KosmicKrisp)
@@ -404,7 +414,15 @@ mod tests {
         assert_eq!(TargetEngine::Gptk.display_name(), "GPTK + Apple D3DMetal");
         assert_eq!(
             TargetEngine::KosmicKrisp.display_name(),
-            "Wine + Mesa KosmicKrisp Vulkan"
+            "Wine + DXVK/VKD3D + Mesa KosmicKrisp Vulkan"
+        );
+        assert_eq!(
+            TargetEngine::Dxvk.display_name(),
+            "Wine + DXVK + Mesa KosmicKrisp Vulkan"
+        );
+        assert_eq!(
+            TargetEngine::Vkd3d.display_name(),
+            "Wine + VKD3D-Proton + Mesa KosmicKrisp Vulkan"
         );
         assert_eq!(
             TargetEngine::WineStaging.display_name(),

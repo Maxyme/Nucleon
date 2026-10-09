@@ -105,7 +105,7 @@ pub fn run() -> Result<()> {
             let ver = runner::get_kosmickrisp_info()
                 .map(|i| runner::format_vulkan_version(&i.api_version))
                 .unwrap_or_else(|| "1.4".to_string());
-            format!("Nucleon (Wine + Mesa KosmicKrisp Vulkan {ver})")
+            format!("Nucleon (Wine + DXVK/VKD3D + Mesa KosmicKrisp Vulkan {ver})")
         });
         ui::tree_kv(
             "├─",
@@ -118,6 +118,16 @@ pub fn run() -> Result<()> {
             "Registered in Steam UI:",
             "○ Not registered (run 'nucleon setup --kosmickrisp')",
         );
+    }
+    if steam::is_dxvk_tool_registered() {
+        if let Some(name) = steam::registered_dxvk_tool_display_name() {
+            ui::tree_kv("├─", "DXVK Tool in Steam UI:", format!("✓ '{name}'"));
+        }
+    }
+    if steam::is_vkd3d_tool_registered() {
+        if let Some(name) = steam::registered_vkd3d_tool_display_name() {
+            ui::tree_kv("├─", "VKD3D Tool in Steam UI:", format!("✓ '{name}'"));
+        }
     }
     if let Some(vkd3d) = vkd3d::find_vkd3d_proton() {
         let ver = vkd3d.version.as_deref().unwrap_or("detected");

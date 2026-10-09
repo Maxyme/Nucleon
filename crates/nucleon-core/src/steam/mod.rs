@@ -13,6 +13,7 @@ use crate::paths;
 use crate::runner;
 use crate::vdf;
 use crate::wine;
+use crate::{dxvk, vkd3d};
 use anyhow::Result;
 use std::fs;
 use std::path::Path;
@@ -50,6 +51,38 @@ pub fn is_kosmickrisp_tool_registered() -> bool {
 
 pub fn registered_kosmickrisp_tool_display_name() -> Option<String> {
     let vdf_path = paths::steam_kosmickrisp_compat_tools_dir().join("compatibilitytool.vdf");
+    if vdf_path.is_file() {
+        if let Ok(content) = fs::read_to_string(&vdf_path) {
+            return extract_vdf_display_name(&content).map(|s| s.to_string());
+        }
+    }
+    None
+}
+
+pub fn is_dxvk_tool_registered() -> bool {
+    paths::steam_dxvk_compat_tools_dir()
+        .join("compatibilitytool.vdf")
+        .is_file()
+}
+
+pub fn registered_dxvk_tool_display_name() -> Option<String> {
+    let vdf_path = paths::steam_dxvk_compat_tools_dir().join("compatibilitytool.vdf");
+    if vdf_path.is_file() {
+        if let Ok(content) = fs::read_to_string(&vdf_path) {
+            return extract_vdf_display_name(&content).map(|s| s.to_string());
+        }
+    }
+    None
+}
+
+pub fn is_vkd3d_tool_registered() -> bool {
+    paths::steam_vkd3d_compat_tools_dir()
+        .join("compatibilitytool.vdf")
+        .is_file()
+}
+
+pub fn registered_vkd3d_tool_display_name() -> Option<String> {
+    let vdf_path = paths::steam_vkd3d_compat_tools_dir().join("compatibilitytool.vdf");
     if vdf_path.is_file() {
         if let Ok(content) = fs::read_to_string(&vdf_path) {
             return extract_vdf_display_name(&content).map(|s| s.to_string());
@@ -159,30 +192,92 @@ pub fn install_compatibility_tool(runner_bin: &Path) -> Result<()> {
         let _ = fs::remove_dir_all(&notproton_tool_dir);
     }
 
-    // 3. Register KosmicKrisp compatibility tool if installed/detected (Wine only)
+    // 3. Register KosmicKrisp & Direct3D translation tools (Wine + D3D layer + Vulkan graphics driver)
     let kk_tool_dir = paths::steam_kosmickrisp_compat_tools_dir();
+    let dxvk_tool_dir = paths::steam_dxvk_compat_tools_dir();
+    let vkd3d_tool_dir = paths::steam_vkd3d_compat_tools_dir();
+
     if runner::is_kosmickrisp_installed() {
         let kk_info = runner::get_kosmickrisp_info();
         let vulkan_ver = kk_info
             .as_ref()
             .map(|i| runner::format_vulkan_version(&i.api_version));
-        let display_name = if let Some(ref ver) = vulkan_ver {
-            format!("Nucleon (Wine + Mesa KosmicKrisp Vulkan {ver})")
-        } else {
-            "Nucleon (Wine + Mesa KosmicKrisp Vulkan 1.4)".to_string()
+        let ver_suffix = vulkan_ver
+            .map(|v| format!(" {v}"))
+            .unwrap_or_else(|| " 1.4".to_string());
+
+        let has_dxvk = dxvk::find_dxvk().is_some();
+        let has_vkd3d = vkd3d::find_vkd3d_proton().is_some();
+
+        // 3a. Unified Wine + D3D Translation Layer + KosmicKrisp Vulkan tool
+        let unified_d3d = match (has_dxvk, has_vkd3d) {
+            (true, true) => "DXVK/VKD3D",
+            (true, false) => "DXVK",
+            (false, true) => "VKD3D-Proton",
+            (false, false) => "D3D Translator",
         };
+        let unified_display_name =
+            format!("Nucleon (Wine + {unified_d3d} + Mesa KosmicKrisp Vulkan{ver_suffix})");
         vdf::write_tool_bundle_with_wine(
             &kk_tool_dir,
             "nucleon-kosmickrisp",
-            &display_name,
+            &unified_display_name,
             runner_bin,
             Some("kosmickrisp"),
             wine_root,
         )?;
-        log::info!("Registered Steam compatibility tool: {}", display_name);
-    } else if kk_tool_dir.exists() {
-        let _ = fs::remove_dir_all(&kk_tool_dir);
-        log::info!("Cleaned up unregistered KosmicKrisp Steam tool bundle (not detected)");
+        log::info!(
+            "Registered Steam compatibility tool: {}",
+            unified_display_name
+        );
+
+        // 3b. Explicit Wine + DXVK + KosmicKrisp Vulkan tool (Direct3D 9/10/11 -> Vulkan -> Metal)
+        if has_dxvk {
+            let dxvk_display_name =
+                format!("Nucleon (Wine + DXVK + Mesa KosmicKrisp Vulkan{ver_suffix})");
+            vdf::write_tool_bundle_with_wine(
+                &dxvk_tool_dir,
+                "nucleon-dxvk",
+                &dxvk_display_name,
+                runner_bin,
+                Some("dxvk"),
+                wine_root,
+            )?;
+            log::info!("Registered Steam compatibility tool: {}", dxvk_display_name);
+        } else if dxvk_tool_dir.exists() {
+            let _ = fs::remove_dir_all(&dxvk_tool_dir);
+        }
+
+        // 3c. Explicit Wine + VKD3D-Proton + KosmicKrisp Vulkan tool (Direct3D 12 -> Vulkan -> Metal)
+        if has_vkd3d {
+            let vkd3d_display_name =
+                format!("Nucleon (Wine + VKD3D-Proton + Mesa KosmicKrisp Vulkan{ver_suffix})");
+            vdf::write_tool_bundle_with_wine(
+                &vkd3d_tool_dir,
+                "nucleon-vkd3d",
+                &vkd3d_display_name,
+                runner_bin,
+                Some("vkd3d"),
+                wine_root,
+            )?;
+            log::info!(
+                "Registered Steam compatibility tool: {}",
+                vkd3d_display_name
+            );
+        } else if vkd3d_tool_dir.exists() {
+            let _ = fs::remove_dir_all(&vkd3d_tool_dir);
+        }
+    } else {
+        if kk_tool_dir.exists() {
+            let _ = fs::remove_dir_all(&kk_tool_dir);
+            log::info!("Cleaned up unregistered KosmicKrisp Steam tool bundle (not detected)");
+        }
+        if dxvk_tool_dir.exists() {
+            let _ = fs::remove_dir_all(&dxvk_tool_dir);
+        }
+        if vkd3d_tool_dir.exists() {
+            let _ = fs::remove_dir_all(&vkd3d_tool_dir);
+        }
     }
 
     // 4. Register single unified Wine compatibility tool: 'Nucleon (Wine + WineD3D OpenGL)' pointing to active desired Wine runtime

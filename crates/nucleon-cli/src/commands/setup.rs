@@ -187,17 +187,19 @@ fn interactive_customize_menu(args: &mut SetupArgs) -> Result<()> {
             r#"
 Customize Nucleon Setup Options:
   [1] Runner Runtimes:
-      1) Wine Runtime (Active/Default):                {selected_wine_display}
+      1) Wine Runtime (Active/Default):                    {selected_wine_display}
       2) Apple Game Porting Toolkit 4 (Runner & D3DMetal): {gptk_status}
 
-  [2] Wine Graphics Translation Backends:
-      3) Mesa KosmicKrisp (Vulkan 1.4):                {kk_status}
-      4) VKD3D-Proton (Direct3D 12 -> Vulkan):         {vkd3d_status}
-      5) D7VK (DirectDraw/DX1-7 -> Vulkan):            {d7vk_status}
-      6) DXVK (Direct3D 9/10/11 -> Vulkan):            {dxvk_status}
+  [2] Graphics Driver (Vulkan -> Apple Metal):
+      3) Mesa KosmicKrisp (Vulkan 1.4 Driver):             {kk_status}
 
-  [3] Setup Actions:
-      7) Toggle Force Rebuild:                         {} (re-assembles runner from scratch; rarely needed)
+  [3] Direct3D Translation Layers (Direct3D -> Vulkan):
+      4) VKD3D-Proton (Direct3D 12 -> Vulkan):             {vkd3d_status}
+      5) D7VK (DirectDraw/DX1-7 -> Vulkan):                {d7vk_status}
+      6) DXVK (Direct3D 9/10/11 -> Vulkan):                {dxvk_status}
+
+  [4] Setup Actions:
+      7) Toggle Force Rebuild:                             {} (re-assembles runner from scratch; rarely needed)
       8) Return to main menu and proceed
       9) Abort setup
 "#,
@@ -717,13 +719,23 @@ pub fn run(mut args: SetupArgs) -> Result<()> {
                     let ver = runner::get_kosmickrisp_info()
                         .map(|i| runner::format_vulkan_version(&i.api_version))
                         .unwrap_or_else(|| "1.4".to_string());
-                    format!("Nucleon (Wine + Mesa KosmicKrisp Vulkan {ver})")
+                    format!("Nucleon (Wine + DXVK/VKD3D + Mesa KosmicKrisp Vulkan {ver})")
                 });
             ui::success(format!(
                 "Registered Steam compatibility tool: '{kk_display}'"
             ));
         } else {
             ui::info("Steam compatibility tool 'Nucleon (Wine + Mesa KosmicKrisp Vulkan)': not registered (KosmicKrisp not detected; pass --kosmickrisp to enable)");
+        }
+        if steam::is_dxvk_tool_registered() {
+            if let Some(name) = steam::registered_dxvk_tool_display_name() {
+                ui::success(format!("Registered Steam compatibility tool: '{name}'"));
+            }
+        }
+        if steam::is_vkd3d_tool_registered() {
+            if let Some(name) = steam::registered_vkd3d_tool_display_name() {
+                ui::success(format!("Registered Steam compatibility tool: '{name}'"));
+            }
         }
         if steam::is_wine_tool_registered() {
             let active_name = wine::get_active_wine_runtime()
@@ -823,8 +835,22 @@ pub fn run(mut args: SetupArgs) -> Result<()> {
             let ver = runner::get_kosmickrisp_info()
                 .map(|i| runner::format_vulkan_version(&i.api_version))
                 .unwrap_or_else(|| "1.4".to_string());
-            format!("Nucleon (Wine + Mesa KosmicKrisp Vulkan {ver})")
+            format!("Nucleon (Wine + DXVK/VKD3D + Mesa KosmicKrisp Vulkan {ver})")
         });
+
+    let mut tool_lines = vec![
+        "     - 'Nucleon (Wine + Automatic Graphics Backend)' [Default]".to_string(),
+        format!("     - '{gptk_banner_display}'"),
+        format!("     - '{kk_banner_display}'"),
+    ];
+    if let Some(name) = steam::registered_dxvk_tool_display_name() {
+        tool_lines.push(format!("     - '{name}'"));
+    }
+    if let Some(name) = steam::registered_vkd3d_tool_display_name() {
+        tool_lines.push(format!("     - '{name}'"));
+    }
+    tool_lines.push("     - 'Nucleon (Wine + WineD3D OpenGL)'".to_string());
+    let tools_formatted = tool_lines.join("\n");
 
     println!(
         r#"
@@ -836,10 +862,7 @@ To use Nucleon in Steam:
   2. The 'Install' button is now enabled for all Windows games in your library.
   3. Clicking 'Install' begins downloading and routes the game via Nucleon.
   4. Compatibility tools available in Steam:
-     - 'Nucleon (Wine + Automatic Graphics Backend)' [Default]
-     - '{gptk_banner_display}'
-     - '{kk_banner_display}'
-     - 'Nucleon (Wine + WineD3D OpenGL)'
+{tools_formatted}
   5. Or launch directly from terminal: nucleon launch <AppID>"#
     );
 

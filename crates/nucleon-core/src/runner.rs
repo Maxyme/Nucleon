@@ -574,16 +574,16 @@ pub fn resolve_runner_for_engine(engine: TargetEngine) -> Result<(PathBuf, Targe
             let assembled = assemble_runner(false, None, None)?;
             Ok((assembled, TargetEngine::Gptk))
         }
-        TargetEngine::KosmicKrisp => {
-            // KosmicKrisp runs under Wine configured with Mesa Vulkan 1.4 ICD
+        TargetEngine::KosmicKrisp | TargetEngine::Dxvk | TargetEngine::Vkd3d => {
+            // KosmicKrisp, DXVK, and VKD3D run under Wine configured with Mesa Vulkan 1.4 ICD
             if let Some(staging) = find_wine_staging_runtime() {
-                return Ok((staging, TargetEngine::KosmicKrisp));
+                return Ok((staging, engine));
             }
             if let Some(gptk) = find_gptk_runner() {
-                return Ok((gptk, TargetEngine::KosmicKrisp));
+                return Ok((gptk, engine));
             }
             let assembled = assemble_runner(false, None, None)?;
-            Ok((assembled, TargetEngine::KosmicKrisp))
+            Ok((assembled, engine))
         }
         TargetEngine::WineStaging => {
             if let Some(staging) = find_wine_staging_runtime() {
@@ -1127,7 +1127,7 @@ pub fn build_execution_env_for_engine(
                 ),
             );
         }
-        TargetEngine::KosmicKrisp => {
+        TargetEngine::KosmicKrisp | TargetEngine::Dxvk | TargetEngine::Vkd3d => {
             // Configure Vulkan loader to point to Mesa KosmicKrisp driver
             if let Some(icd) = find_kosmickrisp_icd() {
                 env.insert(

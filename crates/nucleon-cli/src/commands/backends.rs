@@ -32,82 +32,97 @@ pub enum BackendsAction {
 pub fn run(action: BackendsAction) -> Result<()> {
     match action {
         BackendsAction::Status => {
-            ui::header("Wine Graphics Translation Backends Status");
+            ui::header("Wine Graphics Translation Stack Status");
+            println!(
+                "Wine executes games using layered graphics translation: Direct3D -> Vulkan -> Apple Metal.\n"
+            );
 
-            // 1. Mesa KosmicKrisp
-            ui::kv("Mesa KosmicKrisp (Vulkan 1.4):", "");
-            if let Some(info) = runner::get_kosmickrisp_info() {
-                ui::tree_kv("├─", "Status:", "✓ Detected / Active");
-                ui::tree_kv("├─", "API Version:", &info.api_version);
-                ui::tree_kv(
-                    "└─",
-                    "ICD Manifest:",
-                    format!("{}", info.icd_path.display()),
-                );
-            } else {
-                ui::tree_kv(
-                    "└─",
-                    "Status:",
-                    "○ Optional (not detected; install LunarG Vulkan SDK)",
-                );
-            }
+            // Layer 1: Direct3D Translation Layers
+            ui::kv("[1] Direct3D Translation Layers (Direct3D -> Vulkan):", "");
 
-            // 2. VKD3D-Proton
-            ui::kv("VKD3D-Proton (D3D12 -> Vulkan):", "");
-            if let Some(bundle) = nucleon_core::vkd3d::find_vkd3d_proton() {
-                ui::tree_kv("├─", "Status:", "✓ Installed");
-                ui::tree_kv(
-                    "├─",
-                    "Version:",
-                    bundle.version.as_deref().unwrap_or("Unknown"),
-                );
-                ui::tree_kv("└─", "Location:", format!("{}", bundle.root.display()));
-            } else {
-                ui::tree_kv(
-                    "└─",
-                    "Status:",
-                    "○ Optional (run 'nucleon wine backends vkd3d fetch')",
-                );
-            }
-
-            // 3. D7VK
-            ui::kv("D7VK (DirectDraw / DX1-7 -> Vulkan):", "");
-            if let Some(bundle) = nucleon_core::d7vk::find_d7vk() {
-                ui::tree_kv("├─", "Status:", "✓ Installed");
-                ui::tree_kv(
-                    "├─",
-                    "Version:",
-                    bundle.version.as_deref().unwrap_or("Unknown"),
-                );
-                ui::tree_kv("└─", "Location:", format!("{}", bundle.root.display()));
-            } else {
-                ui::tree_kv(
-                    "└─",
-                    "Status:",
-                    "○ Optional (run 'nucleon wine backends d7vk fetch')",
-                );
-            }
-
-            // 4. DXVK
-            ui::kv("DXVK (Direct3D 9/10/11 -> Vulkan):", "");
+            // DXVK
+            ui::tree_kv("  ├─", "DXVK (Direct3D 9/10/11 -> Vulkan):", "");
             if let Some(bundle) = nucleon_core::dxvk::find_dxvk() {
-                ui::tree_kv("├─", "Status:", "✓ Installed");
+                ui::tree_kv("  │   ├─", "Status:", "✓ Installed");
                 ui::tree_kv(
-                    "├─",
+                    "  │   ├─",
                     "Version:",
-                    bundle.version.as_deref().unwrap_or("Unknown"),
+                    bundle.version.as_deref().unwrap_or("Detected"),
                 );
-                ui::tree_kv("└─", "Location:", format!("{}", bundle.root.display()));
+                ui::tree_kv("  │   └─", "Location:", bundle.root.display().to_string());
             } else {
                 ui::tree_kv(
-                    "└─",
+                    "  │   └─",
                     "Status:",
                     "○ Optional (run 'nucleon wine backends dxvk fetch')",
                 );
             }
 
-            println!("\nTo manage individual Wine backends: nucleon wine backends <kosmickrisp|vkd3d|d7vk|dxvk> --help");
-            println!("Note: Apple GPTK 4 is an independent runner & D3DMetal backend (manage with: nucleon gptk --help)");
+            // VKD3D-Proton
+            ui::tree_kv("  ├─", "VKD3D-Proton (Direct3D 12 -> Vulkan):", "");
+            if let Some(bundle) = nucleon_core::vkd3d::find_vkd3d_proton() {
+                ui::tree_kv("  │   ├─", "Status:", "✓ Installed");
+                ui::tree_kv(
+                    "  │   ├─",
+                    "Version:",
+                    bundle.version.as_deref().unwrap_or("Detected"),
+                );
+                ui::tree_kv("  │   └─", "Location:", bundle.root.display().to_string());
+            } else {
+                ui::tree_kv(
+                    "  │   └─",
+                    "Status:",
+                    "○ Optional (run 'nucleon wine backends vkd3d fetch')",
+                );
+            }
+
+            // D7VK
+            ui::tree_kv("  └─", "D7VK (DirectDraw / Direct3D 1-7 -> Vulkan):", "");
+            if let Some(bundle) = nucleon_core::d7vk::find_d7vk() {
+                ui::tree_kv("      ├─", "Status:", "✓ Installed");
+                ui::tree_kv(
+                    "      ├─",
+                    "Version:",
+                    bundle.version.as_deref().unwrap_or("Detected"),
+                );
+                ui::tree_kv("      └─", "Location:", bundle.root.display().to_string());
+            } else {
+                ui::tree_kv(
+                    "      └─",
+                    "Status:",
+                    "○ Optional (run 'nucleon wine backends d7vk fetch')",
+                );
+            }
+
+            // Layer 2: Graphics Driver
+            println!();
+            ui::kv("[2] Graphics Driver (Vulkan -> Apple Metal):", "");
+            ui::tree_kv("  └─", "Mesa KosmicKrisp (Vulkan 1.4 Driver):", "");
+            if let Some(info) = runner::get_kosmickrisp_info() {
+                ui::tree_kv("      ├─", "Status:", "✓ Detected / Active");
+                ui::tree_kv("      ├─", "API Version:", &info.api_version);
+                ui::tree_kv(
+                    "      └─",
+                    "ICD Manifest:",
+                    info.icd_path.display().to_string(),
+                );
+            } else {
+                ui::tree_kv(
+                    "      └─",
+                    "Status:",
+                    "○ Optional (install LunarG Vulkan SDK or run 'nucleon kosmickrisp set-path')",
+                );
+            }
+
+            println!(
+                "\nTranslation Flow: [Windows Game] -> [Wine] -> [DXVK / VKD3D] -> [KosmicKrisp Vulkan] -> [Mac Metal]"
+            );
+            println!(
+                "To manage individual components: nucleon wine backends <dxvk|vkd3d|d7vk|kosmickrisp> --help"
+            );
+            println!(
+                "Note: Apple GPTK 4 is an independent runner & D3DMetal backend (manage with: nucleon gptk --help)"
+            );
         }
         BackendsAction::Kosmickrisp { action } => kosmickrisp::handle(action)?,
         BackendsAction::Vkd3d { action } => vkd3d::run(action)?,
