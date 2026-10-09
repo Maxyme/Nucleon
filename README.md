@@ -264,6 +264,11 @@ Nucleon automatically inspects and resolves nested CrossOver bundle paths (such 
 - **Recursive Process Tree Termination (`kill_tree`)**: When a termination signal (`SIGTERM` or Steam "Stop") is received, Nucleon traverses the process hierarchy to recursively terminate the child process and all its descendants.
 - **Prefix Isolation**: Identifies and terminates orphaned background Wine processes associated with the prefix while leaving unrelated system processes untouched.
 
+### Remaining unsafe Code (By Design)
+The remaining unsafe blocks are strictly confined to places where foreign binary interaction is inherently required:
+* crates/nucleon-core/src/validator.rs: CoreGraphics CGWindowListCopyWindowInfo bridging via core-graphics and core-foundation FFI bindings to query macOS WindowServer state without screen recording permissions.
+* crates/nucleon-hook: Dynamic inline hook interposing (Frida Gum hooking posix_spawn, execve, chmod, Steam CCompatibilityManager methods, and raw dyld Mach-O memory AoB scanning in the injected target process).
+
 ### Staging Valve Client Bridge Libraries
 
 Nucleon requires Valve's Windows client bridge libraries (`steamclient64.dll`, `tier0_s64.dll`, etc.) to bridge communication between Windows games in Wine and the native macOS Steam client.
@@ -607,11 +612,25 @@ just fix
 
 ## Roadmap
 
-See [TODO.md](TODO.md) for upcoming milestones, including:
-- **Host Application & GUI Consolidation**: A standalone native macOS GUI (SwiftUI / Tauri) for visual game library management, prefix configuration, and graphics profiling.
-- **String Anchor + ADRP XREF Signature Resolver**: Compiler-resilient hybrid pattern scanner tracing invariant `__cstring` data through ARM64 `ADRP`/`LDR` instructions to function prologues.
-- Automated CEF WebUI chunk patch resolution for future Steam client updates.
-- Isolated per-AppID prefix profiles.
+## 1. Host Application & GUI Consolidation (Planned Milestone)
+*Note: Currently intentionally deferred to keep Nucleon lean and CLI/system-first.*
+
+- [ ] **Native macOS Host Application (SwiftUI / Tauri)**:
+  - **Game Library Browser**: Seamless Steam / offline Windows title library with artwork and per-game launch configurations.
+  - **Runtime & Engine Switcher**: Visual manager to switch between Apple Game Porting Toolkit (GPTK 4 / GPTK 2) and upstream Wine-Staging.
+  - **Wine Prefix Inspector**: Graphical prefix explorer with registry editor (`OpenGLSurfaceMode`, `RetinaMode`, direct input mappings).
+  - **Metal Graphics Settings**: Per-app toggles for Apple Metal Performance HUD (`MTL_HUD_ENABLED`), MSync (`WINEMSYNC`), Direct3D Metal shaders, and Retina HiDPI.
+  - **Process Supervisor & Diagnostics**: Real-time process tree monitor (`wineserver`, `services.exe`, `.exe`), zero-overhead CoreGraphics frame telemetry, and crash dump analysis.
+
+## 2. Compatibility & Engine Enhancements
+- [ ] **String Anchor + ADRP XREF Signature Resolver**:
+  - Upgrade the binary signature engine from raw Array of Bytes (AOB) to a hybrid String Anchor + ADRP Cross-Reference (XREF) analyzer.
+  - Locate invariant log/debug strings in `__cstring` and trace ARM64 `ADRP` + `ADD`/`LDR` instruction pairs referencing their addresses, then backtrack to function entry prologues (`STP X29, X30, [SP, #-...]!`).
+  - Provides compiler-agnostic resilience against aggressive basic block reordering, inlining, and register allocation fluctuations across major Xcode Clang updates without breaking pattern matching.
+- [ ] **Dynamic WebUI Hook Updates**: Automated signature adaptation for Steam CEF chunk updates without requiring manual signature regeneration.
+- [ ] **Prefix Isolation Modes**: Optional per-AppID isolated Wine prefixes (`WINEPREFIX=.../<appid>`) with shared core runtime caches.
+- [ ] **Audio Latency Optimization**: CoreAudio HAL low-latency driver bridging for synchronized game audio.
+- [ ] **Controller Mapping Bridge**: Enhanced SDL2 / DualSense / Xbox controller haptic feedback mapping through macOS IOHIDFamily.
 
 ---
 
