@@ -14,8 +14,25 @@ permissions:
   contents: write
 
 jobs:
-  check-and-test:
-    name: Code Quality & Tests
+  format:
+    name: Code Formatting
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # v1
+        with:
+          toolchain: stable
+          components: rustfmt
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+  test-macos:
+    name: Clippy & Unit Tests (macOS)
+    needs: format
     runs-on: macos-latest
     steps:
       - name: Checkout repository
@@ -25,7 +42,7 @@ jobs:
         uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # v1
         with:
           toolchain: stable
-          components: rustfmt, clippy
+          components: clippy
           targets: aarch64-apple-darwin
 
       - name: Cache Cargo dependencies & build cache
@@ -39,9 +56,6 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
-      - name: Check formatting
-        run: cargo fmt --all -- --check
-
       - name: Check Clippy lints
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
@@ -50,7 +64,7 @@ jobs:
 
   build-and-release:
     name: Build & Package Release Bundle
-    needs: check-and-test
+    needs: [format, test-macos]
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
     runs-on: macos-latest
     steps:
