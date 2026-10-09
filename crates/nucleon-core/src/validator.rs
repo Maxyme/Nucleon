@@ -1,10 +1,17 @@
 use anyhow::{bail, Result};
+#[cfg(target_os = "macos")]
 use core_foundation::base::TCFType;
+#[cfg(target_os = "macos")]
 use core_foundation::dictionary::CFDictionary;
+#[cfg(target_os = "macos")]
 use core_foundation::number::CFNumber;
+#[cfg(target_os = "macos")]
 use core_foundation::string::CFString;
+#[cfg(target_os = "macos")]
 use core_graphics::display::kCGNullWindowID;
+#[cfg(target_os = "macos")]
 use core_graphics::window::{kCGWindowListOptionAll, CGWindowListCopyWindowInfo};
+#[cfg(target_os = "macos")]
 use std::collections::HashSet;
 
 #[derive(Debug, Clone)]
@@ -19,6 +26,7 @@ pub struct PresentedWindow {
     pub height: f64,
 }
 
+#[cfg(target_os = "macos")]
 pub fn check_window_presentation(target_pids: Option<&[i32]>) -> Result<Vec<PresentedWindow>> {
     let pid_set: Option<HashSet<i32>> = target_pids.map(|p| p.iter().copied().collect());
 
@@ -97,4 +105,9 @@ pub fn check_window_presentation(target_pids: Option<&[i32]>) -> Result<Vec<Pres
     }
 
     Ok(presented)
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn check_window_presentation(_target_pids: Option<&[i32]>) -> Result<Vec<PresentedWindow>> {
+    bail!("Window presentation validation via WindowServer is only supported on macOS");
 }

@@ -631,6 +631,11 @@ just fix
 - [ ] **Prefix Isolation Modes**: Optional per-AppID isolated Wine prefixes (`WINEPREFIX=.../<appid>`) with shared core runtime caches.
 - [ ] **Audio Latency Optimization**: CoreAudio HAL low-latency driver bridging for synchronized game audio.
 - [ ] **Controller Mapping Bridge**: Enhanced SDL2 / DualSense / Xbox controller haptic feedback mapping through macOS IOHIDFamily.
+- [ ] **LLM-Assisted Crash Diagnostics & Custom Wine Hot-Patching (`nucleon doctor`)**:
+  - **Automated Crash Trace Triaging**: CLI tool to ingest Wine debug logs (`+relay`, `+seh`, `+d3d`, `+vulkan`), extract failing Win32/NT call stacks, and isolate unimplemented stubs or invalid HRESULTs.
+  - **Dynamic Override & Proxy DLL Generation**: Leverage LLMs to generate targeted proxy DLLs (`version.dll`, `d3d11_proxy.dll`) or Win32 dummy stubs for missing game APIs compiled via MinGW on-the-fly, avoiding lengthy Wine full-rebuild cycles.
+  - **Automated Wine Configuration Recommender**: Auto-derive optimal `WINEDLLOVERRIDES`, registry keys, and environment flags based on game crash signatures.
+  - **Upstream Patch Exporter**: Rebase and export clean Git patch files (`.patch`) for upstream Wine-Staging, Proton, or Apple GPTK tracking.
 
 ---
 

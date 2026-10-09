@@ -10,6 +10,17 @@ fn main() {
 
     println!("cargo:rerun-if-changed={}", src.display());
 
+    let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    if target_os != "macos" {
+        // On non-macOS platforms (e.g. Linux CI clippy / checks), create an empty placeholder dylib
+        std::fs::write(&target_dylib, b"").unwrap();
+        println!(
+            "cargo:rustc-env=OVERLAY_SHIM_DYLIB={}",
+            target_dylib.display()
+        );
+        return;
+    }
+
     let status = Command::new("clang")
         .args([
             "-arch",

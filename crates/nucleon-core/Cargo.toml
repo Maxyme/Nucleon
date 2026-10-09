@@ -13,8 +13,6 @@ log = { workspace = true }
 tempfile = { workspace = true }
 object = { workspace = true }
 memchr = { workspace = true }
-core-graphics = { workspace = true }
-core-foundation = { workspace = true }
 overlay-shim = { path = "../overlay-shim" }
 plist = { workspace = true }
 keyvalues-parser = { workspace = true }
@@ -25,6 +23,10 @@ tar = { workspace = true }
 flate2 = { workspace = true }
 zstd = { workspace = true }
 memmap2 = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+core-graphics = { workspace = true }
+core-foundation = { workspace = true }
 
 [lints]
 workspace = true
