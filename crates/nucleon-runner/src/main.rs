@@ -379,7 +379,7 @@ fn main() -> Result<()> {
     let (engine, api_desc) = match requested_engine {
         Some(nucleon_core::detector::TargetEngine::Auto) | None => {
             // Auto runner is for Wine only: automatically selects the optimal Wine graphics backend
-            // (Mesa KosmicKrisp Vulkan for DX11/12/Vulkan/D7VK vs WineD3D OpenGL for DX9/10/GL).
+            // (Mesa KosmicKrisp Vulkan for DX11/12/Vulkan/D7VK/OpenGL via Zink vs WineD3D for DX9/10).
             let detection = nucleon_core::detector::detect_target_engine(&target_exe);
             let wine_engine = detection.wine_engine();
             log_runner(&format!(

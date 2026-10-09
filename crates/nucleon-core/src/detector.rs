@@ -87,25 +87,24 @@ pub struct GraphicsApiInfo {
 }
 
 impl GraphicsApiInfo {
-    /// Resolves the optimal graphics translation engine for the Wine runtime (Wine only).
-    /// DirectX 11, DirectX 12, Vulkan, and DirectDraw/DX1–7 (via D7VK) route to KosmicKrisp (Vulkan 1.4);
-    /// DirectX 9, DirectX 10, and OpenGL route to WineStaging (WineD3D / OpenGL).
+    /// DirectX 11, DirectX 12, Vulkan, DirectDraw/DX1–7 (via D7VK), and OpenGL (via Mesa Zink)
+    /// route to KosmicKrisp (Vulkan 1.4); DirectX 9 and DirectX 10 route to WineStaging (WineD3D / OpenGL).
     pub fn wine_engine(&self) -> TargetEngine {
         match self.api {
             GraphicsApi::DirectX12
             | GraphicsApi::DirectX11
             | GraphicsApi::Vulkan
-            | GraphicsApi::DirectX7OrOlder => {
+            | GraphicsApi::DirectX7OrOlder
+            | GraphicsApi::OpenGL => {
                 if runner::is_kosmickrisp_installed() {
                     TargetEngine::KosmicKrisp
                 } else {
                     TargetEngine::WineStaging
                 }
             }
-            GraphicsApi::DirectX10
-            | GraphicsApi::DirectX9OrOlder
-            | GraphicsApi::OpenGL
-            | GraphicsApi::Unknown => TargetEngine::WineStaging,
+            GraphicsApi::DirectX10 | GraphicsApi::DirectX9OrOlder | GraphicsApi::Unknown => {
+                TargetEngine::WineStaging
+            }
         }
     }
 }
@@ -419,5 +418,15 @@ mod tests {
             detected_dll: Some("d3d9.dll".into()),
         };
         assert_eq!(info_dx9.wine_engine(), TargetEngine::WineStaging);
+
+        let info_gl = GraphicsApiInfo {
+            api: GraphicsApi::OpenGL,
+            engine: TargetEngine::WineStaging,
+            detected_dll: Some("opengl32.dll".into()),
+        };
+        let wine_eng_gl = info_gl.wine_engine();
+        assert!(
+            wine_eng_gl == TargetEngine::KosmicKrisp || wine_eng_gl == TargetEngine::WineStaging
+        );
     }
 }

@@ -1061,6 +1061,17 @@ pub fn build_execution_env_for_engine(
                 "MESA_LOADER_DRIVER_OVERRIDE".to_string(),
                 "kosmickrisp".to_string(),
             );
+            // Route OpenGL through Mesa Zink (OpenGL implementation over Vulkan)
+            // unless explicitly disabled by user environment
+            if env::var("GALLIUM_DRIVER").is_err() {
+                env.insert("GALLIUM_DRIVER".to_string(), "zink".to_string());
+            }
+            if env::var("MESA_GL_VERSION_OVERRIDE").is_err() {
+                env.insert("MESA_GL_VERSION_OVERRIDE".to_string(), "4.6".to_string());
+            }
+            if env::var("MESA_GLSL_VERSION_OVERRIDE").is_err() {
+                env.insert("MESA_GLSL_VERSION_OVERRIDE".to_string(), "460".to_string());
+            }
 
             // Prepare MoltenVK -> KosmicKrisp shim for winemac.so if driver dylib exists
             let shim_dir =
@@ -1151,6 +1162,11 @@ mod tests {
         assert_eq!(
             env.get("MESA_LOADER_DRIVER_OVERRIDE").map(|s| s.as_str()),
             Some("kosmickrisp")
+        );
+        assert_eq!(env.get("GALLIUM_DRIVER").map(|s| s.as_str()), Some("zink"));
+        assert_eq!(
+            env.get("MESA_GL_VERSION_OVERRIDE").map(|s| s.as_str()),
+            Some("4.6")
         );
         assert_eq!(env.get("MTL_HUD_ENABLED").map(|s| s.as_str()), Some("1"));
         assert_eq!(env.get("WINEMSYNC").map(|s| s.as_str()), Some("1"));
