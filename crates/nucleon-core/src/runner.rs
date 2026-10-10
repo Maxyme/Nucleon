@@ -1,9 +1,6 @@
-use crate::d7vk;
 use crate::detector::TargetEngine;
-use crate::dxvk;
 use crate::paths;
 use crate::steam;
-use crate::vkd3d;
 use crate::wine;
 use anyhow::{bail, Context, Result};
 use std::collections::HashMap;
@@ -772,7 +769,54 @@ pub fn find_gptk_components(custom_path: Option<&Path>) -> Result<Option<(PathBu
         }
     }
 
+    // 4. Assembled runner in paths::current_runner()
+    let cur = paths::current_runner();
+    let fw = cur.join("lib/external/D3DMetal.framework");
+    let shared = cur.join("lib/external/libd3dshared.dylib");
+    if fw.is_dir() && shared.is_file() {
+        return Ok(Some((fw, shared)));
+    }
+
     Ok(None)
+}
+
+/// Resolves GPTK components along with the human-readable resolution source.
+pub fn get_gptk_resolution_info(custom_path: Option<&Path>) -> Option<((PathBuf, PathBuf), String)> {
+    if let Some(p) = custom_path {
+        if let Ok(comps) = validate_and_resolve_gptk_components(p) {
+            return Some((comps, "from explicit path argument".to_string()));
+        }
+    }
+    for var in &["NUCLEON_GPTK_PATH", "GPTK_PATH"] {
+        if let Ok(val) = env::var(var) {
+            let trimmed = val.trim();
+            if !trimmed.is_empty() {
+                let p = PathBuf::from(trimmed);
+                if let Ok(comps) = validate_and_resolve_gptk_components(&p) {
+                    return Some((comps, format!("from environment variable {var}")));
+                }
+            }
+        }
+    }
+    let custom_file = custom_gptk_path_file();
+    if custom_file.is_file() {
+        if let Ok(content) = fs::read_to_string(&custom_file) {
+            let trimmed = content.trim();
+            if !trimmed.is_empty() {
+                let p = PathBuf::from(trimmed);
+                if let Ok(comps) = validate_and_resolve_gptk_components(&p) {
+                    return Some((comps, "from custom path file".to_string()));
+                }
+            }
+        }
+    }
+    let cur = paths::current_runner();
+    let fw = cur.join("lib/external/D3DMetal.framework");
+    let shared = cur.join("lib/external/libd3dshared.dylib");
+    if fw.is_dir() && shared.is_file() {
+        return Some(((fw, shared), format!("from assembled runner ({})", cur.display())));
+    }
+    None
 }
 
 /// Resolves user-provided GPTK components, failing loudly if not configured or invalid.
@@ -1212,161 +1256,51 @@ pub fn build_execution_env_for_engine(
         env.insert("DYLD_INSERT_LIBRARIES".to_string(), insert_val);
     }
 
-    match engine {
+    let chosen_backend: Box<dyn crate::backend::Backend> = match engine {
         TargetEngine::Auto => {
-            return build_execution_env_for_engine(
-                runner_dir,
-                prefix_dir,
-                TargetEngine::WineStaging,
-                enable_hud,
-            );
+            let configured = crate::backend::get_active_backend();
+            if configured != crate::backend::GraphicsBackend::Auto {
+                crate::backend::create_backend(configured)
+            } else {
+                crate::backend::create_backend(crate::backend::GraphicsBackend::Auto)
+            }
         }
-        TargetEngine::Gptk => {
-            apply_gptk_execution_env(
-                &mut env,
-                runner_dir,
-                &steam_dir,
-                &client_path_str,
-                enable_hud,
-            );
-        }
-        TargetEngine::KosmicKrisp | TargetEngine::Dxvk | TargetEngine::Vkd3d => {
-            // Configure Vulkan loader to point to Mesa KosmicKrisp driver
-            if let Some(icd) = find_kosmickrisp_icd() {
-                env.insert(
-                    "VK_DRIVER_FILES".to_string(),
-                    icd.to_string_lossy().to_string(),
-                );
-                env.insert(
-                    "VK_ICD_FILENAMES".to_string(),
-                    icd.to_string_lossy().to_string(),
-                );
-            }
-            env.insert(
-                "MESA_LOADER_DRIVER_OVERRIDE".to_string(),
-                "kosmickrisp".to_string(),
-            );
-            // Route OpenGL through Mesa Zink (OpenGL implementation over Vulkan)
-            // unless explicitly disabled by user environment
-            if env::var("GALLIUM_DRIVER").is_err() {
-                env.insert("GALLIUM_DRIVER".to_string(), "zink".to_string());
-            }
-            if env::var("MESA_GL_VERSION_OVERRIDE").is_err() {
-                env.insert("MESA_GL_VERSION_OVERRIDE".to_string(), "4.6".to_string());
-            }
-            if env::var("MESA_GLSL_VERSION_OVERRIDE").is_err() {
-                env.insert("MESA_GLSL_VERSION_OVERRIDE".to_string(), "460".to_string());
-            }
-
-            // Prepare MoltenVK -> KosmicKrisp shim for winemac.so if driver dylib exists
-            let shim_dir =
-                setup_kosmickrisp_shim().unwrap_or_else(|_| paths::kosmickrisp_shim_dir());
-
-            // Wine DLL overrides: map Direct3D to DXVK/VKD3D/D7VK (n,b) and forward Vulkan to host KosmicKrisp
-            let mut overrides =
-                "steamclient=n,b;steamclient64=n,b;lsteamclient=b;winevulkan=b,n;vulkan-1=b,n;d3d12,d3d12core=n,b"
-                    .to_string();
-            if dxvk::find_dxvk().is_some() {
-                overrides.push_str(";d3d11,dxgi,d3d10core,d3d9=n,b");
-            }
-            if d7vk::find_d7vk().is_some() {
-                overrides.push_str(";ddraw=n,b");
-            }
-            env.insert("WINEDLLOVERRIDES".to_string(), overrides);
-
-            // Configure DXVK logging if available
-            if dxvk::find_dxvk().is_some() {
-                env.insert("DXVK_LOG_LEVEL".to_string(), "info".to_string());
-                env.insert(
-                    "DXVK_LOG_PATH".to_string(),
-                    paths::support_dir().to_string_lossy().to_string(),
-                );
-            }
-
-            // Configure VKD3D-Proton features if available
-            if vkd3d::find_vkd3d_proton().is_some() {
-                env.insert("VKD3D_CONFIG".to_string(), "dxr11,dxr".to_string());
-            }
-
-            // Redirect Mesa shader cache to macOS Library/Caches
-            let mesa_cache = paths::home_dir().join("Library/Caches/Mesa");
-            let _ = fs::create_dir_all(&mesa_cache);
-            env.insert(
-                "MESA_SHADER_CACHE_DIR".to_string(),
-                mesa_cache.to_string_lossy().to_string(),
-            );
-
-            if enable_hud {
-                env.insert("MTL_HUD_ENABLED".to_string(), "1".to_string());
-                env.insert("VKD3D_DEBUG".to_string(), "warn".to_string());
-            }
-
-            let lib_dir = runner_dir.join("lib");
-            let lib_unix = runner_dir.join("lib/wine/x86_64-unix");
-            env.insert(
-                "DYLD_FALLBACK_LIBRARY_PATH".to_string(),
-                format!(
-                    "{}:{}:{}:{}:{}",
-                    steam_dir.display(),
-                    client_path_str,
-                    shim_dir.display(),
-                    lib_unix.display(),
-                    lib_dir.display()
-                ),
-            );
-        }
-        TargetEngine::Dxmt => {
-            // DXMT (DirectX 11 -> Apple Metal)
-            // Maps d3d11, dxgi, d3d10core, and winemetal to native DXMT DLLs bridging directly to Metal
-            env.insert(
-                "WINEDLLOVERRIDES".to_string(),
-                "steamclient=n,b;steamclient64=n,b;lsteamclient=b;d3d11,dxgi,d3d10core,winemetal=n,b;nvapi64,nvngx=n,b".to_string(),
-            );
-
-            if enable_hud {
-                env.insert("MTL_HUD_ENABLED".to_string(), "1".to_string());
-            }
-
-            let lib_dir = runner_dir.join("lib");
-            let lib_unix = runner_dir.join("lib/wine/x86_64-unix");
-            let mut dyld_paths = vec![
-                steam_dir.to_string_lossy().to_string(),
-                client_path_str.clone(),
-                lib_unix.to_string_lossy().to_string(),
-                lib_dir.to_string_lossy().to_string(),
-            ];
-            if let Some(dxmt) = crate::dxmt::find_dxmt() {
-                let dxmt_unix = dxmt.root.join("x86_64-unix");
-                if dxmt_unix.is_dir() {
-                    dyld_paths.push(dxmt_unix.to_string_lossy().to_string());
-                }
-            }
-            env.insert(
-                "DYLD_FALLBACK_LIBRARY_PATH".to_string(),
-                dyld_paths.join(":"),
-            );
+        TargetEngine::Gptk => crate::backend::create_backend(crate::backend::GraphicsBackend::D3DMetal),
+        TargetEngine::Dxmt => crate::backend::create_backend(crate::backend::GraphicsBackend::Dxmt),
+        TargetEngine::Dxvk => crate::backend::create_backend(crate::backend::GraphicsBackend::Dxvk),
+        TargetEngine::KosmicKrisp | TargetEngine::Vkd3d => {
+            crate::backend::create_backend(crate::backend::GraphicsBackend::KosmicKrisp)
         }
         TargetEngine::WineStaging => {
-            // Wine-Staging legacy overrides: map DX9, DX10 to built-in WineD3D / OpenGL
-            env.insert(
-                "WINEDLLOVERRIDES".to_string(),
-                "steamclient=n,b;steamclient64=n,b;lsteamclient=b;d3d9,d3d10,d3d10_1,d3d10core=b,n"
-                    .to_string(),
-            );
-
-            let lib_dir = runner_dir.join("lib");
-            let lib_unix = runner_dir.join("lib/wine/x86_64-unix");
-            env.insert(
-                "DYLD_FALLBACK_LIBRARY_PATH".to_string(),
-                format!(
-                    "{}:{}:{}:{}",
-                    steam_dir.display(),
-                    client_path_str,
-                    lib_unix.display(),
-                    lib_dir.display()
-                ),
-            );
+            crate::backend::create_backend(crate::backend::GraphicsBackend::Auto)
         }
+    };
+
+    chosen_backend.apply_env(
+        &mut env,
+        runner_dir,
+        prefix_dir,
+        &steam_dir,
+        &client_path_str,
+        enable_hud,
+    );
+
+    if engine == TargetEngine::WineStaging || engine == TargetEngine::Auto {
+        env.entry("WINEDLLOVERRIDES".to_string()).or_insert_with(|| {
+            "steamclient=n,b;steamclient64=n,b;lsteamclient=b;d3d9,d3d10,d3d10_1,d3d10core=b,n"
+                .to_string()
+        });
+        let lib_dir = runner_dir.join("lib");
+        let lib_unix = runner_dir.join("lib/wine/x86_64-unix");
+        env.entry("DYLD_FALLBACK_LIBRARY_PATH".to_string()).or_insert_with(|| {
+            format!(
+                "{}:{}:{}:{}",
+                steam_dir.display(),
+                client_path_str,
+                lib_unix.display(),
+                lib_dir.display()
+            )
+        });
     }
 
     env
@@ -1710,5 +1644,46 @@ mod tests {
         assert!(err_msg.contains("GPTK") || err_msg.contains("Apple Game Porting Toolkit"));
 
         env::remove_var("NUCLEON_SUPPORT_DIR");
+    }
+
+    #[test]
+    fn test_golden_path_launch_flows_gptk4_vs_wine() {
+        let temp = tempdir().unwrap();
+        let runner_dir = temp.path().join("runner");
+        let prefix_dir = temp.path().join("pfx");
+        fs::create_dir_all(runner_dir.join("bin")).unwrap();
+        fs::create_dir_all(runner_dir.join("lib/wine/x86_64-unix")).unwrap();
+        fs::create_dir_all(runner_dir.join("lib/external/D3DMetal.framework/Versions/Current/Resources")).unwrap();
+        fs::write(runner_dir.join("bin/wine"), b"").unwrap();
+        fs::write(runner_dir.join("bin/wineserver"), b"").unwrap();
+        fs::write(runner_dir.join("lib/external/libd3dshared.dylib"), b"").unwrap();
+        fs::create_dir_all(prefix_dir.join("drive_c/windows/system32")).unwrap();
+
+        // 1. Golden Path: GPTK4 Launch Flow
+        let gptk_env = build_execution_env_for_engine(&runner_dir, &prefix_dir, TargetEngine::Gptk, true);
+        assert_eq!(gptk_env.get("D3DM_MTL4").map(|s| s.as_str()), Some("1"));
+        assert_eq!(gptk_env.get("D3DM_ENABLE_METALFX").map(|s| s.as_str()), Some("1"));
+        assert_eq!(gptk_env.get("D3DM_SUPPORT_DXR").map(|s| s.as_str()), Some("1"));
+        assert_eq!(gptk_env.get("MTL_HUD_ENABLED").map(|s| s.as_str()), Some("1"));
+        assert!(!gptk_env.contains_key("WINEMSYNC"), "GPTK4 flow must not set WINEMSYNC");
+        assert_eq!(gptk_env.get("WINEESYNC").map(|s| s.as_str()), Some("1"));
+        let gptk_overrides = gptk_env.get("WINEDLLOVERRIDES").unwrap();
+        assert!(gptk_overrides.contains("d3d11,dxgi,d3d12,d3d10core,d3dcompiler_47=n,b"));
+        let gptk_dyld = gptk_env.get("DYLD_FALLBACK_LIBRARY_PATH").unwrap();
+        assert!(gptk_dyld.contains("D3DMetal.framework"));
+
+        // 2. Golden Path: Wine Flow (DXMT)
+        let wine_dxmt_env = build_execution_env_for_engine(&runner_dir, &prefix_dir, TargetEngine::Dxmt, false);
+        assert_eq!(wine_dxmt_env.get("WINEMSYNC").map(|s| s.as_str()), Some("1"), "Wine flow must set WINEMSYNC");
+        assert!(!wine_dxmt_env.contains_key("D3DM_MTL4"), "Wine flow must not set D3DM_MTL4");
+        let dxmt_overrides = wine_dxmt_env.get("WINEDLLOVERRIDES").unwrap();
+        assert!(dxmt_overrides.contains("winemetal=n,b"));
+
+        // 3. Golden Path: Wine Flow (DXVK)
+        let wine_dxvk_env = build_execution_env_for_engine(&runner_dir, &prefix_dir, TargetEngine::Dxvk, false);
+        assert_eq!(wine_dxvk_env.get("WINEMSYNC").map(|s| s.as_str()), Some("1"), "Wine flow must set WINEMSYNC");
+        assert!(!wine_dxvk_env.contains_key("D3DM_MTL4"), "Wine flow must not set D3DM_MTL4");
+        let dxvk_overrides = wine_dxvk_env.get("WINEDLLOVERRIDES").unwrap();
+        assert!(dxvk_overrides.contains("d3d11,dxgi,d3d10core,d3d9=n,b"));
     }
 }

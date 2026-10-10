@@ -24,6 +24,11 @@ pub enum Vkd3dAction {
 }
 
 pub fn run(action: Vkd3dAction) -> Result<()> {
+    eprintln!("Notice: 'nucleon vkd3d' is deprecated; use 'nucleon backends vkd3d' instead.\n");
+    execute(action)
+}
+
+pub fn execute(action: Vkd3dAction) -> Result<()> {
     match action {
         Vkd3dAction::Status => {
             ui::header("VKD3D-Proton Status (Direct3D 12 -> Vulkan 1.4 for KosmicKrisp)");

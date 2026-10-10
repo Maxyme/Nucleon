@@ -32,14 +32,23 @@ pub enum BackendsAction {
         #[command(subcommand)]
         action: dxmt::DxmtAction,
     },
+    /// Set the active graphics backend (auto, dxvk, dxmt, d3dmetal, kosmickrisp)
+    Set {
+        /// Backend name
+        backend: String,
+    },
+    /// Get the active graphics backend and its resolution source
+    Get,
 }
 
 pub fn run(action: BackendsAction) -> Result<()> {
     match action {
         BackendsAction::Status => {
-            ui::header("Wine Graphics Translation Stack Status");
+            ui::header("Graphics Translation Stack Status");
+            let (active_b, origin) = nucleon_core::backend::get_active_backend_with_origin();
+            ui::kv("Active Configured Backend:", format!("{} ({origin})", active_b.display_name()));
             println!(
-                "Wine executes games using layered graphics translation: Direct3D -> Vulkan -> Apple Metal.\n"
+                "\nWine executes games using layered graphics translation: Direct3D -> Vulkan -> Apple Metal.\n"
             );
 
             // Layer 1: Direct3D Translation Layers
@@ -147,11 +156,21 @@ pub fn run(action: BackendsAction) -> Result<()> {
                 "Note: Apple GPTK 4 is an independent runner & D3DMetal backend (manage with: nucleon gptk --help)"
             );
         }
-        BackendsAction::Kosmickrisp { action } => kosmickrisp::handle(action)?,
-        BackendsAction::Vkd3d { action } => vkd3d::run(action)?,
-        BackendsAction::D7vk { action } => d7vk::run(action)?,
-        BackendsAction::Dxvk { action } => dxvk::run(action)?,
-        BackendsAction::Dxmt { action } => dxmt::run(action)?,
+        BackendsAction::Kosmickrisp { action } => kosmickrisp::execute(action)?,
+        BackendsAction::Vkd3d { action } => vkd3d::execute(action)?,
+        BackendsAction::D7vk { action } => d7vk::execute(action)?,
+        BackendsAction::Dxvk { action } => dxvk::execute(action)?,
+        BackendsAction::Dxmt { action } => dxmt::execute(action)?,
+        BackendsAction::Set { backend } => {
+            use std::str::FromStr;
+            let b = nucleon_core::backend::GraphicsBackend::from_str(&backend)?;
+            nucleon_core::backend::set_active_backend(b)?;
+            ui::success(format!("Active graphics backend set to: {}", b.display_name()));
+        }
+        BackendsAction::Get => {
+            let (b, origin) = nucleon_core::backend::get_active_backend_with_origin();
+            ui::kv("Active Backend:", format!("{} ({origin})", b.display_name()));
+        }
     }
 
     Ok(())

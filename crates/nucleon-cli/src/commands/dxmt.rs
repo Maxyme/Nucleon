@@ -24,6 +24,11 @@ pub enum DxmtAction {
 }
 
 pub fn run(action: DxmtAction) -> Result<()> {
+    eprintln!("Notice: 'nucleon dxmt' is deprecated; use 'nucleon backends dxmt' instead.\n");
+    execute(action)
+}
+
+pub fn execute(action: DxmtAction) -> Result<()> {
     match action {
         DxmtAction::Status => {
             ui::header("DXMT Status (Direct3D 11 -> Apple Metal - https://github.com/3Shain/dxmt)");

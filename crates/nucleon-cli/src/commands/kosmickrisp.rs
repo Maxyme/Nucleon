@@ -22,6 +22,11 @@ pub enum KosmickrispAction {
 }
 
 pub fn handle(action: KosmickrispAction) -> Result<()> {
+    eprintln!("Notice: 'nucleon kosmickrisp' is deprecated; use 'nucleon backends kosmickrisp' instead.\n");
+    execute(action)
+}
+
+pub fn execute(action: KosmickrispAction) -> Result<()> {
     match action {
         KosmickrispAction::Status => {
             ui::header("Mesa KosmicKrisp Driver Status");

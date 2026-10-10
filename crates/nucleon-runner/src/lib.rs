@@ -40,10 +40,8 @@ pub fn determine_wine_args(
         None => {
             if active_engine == nucleon_core::detector::TargetEngine::Gptk {
                 false
-            } else if !is_64_bit && steam_shim_exists {
-                true
             } else {
-                false
+                !is_64_bit && steam_shim_exists
             }
         }
     };
@@ -605,151 +603,49 @@ pub fn run_with_args(args: &[String]) -> Result<()> {
     // Initialize prefix, registry, and bridge DLLs
     prefix::ensure_prefix(&pfx_dir, &runner_dir)?;
 
-    // Stage or unstage translation DLLs based on active engine:
-    // KosmicKrisp / Dxvk / Vkd3d: stages VKD3D-Proton (Direct3D 12 -> Vulkan 1.4), D7VK (DirectDraw / D3D 1-7 -> Vulkan 1.4),
-    // and DXVK (Direct3D 9/10/11 -> Vulkan 1.4)
-    // Other engines (e.g. GPTK): unstages VKD3D-Proton, D7VK, and DXVK to use native D3DMetal/WineD3D without DLL override conflicts
-    let is_vulkan_engine = active_engine == nucleon_core::detector::TargetEngine::KosmicKrisp
-        || active_engine == nucleon_core::detector::TargetEngine::Dxvk
-        || active_engine == nucleon_core::detector::TargetEngine::Vkd3d;
-
-    if is_vulkan_engine {
-        // Unstage DXMT before staging DXVK so DXMT unstage doesn't overwrite DXVK
-        if let Ok(removed) = nucleon_core::dxmt::unstage_dxmt_from_prefix(&pfx_dir, None) {
-            if removed > 0 {
-                log_runner(&format!(
-                    "Unstaged {} DXMT DLL(s) from prefix for {:?}",
-                    removed, active_engine
-                ));
+    // Stage or unstage translation DLLs based on active backend:
+    let backend_choice = match active_engine {
+        nucleon_core::detector::TargetEngine::Gptk => nucleon_core::backend::GraphicsBackend::D3DMetal,
+        nucleon_core::detector::TargetEngine::Dxmt => nucleon_core::backend::GraphicsBackend::Dxmt,
+        nucleon_core::detector::TargetEngine::Dxvk => nucleon_core::backend::GraphicsBackend::Dxvk,
+        nucleon_core::detector::TargetEngine::KosmicKrisp | nucleon_core::detector::TargetEngine::Vkd3d => {
+            nucleon_core::backend::GraphicsBackend::KosmicKrisp
+        }
+        nucleon_core::detector::TargetEngine::WineStaging => nucleon_core::backend::GraphicsBackend::Auto,
+        nucleon_core::detector::TargetEngine::Auto => {
+            let configured = nucleon_core::backend::get_active_backend();
+            if configured != nucleon_core::backend::GraphicsBackend::Auto {
+                configured
+            } else {
+                nucleon_core::backend::GraphicsBackend::Auto
             }
         }
+    };
 
-        if active_engine == nucleon_core::detector::TargetEngine::Vkd3d
-            || active_engine == nucleon_core::detector::TargetEngine::KosmicKrisp
-        {
-            if let Some(vkd3d) = nucleon_core::vkd3d::find_vkd3d_proton() {
-                if let Ok(staged) =
-                    nucleon_core::vkd3d::stage_vkd3d_proton_into_prefix(&vkd3d, &pfx_dir)
-                {
+    let backend = nucleon_core::backend::create_backend(backend_choice);
+    match backend_choice {
+        nucleon_core::backend::GraphicsBackend::Auto => {
+            let _ = backend.disable(&pfx_dir, Some(&runner_dir));
+        }
+        nucleon_core::backend::GraphicsBackend::D3DMetal => {
+            let _ = backend.enable(&pfx_dir, Some(&runner_dir));
+        }
+        _ => {
+            match backend.enable(&pfx_dir, Some(&runner_dir)) {
+                Ok(staged) => {
                     log_runner(&format!(
-                        "VKD3D-Proton active ({} DLL(s) from {}): Direct3D 12 -> Vulkan 1.4 -> KosmicKrisp",
-                        staged,
-                        vkd3d.root.display()
+                        "{} active ({} DLL(s) staged into prefix)",
+                        backend.display_name(),
+                        staged
                     ));
                 }
-            } else if active_engine == nucleon_core::detector::TargetEngine::Vkd3d {
-                log_runner(
-                    "WARNING: VKD3D-Proton tool selected, but VKD3D-Proton is not installed. \
-                     Install via 'nucleon wine backends vkd3d fetch' or set VKD3D_PROTON_PATH.",
-                );
-            } else {
-                log_runner(
-                    "VKD3D-Proton not installed. Point to an extracted path via 'nucleon vkd3d set-path <DIR>' or set VKD3D_PROTON_PATH to enable Direct3D 12 on KosmicKrisp."
-                );
-            }
-        }
-
-        if let Some(d7vk) = nucleon_core::d7vk::find_d7vk() {
-            if let Ok(staged) = nucleon_core::d7vk::stage_d7vk_into_prefix(&d7vk, &pfx_dir) {
-                log_runner(&format!(
-                    "D7VK active ({} DLL(s) from {}): DirectDraw / Direct3D 1-7 -> Vulkan 1.4 -> KosmicKrisp",
-                    staged,
-                    d7vk.root.display()
-                ));
-            }
-        }
-
-        if active_engine == nucleon_core::detector::TargetEngine::Dxvk
-            || active_engine == nucleon_core::detector::TargetEngine::KosmicKrisp
-        {
-            if let Some(dxvk) = nucleon_core::dxvk::find_dxvk() {
-                if let Ok(staged) = nucleon_core::dxvk::stage_dxvk_into_prefix(&dxvk, &pfx_dir) {
+                Err(e) => {
                     log_runner(&format!(
-                        "DXVK active ({} DLL(s) from {}): Direct3D 9/10/11 -> Vulkan 1.4 -> KosmicKrisp",
-                        staged,
-                        dxvk.root.display()
+                        "WARNING: Failed to stage backend {}: {:#}",
+                        backend.display_name(),
+                        e
                     ));
                 }
-            } else if active_engine == nucleon_core::detector::TargetEngine::Dxvk {
-                log_runner(
-                    "WARNING: DXVK tool selected, but DXVK is not installed. \
-                     Install via 'nucleon wine backends dxvk fetch' or set DXVK_PATH.",
-                );
-            } else {
-                let detection = nucleon_core::detector::detect_target_engine(&target_exe);
-                if detection.api == nucleon_core::detector::GraphicsApi::DirectX11 {
-                    log_runner(
-                        "WARNING: KosmicKrisp has no Direct3D 11 translator active (DXVK not installed). \
-                         DirectX 11 titles will fail under WineD3D. \
-                         Recommended: Switch Steam compatibility tool to 'Nucleon (GPTK 4.0 Beta 2 + Apple D3DMetal)', \
-                         use a DXMT-enabled Wine runtime ('nucleon wine use wine-11.18-dxmt'), \
-                         or configure DXVK via 'nucleon wine backends dxvk set-path <DIR>'."
-                    );
-                }
-            }
-        }
-    } else if active_engine == nucleon_core::detector::TargetEngine::Dxmt {
-        // Unstage Vulkan translation layers before staging DXMT
-        let _ = nucleon_core::vkd3d::unstage_vkd3d_proton_from_prefix(&pfx_dir, None);
-        let _ = nucleon_core::d7vk::unstage_d7vk_from_prefix(&pfx_dir, None);
-        let _ = nucleon_core::dxvk::unstage_dxvk_from_prefix(&pfx_dir, None);
-
-        if let Some(dxmt) = nucleon_core::dxmt::find_dxmt() {
-            if let Ok(staged) =
-                nucleon_core::dxmt::stage_dxmt_into_prefix(&dxmt, &pfx_dir, Some(&runner_dir))
-            {
-                log_runner(&format!(
-                    "DXMT active ({} DLL(s) from {}): Direct3D 11 -> Apple Metal",
-                    staged,
-                    dxmt.root.display()
-                ));
-            }
-        } else {
-            log_runner(
-                "WARNING: DXMT tool selected, but DXMT is not installed. \
-                 Install via 'nucleon dxmt fetch' or set DXMT_PATH.",
-            );
-        }
-    } else {
-        // Gptk or WineStaging: unstage all translation layers and restore builtin DLLs
-        if let Ok(removed) =
-            nucleon_core::vkd3d::unstage_vkd3d_proton_from_prefix(&pfx_dir, Some(&runner_dir))
-        {
-            if removed > 0 {
-                log_runner(&format!(
-                    "Unstaged {} VKD3D-Proton DLL(s) from prefix (restored builtin D3D12 for {:?})",
-                    removed, active_engine
-                ));
-            }
-        }
-        if let Ok(removed) =
-            nucleon_core::d7vk::unstage_d7vk_from_prefix(&pfx_dir, Some(&runner_dir))
-        {
-            if removed > 0 {
-                log_runner(&format!(
-                    "Unstaged {} D7VK DLL(s) from prefix (restored builtin ddraw for {:?})",
-                    removed, active_engine
-                ));
-            }
-        }
-        if let Ok(removed) =
-            nucleon_core::dxvk::unstage_dxvk_from_prefix(&pfx_dir, Some(&runner_dir))
-        {
-            if removed > 0 {
-                log_runner(&format!(
-                    "Unstaged {} DXVK DLL(s) from prefix (restored builtin D3D9/10/11 for {:?})",
-                    removed, active_engine
-                ));
-            }
-        }
-        if let Ok(removed) =
-            nucleon_core::dxmt::unstage_dxmt_from_prefix(&pfx_dir, Some(&runner_dir))
-        {
-            if removed > 0 {
-                log_runner(&format!(
-                    "Unstaged {} DXMT DLL(s) from prefix (restored builtin D3D11 for {:?})",
-                    removed, active_engine
-                ));
             }
         }
     }
@@ -1127,5 +1023,53 @@ mod tests {
         );
         assert_eq!(shimmed.len(), 2);
         assert!(shimmed[0].contains("steam.exe"));
+    }
+
+    #[test]
+    fn test_golden_path_backend_staging_isolation() {
+        use std::fs;
+        use tempfile::tempdir;
+        let temp = tempdir().unwrap();
+        let pfx_dir = temp.path().join("pfx");
+        let sys32 = pfx_dir.join("drive_c/windows/system32");
+        let syswow64 = pfx_dir.join("drive_c/windows/syswow64");
+        fs::create_dir_all(&sys32).unwrap();
+        fs::create_dir_all(&syswow64).unwrap();
+
+        // 1. Create mock DXVK bundle & register path
+        let dxvk_dir = temp.path().join("dxvk");
+        let dxvk_x64 = dxvk_dir.join("x64");
+        fs::create_dir_all(&dxvk_x64).unwrap();
+        fs::write(dxvk_x64.join("d3d11.dll"), b"dxvk-dll").unwrap();
+        nucleon_core::dxvk::set_custom_dxvk_path(&dxvk_dir).unwrap();
+
+        let dxvk_backend = nucleon_core::backend::create_backend(nucleon_core::backend::GraphicsBackend::Dxvk);
+        let staged_dxvk = dxvk_backend.enable(&pfx_dir, None).unwrap();
+        assert!(staged_dxvk > 0);
+        assert_eq!(fs::read(sys32.join("d3d11.dll")).unwrap(), b"dxvk-dll");
+
+        // 2. Create mock DXMT bundle & register path
+        let dxmt_dir = temp.path().join("dxmt");
+        let dxmt_x64 = dxmt_dir.join("x86_64-windows");
+        fs::create_dir_all(&dxmt_x64).unwrap();
+        fs::write(dxmt_x64.join("d3d11.dll"), b"dxmt-d3d11").unwrap();
+        fs::write(dxmt_x64.join("winemetal.dll"), b"dxmt-winemetal").unwrap();
+        nucleon_core::dxmt::set_custom_dxmt_path(&dxmt_dir).unwrap();
+
+        let dxmt_backend = nucleon_core::backend::create_backend(nucleon_core::backend::GraphicsBackend::Dxmt);
+        let staged_dxmt = dxmt_backend.enable(&pfx_dir, None).unwrap();
+        assert!(staged_dxmt > 0);
+        assert_eq!(fs::read(sys32.join("d3d11.dll")).unwrap(), b"dxmt-d3d11");
+        assert_eq!(fs::read(sys32.join("winemetal.dll")).unwrap(), b"dxmt-winemetal");
+
+        // 3. Enable D3DMetal (GPTK4 flow) -> unstage all translation layers
+        let d3dm_backend = nucleon_core::backend::create_backend(nucleon_core::backend::GraphicsBackend::D3DMetal);
+        d3dm_backend.enable(&pfx_dir, None).unwrap();
+        assert!(!sys32.join("winemetal.dll").exists(), "D3DMetal flow must unstage winemetal.dll");
+        assert!(!sys32.join("d3d11.dll").exists(), "D3DMetal flow must unstage translation d3d11.dll");
+
+        // Cleanup custom paths
+        let _ = nucleon_core::dxvk::clear_custom_dxvk_path();
+        let _ = nucleon_core::dxmt::clear_custom_dxmt_path();
     }
 }

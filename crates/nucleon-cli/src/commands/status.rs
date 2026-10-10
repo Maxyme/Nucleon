@@ -47,9 +47,18 @@ pub fn run() -> Result<()> {
     } else {
         ui::kv(
             "Active Default Runner:",
-            "✗ Not configured (run 'nucleon setup')",
+            "✗ Not configured (run 'nucleon setup fix')",
         );
     }
+
+    let (active_backend, backend_origin) = nucleon_core::backend::get_active_backend_with_origin();
+    let backend_instance = nucleon_core::backend::create_backend(active_backend);
+    let backend_status = backend_instance.status();
+    let ver_label = backend_status.version.as_deref().unwrap_or("active");
+    ui::kv(
+        "Active Graphics Backend:",
+        format!("✓ {} [{}] ({})", active_backend.as_str(), ver_label, backend_origin),
+    );
 
     println!("  Tri-Engine Architecture & Steam Compatibility Tools:");
     if steam::is_auto_tool_registered() {
@@ -60,12 +69,13 @@ pub fn run() -> Result<()> {
             "✓ 'Nucleon (Wine + Automatic Graphics Backend)'",
         );
     }
-    if let Some(gptk) = runner::find_gptk_runner() {
-        ui::sub_kv("Apple GPTK 4 (DX11/12):", format!("✓ {}", gptk.display()));
-    } else if let Ok(Some((fw, _))) = runner::find_gptk_components(None) {
-        ui::sub_kv("Apple GPTK 4 (Components):", format!("✓ {}", fw.display()));
+    if let Some((comps, origin)) = runner::get_gptk_resolution_info(None) {
+        ui::sub_kv(
+            "Apple GPTK 4 (DX11/12):",
+            format!("✓ {} ({origin})", comps.0.display()),
+        );
     } else {
-        println!("    ○ Apple GPTK 4 (DX11/12):        ✗ Not found (run 'nucleon setup' or 'nucleon gptk set-path <DIR>')");
+        println!("    ○ Apple GPTK 4 (DX11/12):        ✗ Not found (run 'nucleon gptk set-path <DIR>')");
     }
     if steam::is_gptk_tool_registered() {
         let display_name = steam::registered_gptk_tool_display_name().unwrap_or_else(|| {

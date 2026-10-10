@@ -24,6 +24,11 @@ pub enum D7vkAction {
 }
 
 pub fn run(action: D7vkAction) -> Result<()> {
+    eprintln!("Notice: 'nucleon d7vk' is deprecated; use 'nucleon backends d7vk' instead.\n");
+    execute(action)
+}
+
+pub fn execute(action: D7vkAction) -> Result<()> {
     match action {
         D7vkAction::Status => {
             ui::header("D7VK Status (DirectDraw / Direct3D 1-7 -> Vulkan 1.4 for KosmicKrisp)");

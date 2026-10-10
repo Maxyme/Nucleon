@@ -361,9 +361,6 @@ fn restore_dll_in_dir(
     subdirs: &[&str],
 ) -> usize {
     let dst_file = dst_dir.join(dll_name);
-    if !dst_file.exists() && !dst_file.is_symlink() {
-        return 0;
-    }
 
     let builtin = runner_dir.and_then(|r| {
         subdirs
@@ -373,21 +370,27 @@ fn restore_dll_in_dir(
     });
 
     if let Some(src) = builtin {
-        let need_copy = fs::metadata(&dst_file)
-            .and_then(|d| {
-                fs::metadata(&src).map(|s| {
-                    if d.len() != s.len() {
-                        true
-                    } else {
-                        fs::read(&dst_file).ok() != fs::read(&src).ok()
-                    }
-                })
-            })
-            .unwrap_or(true);
-        if need_copy {
-            let _ = fs::remove_file(&dst_file);
+        if !dst_file.exists() && !dst_file.is_symlink() {
             if fs::copy(&src, &dst_file).is_ok() {
                 return 1;
+            }
+        } else {
+            let need_copy = fs::metadata(&dst_file)
+                .and_then(|d| {
+                    fs::metadata(&src).map(|s| {
+                        if d.len() != s.len() {
+                            true
+                        } else {
+                            fs::read(&dst_file).ok() != fs::read(&src).ok()
+                        }
+                    })
+                })
+                .unwrap_or(true);
+            if need_copy {
+                let _ = fs::remove_file(&dst_file);
+                if fs::copy(&src, &dst_file).is_ok() {
+                    return 1;
+                }
             }
         }
     } else if (dst_file.exists() || dst_file.is_symlink()) && fs::remove_file(&dst_file).is_ok() {
@@ -526,6 +529,92 @@ pub fn fetch_dxmt(version: Option<&str>, dest_dir: Option<&Path>) -> Result<Dxmt
             target_dir.display()
         )
     })
+}
+
+use crate::backend::{Backend, BackendStatus, GraphicsBackend};
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct DxmtBackend;
+
+impl Backend for DxmtBackend {
+    fn backend(&self) -> GraphicsBackend {
+        GraphicsBackend::Dxmt
+    }
+
+    fn supported_dx_versions(&self) -> &'static str {
+        find_dxmt()
+            .as_ref()
+            .map(|b| b.supported_dx_range())
+            .unwrap_or("DX10-DX11")
+    }
+
+    fn status(&self) -> BackendStatus {
+        let bundle = find_dxmt();
+        let installed = bundle.is_some();
+        let (location, version) = match bundle {
+            Some(ref b) => (Some(b.root.clone()), b.version.clone()),
+            None => (None, None),
+        };
+        BackendStatus {
+            backend: GraphicsBackend::Dxmt,
+            installed,
+            version,
+            location,
+            supported_dx: self.supported_dx_versions(),
+            description: "Direct3D 11 translation to Apple Metal".to_string(),
+        }
+    }
+
+    fn install(&self, paths: &Path) -> Result<()> {
+        set_custom_dxmt_path(paths).map(|_| ())
+    }
+
+    fn enable(&self, prefix: &Path, runner_dir: Option<&Path>) -> Result<usize> {
+        let bundle = find_dxmt().context("DXMT is not installed. Run 'nucleon backends dxmt fetch' or configure via 'nucleon backends dxmt set-path <DIR>'")?;
+        let _ = crate::vkd3d::unstage_vkd3d_proton_from_prefix(prefix, runner_dir);
+        let _ = crate::d7vk::unstage_d7vk_from_prefix(prefix, runner_dir);
+        let _ = crate::dxvk::unstage_dxvk_from_prefix(prefix, runner_dir);
+        stage_dxmt_into_prefix(&bundle, prefix, runner_dir)
+    }
+
+    fn disable(&self, prefix: &Path, runner_dir: Option<&Path>) -> Result<usize> {
+        unstage_dxmt_from_prefix(prefix, runner_dir)
+    }
+
+    fn apply_env(
+        &self,
+        env: &mut std::collections::HashMap<String, String>,
+        runner_dir: &Path,
+        _prefix_dir: &Path,
+        steam_dir: &Path,
+        client_path_str: &str,
+        enable_hud: bool,
+    ) {
+        env.insert(
+            "WINEDLLOVERRIDES".to_string(),
+            "steamclient=n,b;steamclient64=n,b;lsteamclient=b;d3d11,dxgi,d3d10core,winemetal=n,b;nvapi64,nvngx=n,b".to_string(),
+        );
+
+        if enable_hud {
+            env.insert("MTL_HUD_ENABLED".to_string(), "1".to_string());
+        }
+
+        let lib_dir = runner_dir.join("lib");
+        let lib_unix = runner_dir.join("lib/wine/x86_64-unix");
+        let mut dyld_paths = vec![
+            steam_dir.to_string_lossy().to_string(),
+            client_path_str.to_string(),
+            lib_unix.to_string_lossy().to_string(),
+            lib_dir.to_string_lossy().to_string(),
+        ];
+        if let Some(dxmt) = find_dxmt() {
+            let dxmt_unix = dxmt.root.join("x86_64-unix");
+            if dxmt_unix.is_dir() {
+                dyld_paths.push(dxmt_unix.to_string_lossy().to_string());
+            }
+        }
+        env.insert("DYLD_FALLBACK_LIBRARY_PATH".to_string(), dyld_paths.join(":"));
+    }
 }
 
 #[cfg(test)]

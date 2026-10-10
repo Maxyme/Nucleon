@@ -22,8 +22,10 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Perform end-to-end setup of Nucleon, Wine runtime, Apple GPTK 4, and Steam compatibility tool
+    /// Perform idempotent setup check or remediate missing prerequisites ('nucleon setup fix')
     Setup {
+        #[command(subcommand)]
+        action: Option<commands::setup::SetupAction>,
         /// Run setup non-interactively with defaults or provided flags (skips the interactive prompt)
         #[arg(short = 'y', long)]
         non_interactive: bool,
@@ -89,6 +91,7 @@ enum Commands {
         action: WineAction,
     },
     /// Manage Wine graphical translation backends (KosmicKrisp, VKD3D-Proton, D7VK, DXVK, DXMT)
+    #[command(alias = "backend")]
     Backends {
         #[command(subcommand)]
         action: BackendsAction,
@@ -209,6 +212,7 @@ fn main() -> Result<()> {
 
     match cli.command {
         Commands::Setup {
+            action,
             non_interactive,
             force,
             kosmickrisp,
@@ -227,6 +231,7 @@ fn main() -> Result<()> {
             gptk_path,
             bridge_path,
         } => commands::setup::run(SetupArgs {
+            action,
             non_interactive,
             force,
             kosmickrisp,

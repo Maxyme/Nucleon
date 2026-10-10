@@ -24,6 +24,11 @@ pub enum DxvkAction {
 }
 
 pub fn run(action: DxvkAction) -> Result<()> {
+    eprintln!("Notice: 'nucleon dxvk' is deprecated; use 'nucleon backends dxvk' instead.\n");
+    execute(action)
+}
+
+pub fn execute(action: DxvkAction) -> Result<()> {
     match action {
         DxvkAction::Status => {
             ui::header("DXVK Status (Direct3D 9/10/11 -> Vulkan 1.4 for KosmicKrisp)");
