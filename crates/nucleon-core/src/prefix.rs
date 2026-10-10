@@ -117,7 +117,7 @@ pub fn isolate_all_steam_game_prefixes() -> Result<usize> {
 }
 
 pub fn configure_prefix_registry(prefix_dir: &Path, runner_dir: &Path) -> Result<()> {
-    let marker = prefix_dir.join(".nucleon_configured");
+    let marker = prefix_dir.join(".nucleon_configured_v2");
     if marker.exists() {
         return Ok(());
     }
@@ -130,6 +130,10 @@ pub fn configure_prefix_registry(prefix_dir: &Path, runner_dir: &Path) -> Result
 
 [HKEY_CURRENT_USER\Software\Wine\Direct3D]
 "csmt"=dword:00000001
+
+[HKEY_CURRENT_USER\Software\Wine\DirectSound]
+"DefaultCapture"=""
+"DefaultVoiceCapture"=""
 
 [HKEY_LOCAL_MACHINE\Software\Classes\steam]
 "URL Protocol"=""

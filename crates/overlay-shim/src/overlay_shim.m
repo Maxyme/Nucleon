@@ -10,6 +10,10 @@
 #import <Metal/Metal.h>
 #import <QuartzCore/CAMetalLayer.h>
 #import <AppKit/AppKit.h>
+#import <AVFoundation/AVFoundation.h>
+#import <AudioToolbox/AudioToolbox.h>
+#import <AudioUnit/AudioUnit.h>
+#import <CoreAudio/CoreAudio.h>
 
 #import <dlfcn.h>
 #import <mach-o/dyld.h>
@@ -708,6 +712,146 @@ static NSArray<id<MTLDevice>> *shim_MTLCopyAllDevices(void)
 	return devices;
 }
 
+// ==============================================================================
+// Microphone Access Elimination
+//
+// Windows games and Wine's winecoreaudio.drv automatically probe and initialize
+// audio capture streams at startup, calling [AVCaptureDevice requestAccessForMediaType:]
+// and AudioUnitSetProperty(EnableIO, Element 1). On macOS, this triggers an invasive
+// TCC system modal prompt asking for microphone permissions and can block or hang
+// game launches.
+//
+// By interposing AVCaptureDevice and AudioUnit/AudioQueue input streams:
+// 1. authorizationStatusForMediaType: returns AVAuthorizationStatusDenied (2).
+// 2. requestAccessForMediaType:completionHandler: immediately invokes handler(NO)
+//    without ever invoking Apple's TCC prompt.
+// 3. AudioUnitSetProperty prevents enabling input I/O on element 1 (keeps enableIO = 0),
+//    so CoreAudio HAL never activates hardware microphone capture.
+// 4. AudioOutputUnitStart and AudioQueueNewInput fail gracefully (-10879 Unauthorized)
+//    if direct input is attempted.
+//
+// Normal audio output (speakers, music, game SFX) on element 0 is 100% unaffected.
+// To opt back into microphone access, the user can set NUCLEON_ENABLE_MIC=1.
+// ==============================================================================
+
+static int is_mic_disabled(void)
+{
+	const char *val = getenv("NUCLEON_ENABLE_MIC");
+	if (val && (strcmp(val, "1") == 0 || strcasecmp(val, "true") == 0)) {
+		return 0; // Explicit user opt-in
+	}
+	return 1; // Disabled by default
+}
+
+typedef NSInteger (*auth_status_fn)(id, SEL, NSString *);
+typedef void (*request_access_fn)(id, SEL, NSString *, void (^)(BOOL));
+
+static auth_status_fn next_auth_status = NULL;
+static request_access_fn next_request_access = NULL;
+
+static NSInteger hook_authorization_status(id self, SEL _cmd, NSString *mediaType)
+{
+	if (is_mic_disabled() && [mediaType isEqualToString:AVMediaTypeAudio]) {
+		return 2; // AVAuthorizationStatusDenied
+	}
+	if (next_auth_status)
+		return next_auth_status(self, _cmd, mediaType);
+	return 0; // AVAuthorizationStatusNotDetermined
+}
+
+static void hook_request_access(id self, SEL _cmd, NSString *mediaType, void (^handler)(BOOL))
+{
+	if (is_mic_disabled() && [mediaType isEqualToString:AVMediaTypeAudio]) {
+		if (handler) {
+			dispatch_async(dispatch_get_main_queue(), ^{
+				handler(NO);
+			});
+		}
+		return;
+	}
+	if (next_request_access) {
+		next_request_access(self, _cmd, mediaType, handler);
+	} else if (handler) {
+		handler(NO);
+	}
+}
+
+static OSStatus shim_AudioUnitSetProperty(AudioUnit inUnit,
+                                          AudioUnitPropertyID inID,
+                                          AudioUnitScope inScope,
+                                          AudioUnitElement inElement,
+                                          const void *inData,
+                                          UInt32 inDataSize)
+{
+	if (is_mic_disabled() && inID == kAudioOutputUnitProperty_EnableIO && inElement == 1 && inData != NULL) {
+		UInt32 enable = *(const UInt32 *)inData;
+		if (enable != 0) {
+			UInt32 zero = 0;
+			return AudioUnitSetProperty(inUnit, inID, inScope, inElement, &zero, sizeof(zero));
+		}
+	}
+	return AudioUnitSetProperty(inUnit, inID, inScope, inElement, inData, inDataSize);
+}
+
+static OSStatus shim_AudioOutputUnitStart(AudioUnit ci)
+{
+	if (is_mic_disabled()) {
+		UInt32 enableIO = 0;
+		UInt32 size = sizeof(enableIO);
+		if ((AudioUnitGetProperty(ci, kAudioOutputUnitProperty_EnableIO, kAudioUnitScope_Input, 1, &enableIO, &size) == noErr && enableIO != 0) ||
+		    (AudioUnitGetProperty(ci, kAudioOutputUnitProperty_EnableIO, kAudioUnitScope_Global, 1, &enableIO, &size) == noErr && enableIO != 0)) {
+			return -10879; // kAudioUnitErr_Unauthorized
+		}
+	}
+	return AudioOutputUnitStart(ci);
+}
+
+static OSStatus shim_AudioQueueNewInput(const AudioStreamBasicDescription *inFormat,
+                                        AudioQueueInputCallback inCallbackProc,
+                                        void *inUserData,
+                                        CFRunLoopRef inCallbackRunLoop,
+                                        CFStringRef inCallbackRunLoopMode,
+                                        UInt32 inFlags,
+                                        AudioQueueRef *outAQ)
+{
+	if (is_mic_disabled()) {
+		if (outAQ) *outAQ = NULL;
+		return -10879; // kAudioUnitErr_Unauthorized
+	}
+	return AudioQueueNewInput(inFormat, inCallbackProc, inUserData, inCallbackRunLoop, inCallbackRunLoopMode, inFlags, outAQ);
+}
+
+static void install_microphone_guards(void)
+{
+	if (!is_mic_disabled()) {
+		shim_log("overlay_shim: microphone access explicitly enabled via NUCLEON_ENABLE_MIC=1\n");
+		return;
+	}
+
+	Class av_class = objc_getClass("AVCaptureDevice");
+	if (!av_class) {
+		void *av_handle = dlopen("/System/Library/Frameworks/AVFoundation.framework/AVFoundation", RTLD_LAZY | RTLD_GLOBAL);
+		if (av_handle) {
+			av_class = objc_getClass("AVCaptureDevice");
+		}
+	}
+
+	if (av_class) {
+		Method m_status = class_getClassMethod(av_class, sel_registerName("authorizationStatusForMediaType:"));
+		if (m_status) {
+			next_auth_status = (auth_status_fn)method_getImplementation(m_status);
+			method_setImplementation(m_status, (IMP)hook_authorization_status);
+		}
+
+		Method m_request = class_getClassMethod(av_class, sel_registerName("requestAccessForMediaType:completionHandler:"));
+		if (m_request) {
+			next_request_access = (request_access_fn)method_getImplementation(m_request);
+			method_setImplementation(m_request, (IMP)hook_request_access);
+		}
+		shim_log("overlay_shim: AVCaptureDevice microphone access suppressed (TCC prompt eliminated)\n");
+	}
+}
+
 __attribute__((used, section("__DATA,__interpose"))) static const struct {
 	const void *replacement;
 	const void *original;
@@ -715,6 +859,9 @@ __attribute__((used, section("__DATA,__interpose"))) static const struct {
 	{ (const void *)shim_MTLCreateSystemDefaultDevice,
 	  (const void *)MTLCreateSystemDefaultDevice },
 	{ (const void *)shim_MTLCopyAllDevices, (const void *)MTLCopyAllDevices },
+	{ (const void *)shim_AudioUnitSetProperty, (const void *)AudioUnitSetProperty },
+	{ (const void *)shim_AudioOutputUnitStart, (const void *)AudioOutputUnitStart },
+	{ (const void *)shim_AudioQueueNewInput, (const void *)AudioQueueNewInput },
 };
 
 struct interpose_pair {
@@ -1091,6 +1238,8 @@ void *macdrv_functions[32] = {
 
 __attribute__((constructor)) static void overlay_shim_load(void)
 {
+	install_microphone_guards();
+
 	Class layer = objc_getClass("CAMetalLayer");
 	if (layer == Nil) {
 		shim_log("overlay_shim_load: CAMetalLayer absent, nothing to correct\n");
