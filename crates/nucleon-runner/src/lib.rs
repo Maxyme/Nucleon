@@ -14,10 +14,47 @@ use std::thread;
 use std::time::Duration;
 use sysinfo::{Pid, ProcessesToUpdate, Signal, System};
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Default)]
 struct LaunchOverride {
     hud: Option<bool>,
     engine: Option<String>,
+    use_steam_shim: Option<bool>,
+}
+
+/// Determines whether to wrap game arguments through Proton's `steam.exe` or execute directly.
+///
+/// Under GPTK (64-bit D3DMetal), direct execution is always used because 32-bit `steam.exe` wrapping
+/// causes command-line and process spawning failures with 64-bit Direct3D titles.
+/// Under Wine / backends, 32-bit legacy titles (such as GoNNER) are wrapped with `steam.exe` if present
+/// in the prefix to satisfy the `SteamAPI_Init` client handshake, while 64-bit titles launch directly.
+/// Explicit user overrides (via CLI `use_steam_shim` or `NUCLEON_STEAM_SHIM` env var) take precedence.
+pub fn determine_wine_args(
+    game_args: &[String],
+    active_engine: nucleon_core::detector::TargetEngine,
+    is_64_bit: bool,
+    steam_shim_exists: bool,
+    user_shim_override: Option<bool>,
+) -> Vec<String> {
+    let use_shim = match user_shim_override {
+        Some(explicit) => explicit && steam_shim_exists,
+        None => {
+            if active_engine == nucleon_core::detector::TargetEngine::Gptk {
+                false
+            } else if !is_64_bit && steam_shim_exists {
+                true
+            } else {
+                false
+            }
+        }
+    };
+
+    if use_shim {
+        let mut wrapped = vec!["C:\\Program Files (x86)\\Steam\\steam.exe".to_string()];
+        wrapped.extend(game_args.to_vec());
+        wrapped
+    } else {
+        game_args.to_vec()
+    }
 }
 
 fn log_runner(msg: &str) {
@@ -106,16 +143,29 @@ fn terminate_wine_prefix(
     pfx_dir: &Path,
     mut child: Option<&mut std::process::Child>,
     child_id: u32,
+    target_exe: Option<&Path>,
 ) {
     let wineserver_bin = runner_dir.join("bin/wineserver");
 
-    // 1. Tell wineserver to cleanly terminate all processes under this prefix
+    // 1. Tell wineserver to cleanly terminate all processes under this prefix with a bounded timeout
     if wineserver_bin.is_file() {
         let mut cmd = Command::new(&wineserver_bin);
         cmd.arg("-k");
         cmd.env("WINEPREFIX", pfx_dir);
         set_runner_lib_env(&mut cmd, runner_dir);
-        let _ = cmd.status();
+        if let Ok(mut c) = cmd.spawn() {
+            let start = std::time::Instant::now();
+            loop {
+                if let Ok(Some(_)) = c.try_wait() {
+                    break;
+                }
+                if start.elapsed() >= Duration::from_millis(1500) {
+                    let _ = c.kill();
+                    break;
+                }
+                thread::sleep(Duration::from_millis(50));
+            }
+        }
     }
 
     let mut sys = System::new();
@@ -123,15 +173,57 @@ fn terminate_wine_prefix(
 
     let root_pid = Pid::from_u32(child_id);
     let runner_dir_str = runner_dir.to_string_lossy().to_lowercase();
+    let runner_canon = runner_dir.canonicalize().unwrap_or_else(|_| runner_dir.to_path_buf());
+    let runner_canon_str = runner_canon.to_string_lossy().to_lowercase();
     let pfx_str = pfx_dir.to_string_lossy().to_lowercase();
     let my_pid = std::process::id();
+    let target_name = target_exe
+        .and_then(|p| p.file_name())
+        .and_then(|n| n.to_str())
+        .unwrap_or("")
+        .to_lowercase();
 
     // 2. Kill the primary child process tree recursively with SIGTERM (kill-tree)
-    kill_process_tree_sysinfo(&sys, root_pid, Signal::Term);
+    if child_id > 0 {
+        kill_process_tree_sysinfo(&sys, root_pid, Signal::Term);
+    }
 
-    // 3. Terminate any other processes running under this Wine runner or prefix
+    // 3. Scan via `ps -A -o pid,command` to find all processes (including Rosetta translated processes)
+    let mut ps_pids = Vec::new();
+    if let Ok(output) = Command::new("ps").args(["-A", "-o", "pid,command"]).output() {
+        if let Ok(stdout) = String::from_utf8(output.stdout) {
+            for line in stdout.lines() {
+                let trimmed = line.trim();
+                let mut parts = trimmed.split_whitespace();
+                if let Some(pid_str) = parts.next() {
+                    if let Ok(p) = pid_str.parse::<u32>() {
+                        if p == my_pid || (child_id > 0 && p == child_id) {
+                            continue;
+                        }
+                        let cmd_lower = trimmed[pid_str.len()..].trim().to_lowercase();
+                        if cmd_lower.contains("nucleon-runner") || cmd_lower.contains("bin/nucleon") {
+                            continue;
+                        }
+                        let matches_target = !target_name.is_empty() && cmd_lower.contains(&target_name);
+                        let matches_runner = cmd_lower.contains(&runner_dir_str)
+                            || cmd_lower.contains(&runner_canon_str)
+                            || cmd_lower.contains(&pfx_str);
+                        if matches_target || matches_runner {
+                            ps_pids.push(p);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    for &p in &ps_pids {
+        let _ = Command::new("kill").args(["-TERM", &p.to_string()]).status();
+    }
+
+    // 4. Terminate any sysinfo processes running under this Wine runner or prefix
     for (pid, proc) in sys.processes() {
-        if pid.as_u32() == my_pid || *pid == root_pid {
+        if pid.as_u32() == my_pid || (child_id > 0 && *pid == root_pid) {
             continue;
         }
         let exe_str = proc
@@ -151,8 +243,11 @@ fn terminate_wine_prefix(
         }
 
         if exe_str.contains(&runner_dir_str)
+            || exe_str.contains(&runner_canon_str)
             || cmd_joined.contains(&runner_dir_str)
+            || cmd_joined.contains(&runner_canon_str)
             || cmd_joined.contains(&pfx_str)
+            || (!target_name.is_empty() && (exe_str.contains(&target_name) || cmd_joined.contains(&target_name)))
         {
             let _ = proc.kill_with(Signal::Term);
         }
@@ -161,16 +256,21 @@ fn terminate_wine_prefix(
     // Brief grace period for processes to exit
     thread::sleep(Duration::from_millis(300));
 
-    // Force SIGKILL on child if still around: use std::process::Child::kill() if handle is present,
-    // and kill_process_tree_sysinfo with Signal::Kill. 100% safe Rust.
+    // Force SIGKILL on child if still around
     if let Some(ref mut c) = child {
         let _ = c.kill();
     }
-    sys.refresh_processes(ProcessesToUpdate::All, true);
-    kill_process_tree_sysinfo(&sys, root_pid, Signal::Kill);
+    if child_id > 0 {
+        sys.refresh_processes(ProcessesToUpdate::All, true);
+        kill_process_tree_sysinfo(&sys, root_pid, Signal::Kill);
+    }
+
+    for &p in &ps_pids {
+        let _ = Command::new("kill").args(["-KILL", &p.to_string()]).status();
+    }
 
     for (pid, proc) in sys.processes() {
-        if pid.as_u32() == my_pid || *pid == root_pid {
+        if pid.as_u32() == my_pid || (child_id > 0 && *pid == root_pid) {
             continue;
         }
         let exe_str = proc
@@ -190,8 +290,11 @@ fn terminate_wine_prefix(
         }
 
         if exe_str.contains(&runner_dir_str)
+            || exe_str.contains(&runner_canon_str)
             || cmd_joined.contains(&runner_dir_str)
+            || cmd_joined.contains(&runner_canon_str)
             || cmd_joined.contains(&pfx_str)
+            || (!target_name.is_empty() && (exe_str.contains(&target_name) || cmd_joined.contains(&target_name)))
         {
             let _ = proc.kill();
         }
@@ -227,7 +330,7 @@ pub fn is_wine_game_process_line(
         return false;
     }
 
-    // Exclude Wine infrastructure and services
+    // Exclude Wine infrastructure, services, and crash report utilities
     if args_part.contains("wineserver")
         || args_part.contains("winedevice.exe")
         || args_part.contains("services.exe")
@@ -237,6 +340,16 @@ pub fn is_wine_game_process_line(
         || args_part.contains("explorer.exe")
         || args_part.contains("conhost.exe")
         || args_part.contains("steam.exe")
+        || args_part.contains("wineboot.exe")
+        || args_part.contains("rundll32.exe")
+        || args_part.contains("winemenubuilder.exe")
+        || args_part.contains("mscorsvw.exe")
+        || args_part.contains("winecfg.exe")
+        || args_part.contains("regsvr32.exe")
+        || args_part.contains("reg.exe")
+        || args_part.contains("crashsender")
+        || args_part.contains("crashpad_handler")
+        || args_part.contains("unitycrashhandler")
     {
         return false;
     }
@@ -249,12 +362,14 @@ pub fn is_wine_game_process_line(
 
     let matches_target = !target_name.is_empty() && args_part.contains(target_name);
 
-    (matches_runner || matches_target) && args_part.contains(".exe")
+    if !target_name.is_empty() {
+        matches_target || (matches_runner && args_part.contains(".exe"))
+    } else {
+        matches_runner && args_part.contains(".exe")
+    }
 }
 
 pub fn is_wine_game_process_running(runner_dir: &Path, target_exe: &Path) -> bool {
-    let mut sys = System::new();
-    sys.refresh_processes(ProcessesToUpdate::All, true);
     let my_pid = std::process::id();
     let runner_dir_str = runner_dir.to_string_lossy().to_lowercase();
     let target_name = target_exe
@@ -263,6 +378,27 @@ pub fn is_wine_game_process_running(runner_dir: &Path, target_exe: &Path) -> boo
         .unwrap_or("")
         .to_lowercase();
 
+    // 1. Check via `ps -A -o pid,command` which reliably captures arguments of translated Rosetta processes on macOS
+    if let Ok(output) = Command::new("ps")
+        .args(["-A", "-o", "pid,command"])
+        .output()
+    {
+        if let Ok(stdout) = String::from_utf8(output.stdout) {
+            for line in stdout.lines() {
+                if line.contains("wine") || line.contains(&target_name) {
+                    log_runner(&format!("PS LINE: {}", line));
+                }
+                if is_wine_game_process_line(line, my_pid, &runner_dir_str, &target_name) {
+                    log_runner(&format!("MATCHED GAME: {}", line));
+                    return true;
+                }
+            }
+        }
+    }
+
+    // 2. Fallback to sysinfo in case ps is unavailable
+    let mut sys = System::new();
+    sys.refresh_processes(ProcessesToUpdate::All, true);
     for (pid, proc) in sys.processes() {
         if pid.as_u32() == my_pid {
             continue;
@@ -414,6 +550,7 @@ pub fn run_with_args(args: &[String]) -> Result<()> {
         || active_engine == nucleon_core::detector::TargetEngine::KosmicKrisp
         || active_engine == nucleon_core::detector::TargetEngine::Dxvk
         || active_engine == nucleon_core::detector::TargetEngine::Vkd3d
+        || active_engine == nucleon_core::detector::TargetEngine::Dxmt
         || active_engine == nucleon_core::detector::TargetEngine::Auto
     {
         if let Ok(wine_override) = env::var("NUCLEON_WINE") {
@@ -662,17 +799,50 @@ pub fn run_with_args(args: &[String]) -> Result<()> {
         None
     };
 
-    log_runner(&format!("Launching game with Wine: {:?}", game_args));
+    let steam_shim = pfx_dir.join("drive_c/Program Files (x86)/Steam/steam.exe");
+    let is_64 = nucleon_core::detector::is_pe_file_64_bit(&target_exe);
+    let user_shim_override = launch_override
+        .as_ref()
+        .and_then(|o| o.use_steam_shim)
+        .or_else(|| {
+            env::var("NUCLEON_STEAM_SHIM").ok().map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        });
+
+    let wine_args = determine_wine_args(
+        &game_args,
+        active_engine,
+        is_64,
+        steam_shim.is_file(),
+        user_shim_override,
+    );
+
+    log_runner(&format!("Wine binary: {}", wine_bin.display()));
+    log_runner(&format!("Game CWD: {:?}", game_cwd));
+    log_runner(&format!("Target architecture: {}", if is_64 { "64-bit" } else { "32-bit" }));
+    log_runner(&format!("Launching game with Wine: {:?}", wine_args));
+
+    for (k, v) in env::vars() {
+        log_runner(&format!("INHERITED_ENV: {}={}", k, v));
+    }
 
     let mut cmd = Command::new(&wine_bin);
-    cmd.args(&game_args);
+    cmd.args(&wine_args);
 
-    for (k, v) in exec_env {
+    for (k, v) in &exec_env {
+        log_runner(&format!("ENV: {}={}", k, v));
         cmd.env(k, v);
     }
 
     if let Some(ref cwd) = game_cwd {
         cmd.current_dir(cwd);
+    }
+
+    let wine_log_path = paths::support_dir().join("wine.log");
+    if let Ok(file) = fs::File::create(&wine_log_path) {
+        if let Ok(err_file) = file.try_clone() {
+            cmd.stdout(std::process::Stdio::from(file));
+            cmd.stderr(std::process::Stdio::from(err_file));
+        }
     }
 
     let mut child = cmd.spawn()?;
@@ -691,7 +861,7 @@ pub fn run_with_args(args: &[String]) -> Result<()> {
         if term_flag.load(Ordering::SeqCst) {
             log_runner("Termination signal received, stopping Wine processes cleanly");
             let child_id = child.id();
-            terminate_wine_prefix(&runner_dir, &pfx_dir, Some(&mut child), child_id);
+            terminate_wine_prefix(&runner_dir, &pfx_dir, Some(&mut child), child_id, Some(&target_exe));
             std::process::exit(0);
         }
 
@@ -701,8 +871,24 @@ pub fn run_with_args(args: &[String]) -> Result<()> {
                     primary_exited = true;
                     exit_code = status.code().unwrap_or(0);
                     log_runner(&format!("Wine primary process exited with: {:?}", status));
-                    if !is_wine_game_process_running(&runner_dir, &target_exe) {
-                        wait_wineserver(&wineserver_bin, &pfx_dir, 2000);
+
+                    // When Wine acts as a launcher that spawns/forks wine-preloader and exits,
+                    // poll for up to 5 seconds to detect the background Wine game process before deciding to exit.
+                    let mut found_game = false;
+                    for _ in 0..25 {
+                        if is_wine_game_process_running(&runner_dir, &target_exe) {
+                            found_game = true;
+                            break;
+                        }
+                        thread::sleep(Duration::from_millis(200));
+                    }
+
+                    if found_game {
+                        log_runner("Detected active Wine game process; continuing supervision");
+                        exit_code = 0;
+                    } else {
+                        log_runner("No Wine game processes detected after primary launcher exit, shutting down");
+                        terminate_wine_prefix(&runner_dir, &pfx_dir, None, 0, Some(&target_exe));
                         break;
                     }
                 }
@@ -710,15 +896,20 @@ pub fn run_with_args(args: &[String]) -> Result<()> {
                 Err(e) => {
                     log_runner(&format!("Error waiting on Wine process: {}", e));
                     exit_code = 1;
+                    terminate_wine_prefix(&runner_dir, &pfx_dir, None, 0, Some(&target_exe));
                     break;
                 }
             }
         } else {
-            // Check if any background Wine game processes are still running
+            // Check if any background Wine game processes are still running.
+            // Require two consecutive negative checks (500ms apart) to avoid false positives during process state changes.
             if !is_wine_game_process_running(&runner_dir, &target_exe) {
-                log_runner("All Wine game processes have terminated, exiting cleanly");
-                wait_wineserver(&wineserver_bin, &pfx_dir, 2000);
-                break;
+                thread::sleep(Duration::from_millis(500));
+                if !is_wine_game_process_running(&runner_dir, &target_exe) {
+                    log_runner("All Wine game processes have terminated, exiting cleanly");
+                    terminate_wine_prefix(&runner_dir, &pfx_dir, None, 0, Some(&target_exe));
+                    break;
+                }
             }
         }
 
@@ -787,6 +978,14 @@ mod tests {
             "/opt/wine",
             "dirtrally2.exe"
         ));
+
+        let line_crashsender = "13004 /opt/wine/bin/wine-preloader Z:\\games\\DiRT Rally 2.0\\CrashSender1405.exe 0f736746";
+        assert!(!is_wine_game_process_line(
+            line_crashsender,
+            my_pid,
+            "/opt/wine",
+            "dirtrally2.exe"
+        ));
     }
 
     #[test]
@@ -840,5 +1039,93 @@ mod tests {
             exited,
             "Process should have been terminated by kill_process_tree_sysinfo"
         );
+    }
+
+    #[test]
+    fn test_regression_dirt2_gptk_combination_invokes_direct_execution() {
+        // DiRT Rally 2.0 scenario: 64-bit Direct3D 11 game running via GPTK
+        let game_args = vec![
+            "Z:\\games\\DiRT Rally 2.0\\dirtrally2.exe".to_string(),
+            "-novr".to_string(),
+        ];
+        let wine_args = determine_wine_args(
+            &game_args,
+            nucleon_core::detector::TargetEngine::Gptk,
+            true, // is_64_bit = true
+            true, // steam_shim_exists = true in prefix
+            None, // no explicit user override
+        );
+
+        // Must launch directly without wrapping through Proton's 32-bit steam.exe
+        assert_eq!(wine_args, game_args);
+        assert!(!wine_args[0].contains("steam.exe"));
+    }
+
+    #[test]
+    fn test_regression_gonner_wine_combination_invokes_steam_shim() {
+        // GoNNER scenario: 32-bit Unity game running via Wine-Staging with steam.exe in prefix
+        let game_args = vec!["Z:\\games\\GoNNER\\GONNER.exe".to_string()];
+        let wine_args = determine_wine_args(
+            &game_args,
+            nucleon_core::detector::TargetEngine::WineStaging,
+            false, // is_64_bit = false (32-bit game)
+            true,  // steam_shim_exists = true
+            None,  // no explicit user override
+        );
+
+        // Must wrap through steam.exe so SteamAPI_Init handshake succeeds
+        assert_eq!(wine_args.len(), 2);
+        assert!(wine_args[0].contains("steam.exe"));
+        assert_eq!(wine_args[1], "Z:\\games\\GoNNER\\GONNER.exe");
+
+        // If steam_shim does NOT exist in prefix, falls back cleanly to direct execution
+        let fallback_args = determine_wine_args(
+            &game_args,
+            nucleon_core::detector::TargetEngine::WineStaging,
+            false,
+            false, // steam_shim_exists = false
+            None,
+        );
+        assert_eq!(fallback_args, game_args);
+    }
+
+    #[test]
+    fn test_regression_wine_dxmt_64bit_combination_invokes_direct_execution() {
+        // 64-bit Direct3D 11 game running via DXMT
+        let game_args = vec!["Z:\\games\\Game\\game.exe".to_string()];
+        let wine_args = determine_wine_args(
+            &game_args,
+            nucleon_core::detector::TargetEngine::Dxmt,
+            true, // is_64_bit = true
+            true, // steam_shim_exists = true
+            None,
+        );
+        assert_eq!(wine_args, game_args);
+    }
+
+    #[test]
+    fn test_regression_user_override_precedence() {
+        let game_args = vec!["Z:\\games\\test.exe".to_string()];
+
+        // Explicit user override false forces direct execution even for 32-bit Wine title
+        let direct = determine_wine_args(
+            &game_args,
+            nucleon_core::detector::TargetEngine::WineStaging,
+            false,
+            true,
+            Some(false),
+        );
+        assert_eq!(direct, game_args);
+
+        // Explicit user override true forces steam shim even for 64-bit GPTK title if shim exists
+        let shimmed = determine_wine_args(
+            &game_args,
+            nucleon_core::detector::TargetEngine::Gptk,
+            true,
+            true,
+            Some(true),
+        );
+        assert_eq!(shimmed.len(), 2);
+        assert!(shimmed[0].contains("steam.exe"));
     }
 }

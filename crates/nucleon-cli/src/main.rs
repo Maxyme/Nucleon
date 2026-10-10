@@ -268,6 +268,10 @@ fn main() -> Result<()> {
             runner,
             follow,
         } => commands::logs::run(lines, hook, runner, follow),
-        Commands::Runner(args) => nucleon_runner::run_with_args(&args),
+        Commands::Runner(mut args) => {
+            let mut runner_args = vec!["nucleon-runner".to_string()];
+            runner_args.append(&mut args);
+            nucleon_runner::run_with_args(&runner_args)
+        }
     }
 }

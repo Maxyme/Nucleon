@@ -3,7 +3,7 @@
 **Nucleon** enables the native macOS Steam client to download and run Windows games (DirectX, Vulkan, and legacy Direct3D/openGL) directly from the Steam library. 
 It adds a steam play compatibility tab in the game property to allow choosing a runtime and graphical backend.
 
-Note, a runner and graphical backend is required, such as [Apple Game Porting Toolkit - GPTK](https://developer.apple.com/games/game-porting-toolkit/)) or [wine](https://www.winehq.org/) with a selected D3D layer and Mesa KosmicKrisp. These can easily be setup within **Nucleon**.
+Note, a runner and graphical backend is required, such as [Apple Game Porting Toolkit - GPTK](https://developer.apple.com/games/game-porting-toolkit/)) or [wine](https://www.winehq.org/) with a selected D3D layer and Mesa KosmicKrisp. Once downloaded, these options can easily be setup with the cli.
 
 No external launcher application, virtual machine, or emulation container required. Nucleon requires **no commercial software** (CrossOver is optional) and can run most games using GPTK 4 or Wine.
 

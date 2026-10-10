@@ -21,12 +21,25 @@ pub fn ensure_prefix(prefix_dir: &Path, runner_dir: &Path) -> Result<()> {
         }
         let _ = cmd.status();
 
-        // Wait for wineserver to settle
+        // Wait for wineserver to settle (up to 5 seconds)
         let wineserver = runner_dir.join("bin/wineserver");
-        let _ = Command::new(&wineserver)
+        if let Ok(mut child) = Command::new(&wineserver)
             .arg("-w")
             .env("WINEPREFIX", prefix_dir)
-            .status();
+            .spawn()
+        {
+            let start = std::time::Instant::now();
+            loop {
+                if let Ok(Some(_)) = child.try_wait() {
+                    break;
+                }
+                if start.elapsed() >= std::time::Duration::from_millis(5000) {
+                    let _ = child.kill();
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+        }
     }
 
     isolate_user_shell_folders(prefix_dir)?;
@@ -104,6 +117,11 @@ pub fn isolate_all_steam_game_prefixes() -> Result<usize> {
 }
 
 pub fn configure_prefix_registry(prefix_dir: &Path, runner_dir: &Path) -> Result<()> {
+    let marker = prefix_dir.join(".nucleon_configured");
+    if marker.exists() {
+        return Ok(());
+    }
+
     let reg_file = prefix_dir.join("nucleon_tweaks.reg");
     let reg_content = r#"Windows Registry Editor Version 5.00
 
@@ -154,11 +172,12 @@ pub fn configure_prefix_registry(prefix_dir: &Path, runner_dir: &Path) -> Result
 
     let wineserver = runner_dir.join("bin/wineserver");
     let _ = Command::new(&wineserver)
-        .arg("-w")
+        .arg("-k")
         .env("WINEPREFIX", prefix_dir)
         .status();
 
     let _ = fs::remove_file(&reg_file);
+    let _ = fs::write(&marker, b"1");
     Ok(())
 }
 

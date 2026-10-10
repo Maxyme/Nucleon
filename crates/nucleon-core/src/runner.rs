@@ -33,22 +33,24 @@ pub fn find_gptk_runner() -> Option<PathBuf> {
         }
     }
 
-    // 2. Check staged/assembled runners
-    let gptk_beta = paths::runners_dir().join("gptk-4-beta2");
-    if gptk_beta.join("bin/wine").is_file()
-        && gptk_beta.join("lib/external/D3DMetal.framework").is_dir()
-    {
-        return Some(gptk_beta);
-    }
-    let gptk = paths::runners_dir().join("gptk-4");
-    if gptk.join("bin/wine").is_file() && gptk.join("lib/external/D3DMetal.framework").is_dir() {
-        return Some(gptk);
-    }
-
-    // 3. Check current runner symlink
+    // 2. Check current runner symlink
     let cur = paths::current_runner();
     if cur.join("bin/wine").is_file() && cur.join("lib/external/D3DMetal.framework").is_dir() {
         return Some(cur);
+    }
+
+    // 3. Check staged/assembled runners in runners directory
+    let runners_dir = paths::runners_dir();
+    if let Ok(entries) = fs::read_dir(&runners_dir) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.is_dir()
+                && p.join("bin/wine").is_file()
+                && p.join("lib/external/D3DMetal.framework").is_dir()
+            {
+                return Some(p);
+            }
+        }
     }
 
     None
@@ -565,13 +567,9 @@ pub fn resolve_runner_for_engine(engine: TargetEngine) -> Result<(PathBuf, Targe
             if let Some(gptk) = find_gptk_runner() {
                 return Ok((gptk, TargetEngine::Gptk));
             }
-            if let Some(staging) = find_wine_staging_runtime() {
-                log::warn!(
-                    "Apple GPTK runner not found; falling back to Wine-Staging for DirectX 11/12"
-                );
-                return Ok((staging, TargetEngine::WineStaging));
-            }
-            let assembled = assemble_runner(false, None, None)?;
+            let assembled = assemble_runner(false, None, None).with_context(|| {
+                "Failed to resolve Apple GPTK runner. Please ensure Apple GPTK 4 components are configured via 'nucleon gptk set-path <DIR>', --gptk-path, or NUCLEON_GPTK_PATH."
+            })?;
             Ok((assembled, TargetEngine::Gptk))
         }
         TargetEngine::KosmicKrisp
@@ -652,6 +650,22 @@ pub fn inspect_gptk_dir(dir: &Path) -> Option<(PathBuf, PathBuf)> {
         }
     }
 
+    // Check immediate subdirectories in dir (e.g. "Evaluation environment for Windows games 4.0 beta 2")
+    if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.is_dir() {
+                for (fw_rel, shared_rel) in &candidates {
+                    let fw = p.join(fw_rel);
+                    let shared = p.join(shared_rel);
+                    if fw.is_dir() && shared.is_file() {
+                        return Some((fw, shared));
+                    }
+                }
+            }
+        }
+    }
+
     None
 }
 
@@ -659,30 +673,44 @@ pub fn custom_gptk_path_file() -> PathBuf {
     paths::support_dir().join("custom_gptk_path.txt")
 }
 
+/// Validates that a user-specified path exists, is a directory, and contains valid GPTK components
+/// (`D3DMetal.framework` and `libd3dshared.dylib`).
+pub fn validate_and_resolve_gptk_components(path: &Path) -> Result<(PathBuf, PathBuf)> {
+    if !path.exists() {
+        bail!(
+            "Specified GPTK path does not exist: {}. Please provide a valid directory containing Apple GPTK components.",
+            path.display()
+        );
+    }
+    if !path.is_dir() {
+        bail!(
+            "Specified GPTK path is not a directory: {}. Please provide a directory containing D3DMetal.framework and libd3dshared.dylib.",
+            path.display()
+        );
+    }
+    inspect_gptk_dir(path).with_context(|| {
+        format!(
+            "Directory does not contain valid Apple GPTK components (D3DMetal.framework and libd3dshared.dylib not found in {}).",
+            path.display()
+        )
+    })
+}
+
 /// Sets a custom Apple GPTK components path and validates it.
 /// The user is expected to have exported the components to a directory.
 pub fn set_custom_gptk_path(path: &Path) -> Result<(PathBuf, PathBuf)> {
+    let components = validate_and_resolve_gptk_components(path)?;
     let canonical = path
         .canonicalize()
-        .with_context(|| format!("Path does not exist: {}", path.display()))?;
-
-    if !canonical.is_dir() {
-        anyhow::bail!(
-            "Specified GPTK path is not a directory: {}. Please export Apple GPTK components to a directory containing D3DMetal.framework and libd3dshared.dylib.",
-            canonical.display()
-        );
-    }
-
-    let components = inspect_gptk_dir(&canonical).context(
-        "Specified directory does not contain valid Apple GPTK components (D3DMetal.framework and libd3dshared.dylib not found)",
-    )?;
+        .unwrap_or_else(|_| path.to_path_buf());
 
     paths::ensure_dirs()?;
+    let custom_file = custom_gptk_path_file();
     fs::write(
-        custom_gptk_path_file(),
+        &custom_file,
         canonical.to_string_lossy().as_bytes(),
     )
-    .with_context(|| format!("Failed to write {}", custom_gptk_path_file().display()))?;
+    .with_context(|| format!("Failed to write {}", custom_file.display()))?;
 
     log::info!("Registered custom GPTK path at {}", canonical.display());
     Ok(components)
@@ -697,58 +725,61 @@ pub fn clear_custom_gptk_path() -> Result<()> {
     Ok(())
 }
 
+/// Resolves Apple GPTK components from user configuration.
+/// Priority:
+/// 1. Explicitly provided custom path
+/// 2. Environment variables (`NUCLEON_GPTK_PATH`, `GPTK_PATH`)
+/// 3. Persisted user configuration file (`custom_gptk_path.txt`)
+///
+/// Automatic search fallback is strictly removed: if a user path is configured, it is validated
+/// and returns an error if invalid. If no path is configured, returns Ok(None).
 pub fn find_gptk_components(custom_path: Option<&Path>) -> Result<Option<(PathBuf, PathBuf)>> {
     // 1. Explicitly provided custom path
     if let Some(p) = custom_path {
-        if let Some(comps) = inspect_gptk_dir(p) {
-            return Ok(Some(comps));
-        }
-        anyhow::bail!(
-            "Specified custom GPTK path does not contain valid components: {}. Please point to the directory containing D3DMetal.framework and libd3dshared.dylib.",
-            p.display()
-        );
+        let comps = validate_and_resolve_gptk_components(p)?;
+        return Ok(Some(comps));
     }
 
     // 2. Explicit environment variables
     for var in &["NUCLEON_GPTK_PATH", "GPTK_PATH"] {
         if let Ok(val) = env::var(var) {
-            let p = PathBuf::from(val);
-            if let Some(comps) = inspect_gptk_dir(&p) {
+            let trimmed = val.trim();
+            if !trimmed.is_empty() {
+                let p = PathBuf::from(trimmed);
+                let comps = validate_and_resolve_gptk_components(&p).with_context(|| {
+                    format!("Environment variable {} points to an invalid GPTK path", var)
+                })?;
                 return Ok(Some(comps));
             }
         }
     }
 
-    // 3. Persisted custom path
+    // 3. Persisted custom path (configured manually by user via `nucleon gptk set-path`)
     let custom_file = custom_gptk_path_file();
     if custom_file.is_file() {
-        if let Ok(content) = fs::read_to_string(&custom_file) {
-            let p = PathBuf::from(content.trim());
-            if let Some(comps) = inspect_gptk_dir(&p) {
-                return Ok(Some(comps));
-            }
-        }
-    }
-
-    // 4. Check existing runner
-    let cur = paths::current_runner();
-    if let Some(comps) = inspect_gptk_dir(&cur) {
-        return Ok(Some(comps));
-    }
-
-    // 5. Check well-known installed locations
-    let well_known = [
-        PathBuf::from("/Applications/Game Porting Toolkit.app"),
-        PathBuf::from("/opt/homebrew/opt/game-porting-toolkit"),
-        PathBuf::from("/usr/local/opt/game-porting-toolkit"),
-    ];
-    for p in &well_known {
-        if let Some(comps) = inspect_gptk_dir(p) {
+        let content = fs::read_to_string(&custom_file)
+            .with_context(|| format!("Failed to read custom GPTK setting from {}", custom_file.display()))?;
+        let trimmed = content.trim();
+        if !trimmed.is_empty() {
+            let p = PathBuf::from(trimmed);
+            let comps = validate_and_resolve_gptk_components(&p).with_context(|| {
+                format!(
+                    "Configured custom GPTK path in {} is invalid",
+                    custom_file.display()
+                )
+            })?;
             return Ok(Some(comps));
         }
     }
 
     Ok(None)
+}
+
+/// Resolves user-provided GPTK components, failing loudly if not configured or invalid.
+pub fn resolve_gptk_components(custom_path: Option<&Path>) -> Result<(PathBuf, PathBuf)> {
+    find_gptk_components(custom_path)?.context(
+        "Apple Game Porting Toolkit 4.0 path is not configured. The GPTK4 path must be provided by the user: configure it via 'nucleon gptk set-path <DIR>', pass '--gptk-path <DIR>', or set NUCLEON_GPTK_PATH=<DIR>.",
+    )
 }
 
 /// Detects the version of Apple Game Porting Toolkit (GPTK) from D3DMetal.framework
@@ -784,8 +815,6 @@ pub fn detect_gptk_version(custom_path: Option<&Path>) -> Option<String> {
     let paths_to_check = [
         custom_path.map(Path::to_path_buf),
         find_gptk_runner(),
-        Some(paths::runners_dir().join("gptk-4-beta2")),
-        Some(paths::runners_dir().join("gptk-4")),
     ];
 
     for p_opt in paths_to_check.into_iter().flatten() {
@@ -911,23 +940,56 @@ pub fn assemble_runner(
         .status()?;
 
     // Install GPTK 4 D3DMetal components
-    let (d3dm_fw, d3d_shared) = find_gptk_components(custom_gptk)?
-        .context("Could not find Apple Game Porting Toolkit components (D3DMetal.framework). Please export the GPTK components to a directory and configure via 'nucleon gptk set-path <DIR>', --gptk-path, or NUCLEON_GPTK_PATH.")?;
+    let (d3dm_fw, d3d_shared) = resolve_gptk_components(custom_gptk)?;
 
     let ext_dir = target.join("lib/external");
     fs::create_dir_all(&ext_dir)?;
 
     let target_fw = ext_dir.join("D3DMetal.framework");
-    if target_fw.exists() {
-        let _ = fs::remove_dir_all(&target_fw);
+    let is_same_fw = if let (Ok(src_canon), Ok(tgt_canon)) =
+        (d3dm_fw.canonicalize(), target_fw.canonicalize())
+    {
+        src_canon == tgt_canon
+    } else {
+        d3dm_fw == target_fw
+    };
+
+    if !is_same_fw {
+        if target_fw.exists() {
+            let _ = fs::remove_dir_all(&target_fw);
+        }
+        copy_dir_all(&d3dm_fw, &target_fw)?;
     }
-    copy_dir_all(&d3dm_fw, &target_fw)?;
 
     let target_shared = ext_dir.join("libd3dshared.dylib");
-    if target_shared.exists() || target_shared.is_symlink() {
-        let _ = fs::remove_file(&target_shared);
+    let is_same_shared = if let (Ok(src_canon), Ok(tgt_canon)) =
+        (d3d_shared.canonicalize(), target_shared.canonicalize())
+    {
+        src_canon == tgt_canon
+    } else {
+        d3d_shared == target_shared
+    };
+
+    if !is_same_shared {
+        if target_shared.exists() || target_shared.is_symlink() {
+            let _ = fs::remove_file(&target_shared);
+        }
+        fs::copy(&d3d_shared, &target_shared)?;
     }
-    fs::copy(&d3d_shared, &target_shared)?;
+
+    // Copy Apple GPTK D3DMetal Wine DLLs and unix SOs if present in the source redist
+    if let Some(gptk_lib_dir) = d3d_shared.parent().and_then(|p| p.parent()) {
+        let redist_win = gptk_lib_dir.join("wine/x86_64-windows");
+        if redist_win.is_dir() {
+            let target_win = target.join("lib/wine/x86_64-windows");
+            let _ = copy_dir_all(&redist_win, &target_win);
+        }
+        let redist_unix = gptk_lib_dir.join("wine/x86_64-unix");
+        if redist_unix.is_dir() {
+            let target_unix = target.join("lib/wine/x86_64-unix");
+            let _ = copy_dir_all(&redist_unix, &target_unix);
+        }
+    }
 
     // Install overlay-shim.dylib
     let overlay_dst = paths::support_dir().join("overlay-shim.dylib");
@@ -945,6 +1007,52 @@ pub fn assemble_runner(
     std::os::unix::fs::symlink(&target, &cur)?;
 
     Ok(target)
+}
+
+/// Assembles and configures environment variables required for Apple Game Porting Toolkit (GPTK)
+/// and D3DMetal runtime execution (Direct3D 11 & 12 -> Metal translation).
+pub fn apply_gptk_execution_env(
+    env: &mut HashMap<String, String>,
+    runner_dir: &Path,
+    steam_dir: &Path,
+    client_path_str: &str,
+    enable_hud: bool,
+) {
+    // Apple Silicon & GPTK 4 features
+    env.insert("D3DM_MTL4".to_string(), "1".to_string());
+    env.insert("D3DM_ENABLE_METALFX".to_string(), "1".to_string());
+    env.insert("D3DM_SUPPORT_DXR".to_string(), "1".to_string());
+
+    // DirectX 11 & 12 Metal DLL Overrides
+    env.insert(
+        "WINEDLLOVERRIDES".to_string(),
+        "steamclient=n,b;steamclient64=n,b;lsteamclient=b;d3d11,dxgi,d3d12,d3d10core,d3dcompiler_47=n,b;nvapi64,nvngx=n,b".to_string(),
+    );
+
+    env.insert("WINEDEBUG".to_string(), "warn+all,err+all,+seh".to_string());
+
+    if enable_hud {
+        env.insert("MTL_HUD_ENABLED".to_string(), "1".to_string());
+    }
+
+    // Dynamic linker paths including external D3DMetal
+    let lib_ext = runner_dir.join("lib/external");
+    let lib_fw_res =
+        runner_dir.join("lib/external/D3DMetal.framework/Versions/Current/Resources");
+    let lib_dir = runner_dir.join("lib");
+    let lib_unix = runner_dir.join("lib/wine/x86_64-unix");
+    env.insert(
+        "DYLD_FALLBACK_LIBRARY_PATH".to_string(),
+        format!(
+            "{}:{}:{}:{}:{}:{}",
+            steam_dir.display(),
+            client_path_str,
+            lib_ext.display(),
+            lib_fw_res.display(),
+            lib_unix.display(),
+            lib_dir.display()
+        ),
+    );
 }
 
 pub fn build_execution_env(
@@ -984,7 +1092,9 @@ pub fn build_execution_env_for_engine(
             .to_string(),
     );
     env.insert("ROSETTA_ADVERTISE_AVX".to_string(), "1".to_string());
-    env.insert("WINEMSYNC".to_string(), "1".to_string());
+    if engine != TargetEngine::Gptk {
+        env.insert("WINEMSYNC".to_string(), "1".to_string());
+    }
     env.insert("WINEESYNC".to_string(), "1".to_string());
 
     // If runner is CrossOver, set CrossOver root and dynamic linker paths
@@ -1060,21 +1170,33 @@ pub fn build_execution_env_for_engine(
         .unwrap_or_else(|| steam_client_dir.to_string_lossy().to_string());
     env.insert(
         "STEAM_COMPAT_CLIENT_INSTALL_PATH".to_string(),
-        client_path_str,
+        client_path_str.clone(),
     );
 
-    // Compose DYLD_INSERT_LIBRARIES: overlay-shim + Steam client loader/overlay
+    // Compose DYLD_INSERT_LIBRARIES: overlay-shim + Steam in-game overlay
+    // Note: Do not include steamloader.dylib as it crashes Wine/Proton x86_64 runtimes with SIGFPE (136).
     let overlay_shim = paths::support_dir().join("overlay-shim.dylib");
+    let needs_overlay_write = !overlay_shim.exists()
+        || fs::metadata(&overlay_shim)
+            .map(|m| m.len() != overlay_shim::OVERLAY_SHIM_BYTES.len() as u64)
+            .unwrap_or(true);
+    if needs_overlay_write && fs::write(&overlay_shim, overlay_shim::OVERLAY_SHIM_BYTES).is_ok() {
+        let _ = steam::sign_binary(&overlay_shim);
+    }
+    let renderer = steam_client_dir.join("gameoverlayrenderer.dylib");
     let steam_dyld = env::var("STEAM_DYLD_INSERT_LIBRARIES")
         .ok()
         .filter(|s| !s.is_empty())
+        .map(|s| {
+            s.split(':')
+                .filter(|part| !part.contains("steamloader.dylib"))
+                .collect::<Vec<_>>()
+                .join(":")
+        })
+        .filter(|s| !s.is_empty())
         .or_else(|| {
-            let loader = steam_client_dir.join("steamloader.dylib");
-            let renderer = steam_client_dir.join("gameoverlayrenderer.dylib");
-            if loader.exists() && renderer.exists() {
-                Some(format!("{}:{}", loader.display(), renderer.display()))
-            } else if loader.exists() {
-                Some(loader.display().to_string())
+            if renderer.exists() {
+                Some(renderer.display().to_string())
             } else {
                 None
             }
@@ -1100,34 +1222,12 @@ pub fn build_execution_env_for_engine(
             );
         }
         TargetEngine::Gptk => {
-            // Apple Silicon & GPTK 4 features
-            env.insert("D3DM_MTL4".to_string(), "1".to_string());
-            env.insert("D3DM_ENABLE_METALFX".to_string(), "1".to_string());
-            env.insert("D3DM_SUPPORT_DXR".to_string(), "1".to_string());
-
-            // DirectX 11 & 12 Metal DLL Overrides
-            env.insert(
-                "WINEDLLOVERRIDES".to_string(),
-                "steamclient=n,b;steamclient64=n,b;lsteamclient=b;d3d11,dxgi,d3d12,d3d10core,d3dcompiler_47=n,b;nvapi64,nvngx=n,b".to_string(),
-            );
-
-            if enable_hud {
-                env.insert("MTL_HUD_ENABLED".to_string(), "1".to_string());
-            }
-
-            // Dynamic linker paths including external D3DMetal
-            let lib_ext = runner_dir.join("lib/external");
-            let lib_dir = runner_dir.join("lib");
-            let lib_unix = runner_dir.join("lib/wine/x86_64-unix");
-            env.insert(
-                "DYLD_FALLBACK_LIBRARY_PATH".to_string(),
-                format!(
-                    "{}:{}:{}:{}",
-                    steam_dir.display(),
-                    lib_ext.display(),
-                    lib_unix.display(),
-                    lib_dir.display()
-                ),
+            apply_gptk_execution_env(
+                &mut env,
+                runner_dir,
+                &steam_dir,
+                &client_path_str,
+                enable_hud,
             );
         }
         TargetEngine::KosmicKrisp | TargetEngine::Dxvk | TargetEngine::Vkd3d => {
@@ -1174,6 +1274,15 @@ pub fn build_execution_env_for_engine(
             }
             env.insert("WINEDLLOVERRIDES".to_string(), overrides);
 
+            // Configure DXVK logging if available
+            if dxvk::find_dxvk().is_some() {
+                env.insert("DXVK_LOG_LEVEL".to_string(), "info".to_string());
+                env.insert(
+                    "DXVK_LOG_PATH".to_string(),
+                    paths::support_dir().to_string_lossy().to_string(),
+                );
+            }
+
             // Configure VKD3D-Proton features if available
             if vkd3d::find_vkd3d_proton().is_some() {
                 env.insert("VKD3D_CONFIG".to_string(), "dxr11,dxr".to_string());
@@ -1197,8 +1306,9 @@ pub fn build_execution_env_for_engine(
             env.insert(
                 "DYLD_FALLBACK_LIBRARY_PATH".to_string(),
                 format!(
-                    "{}:{}:{}:{}",
+                    "{}:{}:{}:{}:{}",
                     steam_dir.display(),
+                    client_path_str,
                     shim_dir.display(),
                     lib_unix.display(),
                     lib_dir.display()
@@ -1221,6 +1331,7 @@ pub fn build_execution_env_for_engine(
             let lib_unix = runner_dir.join("lib/wine/x86_64-unix");
             let mut dyld_paths = vec![
                 steam_dir.to_string_lossy().to_string(),
+                client_path_str.clone(),
                 lib_unix.to_string_lossy().to_string(),
                 lib_dir.to_string_lossy().to_string(),
             ];
@@ -1248,8 +1359,9 @@ pub fn build_execution_env_for_engine(
             env.insert(
                 "DYLD_FALLBACK_LIBRARY_PATH".to_string(),
                 format!(
-                    "{}:{}:{}",
+                    "{}:{}:{}:{}",
                     steam_dir.display(),
+                    client_path_str,
                     lib_unix.display(),
                     lib_dir.display()
                 ),
@@ -1295,6 +1407,48 @@ mod tests {
 
         let dyld_fallback = env.get("DYLD_FALLBACK_LIBRARY_PATH").unwrap();
         assert!(dyld_fallback.contains("shims/kosmickrisp"));
+    }
+
+    #[test]
+    fn test_build_execution_env_gptk_and_wine_regression() {
+        let runner_dir = PathBuf::from("/tmp/test_runner");
+        let prefix_dir = PathBuf::from("/tmp/test_prefix");
+
+        // 1. GPTK mode (e.g. DiRT Rally 2.0 scenario)
+        let env_gptk = build_execution_env_for_engine(
+            &runner_dir,
+            &prefix_dir,
+            TargetEngine::Gptk,
+            false,
+        );
+        let dyld_gptk = env_gptk.get("DYLD_FALLBACK_LIBRARY_PATH").unwrap();
+        assert!(dyld_gptk.contains("lib/external"));
+        assert!(dyld_gptk.contains("D3DMetal.framework/Versions/Current/Resources"));
+
+        let overrides_gptk = env_gptk.get("WINEDLLOVERRIDES").unwrap();
+        assert!(overrides_gptk.contains("d3d11,dxgi,d3d12,d3d10core,d3dcompiler_47=n,b"));
+
+        // Verify steamloader.dylib is stripped from DYLD_INSERT_LIBRARIES to prevent SIGFPE (136)
+        if let Some(insert) = env_gptk.get("DYLD_INSERT_LIBRARIES") {
+            assert!(!insert.contains("steamloader.dylib"));
+        }
+
+        // Verify WINEMSYNC is disabled for GPTK to prevent SIGFPE in msync, while WINEESYNC remains active
+        assert!(!env_gptk.contains_key("WINEMSYNC"));
+        assert_eq!(env_gptk.get("WINEESYNC").map(|s| s.as_str()), Some("1"));
+
+        // 2. Wine mode (e.g. GoNNER / standard Wine scenario)
+        let env_wine = build_execution_env_for_engine(
+            &runner_dir,
+            &prefix_dir,
+            TargetEngine::WineStaging,
+            false,
+        );
+        let dyld_wine = env_wine.get("DYLD_FALLBACK_LIBRARY_PATH").unwrap();
+        assert!(!dyld_wine.contains("D3DMetal.framework"));
+        assert!(!dyld_wine.contains("lib/external"));
+        assert_eq!(env_wine.get("WINEMSYNC").map(|s| s.as_str()), Some("1"));
+        assert_eq!(env_wine.get("WINEESYNC").map(|s| s.as_str()), Some("1"));
     }
 
     #[test]
@@ -1437,5 +1591,124 @@ mod tests {
 
         let detected = detect_gptk_version(Some(dir.path()));
         assert_eq!(detected, Some("4.0b2".to_string()));
+    }
+
+    #[test]
+    fn test_apply_gptk_execution_env() {
+        let mut env = HashMap::new();
+        let runner_dir = PathBuf::from("/tmp/test_runner");
+        let steam_dir = PathBuf::from("/tmp/test_steam");
+        let client_path_str = "/tmp/test_client";
+
+        apply_gptk_execution_env(
+            &mut env,
+            &runner_dir,
+            &steam_dir,
+            client_path_str,
+            true,
+        );
+
+        assert_eq!(env.get("D3DM_MTL4").map(|s| s.as_str()), Some("1"));
+        assert_eq!(env.get("D3DM_ENABLE_METALFX").map(|s| s.as_str()), Some("1"));
+        assert_eq!(env.get("D3DM_SUPPORT_DXR").map(|s| s.as_str()), Some("1"));
+        assert_eq!(env.get("MTL_HUD_ENABLED").map(|s| s.as_str()), Some("1"));
+        assert_eq!(env.get("WINEDEBUG").map(|s| s.as_str()), Some("warn+all,err+all,+seh"));
+        let overrides = env.get("WINEDLLOVERRIDES").unwrap();
+        assert!(overrides.contains("d3d11,dxgi,d3d12,d3d10core,d3dcompiler_47=n,b"));
+        let dyld = env.get("DYLD_FALLBACK_LIBRARY_PATH").unwrap();
+        assert!(dyld.contains("/tmp/test_steam"));
+        assert!(dyld.contains("/tmp/test_client"));
+        assert!(dyld.contains("/tmp/test_runner/lib/external"));
+    }
+
+    #[test]
+    fn test_validate_and_resolve_gptk_components() {
+        let dir = tempdir().unwrap();
+
+        // 1. Nonexistent path
+        let non_existent = dir.path().join("does_not_exist");
+        let err1 = validate_and_resolve_gptk_components(&non_existent).unwrap_err();
+        assert!(err1.to_string().contains("Specified GPTK path does not exist"));
+
+        // 2. File instead of directory
+        let file_path = dir.path().join("file.txt");
+        fs::write(&file_path, "not a dir").unwrap();
+        let err2 = validate_and_resolve_gptk_components(&file_path).unwrap_err();
+        assert!(err2.to_string().contains("Specified GPTK path is not a directory"));
+
+        // 3. Directory with missing components
+        let empty_dir = dir.path().join("empty");
+        fs::create_dir_all(&empty_dir).unwrap();
+        let err3 = validate_and_resolve_gptk_components(&empty_dir).unwrap_err();
+        assert!(err3.to_string().contains("Directory does not contain valid Apple GPTK components"));
+
+        // 4. Directory with valid components (flat layout)
+        let valid_dir = dir.path().join("valid");
+        let fw = valid_dir.join("D3DMetal.framework");
+        let shared = valid_dir.join("libd3dshared.dylib");
+        fs::create_dir_all(&fw).unwrap();
+        fs::write(&shared, "dylib").unwrap();
+        let (found_fw, found_shared) = validate_and_resolve_gptk_components(&valid_dir).unwrap();
+        assert_eq!(found_fw, fw);
+        assert_eq!(found_shared, shared);
+    }
+
+    #[test]
+    fn test_find_and_resolve_gptk_components_strict_validation() {
+        let dir = tempdir().unwrap();
+        let valid_gptk = dir.path().join("valid_gptk");
+        fs::create_dir_all(valid_gptk.join("D3DMetal.framework")).unwrap();
+        fs::write(valid_gptk.join("libd3dshared.dylib"), "dylib").unwrap();
+
+        let invalid_gptk = dir.path().join("invalid_gptk");
+        fs::create_dir_all(&invalid_gptk).unwrap();
+
+        // 1. Explicit path (valid and invalid)
+        assert!(find_gptk_components(Some(&valid_gptk)).unwrap().is_some());
+        assert!(find_gptk_components(Some(&invalid_gptk)).is_err());
+
+        // 2. Environment variable
+        env::set_var("NUCLEON_GPTK_PATH", &valid_gptk);
+        assert!(find_gptk_components(None).unwrap().is_some());
+        env::set_var("NUCLEON_GPTK_PATH", &invalid_gptk);
+        assert!(find_gptk_components(None).is_err());
+        env::remove_var("NUCLEON_GPTK_PATH");
+
+        // 3. Unconfigured returns Ok(None) for find, and Err for resolve
+        let fake_support = dir.path().join("support");
+        fs::create_dir_all(&fake_support).unwrap();
+        env::set_var("NUCLEON_SUPPORT_DIR", &fake_support);
+
+        assert!(find_gptk_components(None).unwrap().is_none());
+        let resolve_err = resolve_gptk_components(None).unwrap_err();
+        assert!(resolve_err.to_string().contains("Apple Game Porting Toolkit 4.0 path is not configured"));
+
+        // 4. Configured flag file via set_custom_gptk_path
+        set_custom_gptk_path(&valid_gptk).unwrap();
+        assert!(find_gptk_components(None).unwrap().is_some());
+        assert!(resolve_gptk_components(None).is_ok());
+
+        clear_custom_gptk_path().unwrap();
+        assert!(find_gptk_components(None).unwrap().is_none());
+
+        env::remove_var("NUCLEON_SUPPORT_DIR");
+    }
+
+    #[test]
+    fn test_resolve_runner_for_engine_gptk_fails_loudly_when_not_configured() {
+        let dir = tempdir().unwrap();
+        let fake_support = dir.path().join("support");
+        fs::create_dir_all(&fake_support).unwrap();
+        env::set_var("NUCLEON_SUPPORT_DIR", &fake_support);
+        env::remove_var("NUCLEON_GPTK_PATH");
+        env::remove_var("GPTK_PATH");
+        env::remove_var("NUCLEON_GPTK_RUNNER");
+
+        let res = resolve_runner_for_engine(TargetEngine::Gptk);
+        assert!(res.is_err(), "resolve_runner_for_engine(TargetEngine::Gptk) must fail loudly when GPTK is not configured");
+        let err_msg = res.unwrap_err().to_string();
+        assert!(err_msg.contains("GPTK") || err_msg.contains("Apple Game Porting Toolkit"));
+
+        env::remove_var("NUCLEON_SUPPORT_DIR");
     }
 }

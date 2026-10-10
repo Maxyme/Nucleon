@@ -101,17 +101,21 @@ pub struct GraphicsApiInfo {
 }
 
 impl GraphicsApiInfo {
-    /// DirectX 12, Vulkan, DirectDraw/DX1–7 (via D7VK), and OpenGL (via Mesa Zink)
-    /// route to KosmicKrisp (Vulkan 1.4); DirectX 11 routes to KosmicKrisp ONLY if DXVK
-    /// is installed, otherwise falling back to WineStaging (WineD3D / active Wine).
-    /// DirectX 10, DirectX 9, and legacy titles default to WineStaging (WineD3D).
+    /// DirectX 12 and Vulkan route to KosmicKrisp (Vulkan 1.4);
+    /// DirectDraw/DX1–7 routes to KosmicKrisp if D7VK is installed;
+    /// DirectX 11 routes to DXMT (if installed) or DXVK (if installed), otherwise WineStaging;
+    /// OpenGL, DirectX 10, DirectX 9, and legacy titles default to WineStaging (WineD3D / native OpenGL).
     pub fn wine_engine(&self) -> TargetEngine {
         match self.api {
-            GraphicsApi::DirectX12
-            | GraphicsApi::Vulkan
-            | GraphicsApi::DirectX7OrOlder
-            | GraphicsApi::OpenGL => {
+            GraphicsApi::DirectX12 | GraphicsApi::Vulkan => {
                 if runner::is_kosmickrisp_installed() {
+                    TargetEngine::KosmicKrisp
+                } else {
+                    TargetEngine::WineStaging
+                }
+            }
+            GraphicsApi::DirectX7OrOlder => {
+                if d7vk::is_d7vk_installed() && runner::is_kosmickrisp_installed() {
                     TargetEngine::KosmicKrisp
                 } else {
                     TargetEngine::WineStaging
@@ -126,9 +130,10 @@ impl GraphicsApiInfo {
                     TargetEngine::WineStaging
                 }
             }
-            GraphicsApi::DirectX10 | GraphicsApi::DirectX9OrOlder | GraphicsApi::Unknown => {
-                TargetEngine::WineStaging
-            }
+            GraphicsApi::OpenGL
+            | GraphicsApi::DirectX10
+            | GraphicsApi::DirectX9OrOlder
+            | GraphicsApi::Unknown => TargetEngine::WineStaging,
         }
     }
 }
@@ -332,6 +337,34 @@ fn scan_directory_for_graphics_api(dir: &Path, depth: u32) -> Option<GraphicsApi
     None
 }
 
+/// Inspects raw executable bytes to determine whether the binary is 64-bit (PE32+) or 32-bit (PE32).
+pub fn is_pe_64_bit(data: &[u8]) -> bool {
+    if let Ok(file) = object::File::parse(data) {
+        return file.is_64();
+    }
+    // Fallback: check PE machine type in header directly
+    if data.len() >= 0x40 {
+        let pe_offset =
+            u32::from_le_bytes([data[0x3c], data[0x3d], data[0x3e], data[0x3f]]) as usize;
+        if pe_offset + 6 <= data.len() && &data[pe_offset..pe_offset + 4] == b"PE\0\0" {
+            let machine = u16::from_le_bytes([data[pe_offset + 4], data[pe_offset + 5]]);
+            return machine == 0x8664; // IMAGE_FILE_MACHINE_AMD64
+        }
+    }
+    false
+}
+
+/// Inspects a target executable on disk to determine whether it is a 64-bit binary.
+pub fn is_pe_file_64_bit(path: &Path) -> bool {
+    if let Ok(file) = fs::File::open(path) {
+        if let Ok(mmap) = unsafe { memmap2::Mmap::map(&file) } {
+            return is_pe_64_bit(&mmap);
+        }
+    }
+    // Modern games default to 64-bit if file cannot be read
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -469,8 +502,34 @@ mod tests {
             detected_dll: Some("opengl32.dll".into()),
         };
         let wine_eng_gl = info_gl.wine_engine();
-        assert!(
-            wine_eng_gl == TargetEngine::KosmicKrisp || wine_eng_gl == TargetEngine::WineStaging
-        );
+        assert_eq!(wine_eng_gl, TargetEngine::WineStaging);
+    }
+
+    #[test]
+    fn test_is_pe_64_bit() {
+        // Construct minimal mock PE headers
+        let mut pe64 = vec![0u8; 0x100];
+        pe64[0] = b'M';
+        pe64[1] = b'Z';
+        pe64[0x3c] = 0x80; // PE offset at 0x80
+        pe64[0x80] = b'P';
+        pe64[0x81] = b'E';
+        pe64[0x82] = 0;
+        pe64[0x83] = 0;
+        pe64[0x84] = 0x64; // IMAGE_FILE_MACHINE_AMD64 (0x8664)
+        pe64[0x85] = 0x86;
+        assert!(is_pe_64_bit(&pe64));
+
+        let mut pe32 = vec![0u8; 0x100];
+        pe32[0] = b'M';
+        pe32[1] = b'Z';
+        pe32[0x3c] = 0x80;
+        pe32[0x80] = b'P';
+        pe32[0x81] = b'E';
+        pe32[0x82] = 0;
+        pe32[0x83] = 0;
+        pe32[0x84] = 0x4c; // IMAGE_FILE_MACHINE_I386 (0x014c)
+        pe32[0x85] = 0x01;
+        assert!(!is_pe_64_bit(&pe32));
     }
 }

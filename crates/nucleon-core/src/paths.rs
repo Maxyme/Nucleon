@@ -10,6 +10,9 @@ pub fn home_dir() -> PathBuf {
 }
 
 pub fn support_dir() -> PathBuf {
+    if let Ok(dir) = env::var("NUCLEON_SUPPORT_DIR") {
+        return PathBuf::from(dir);
+    }
     home_dir().join("Library/Application Support/nucleon")
 }
 
