@@ -1,0 +1,169 @@
+name: CI & Release
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  format:
+    name: Code Formatting
+    runs-on: ubuntu-26.04-arm
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # v1
+        with:
+          toolchain: stable
+          components: rustfmt
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+  check-linux:
+    name: Clippy & Tests (Linux ARM64)
+    needs: format
+    runs-on: ubuntu-26.04-arm
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # v1
+        with:
+          toolchain: stable
+          components: clippy
+
+      - name: Cache Cargo dependencies & build cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Check Clippy lints
+        run: cargo clippy -p nucleon-core -p nucleon-runner -p nucleon-cli --all-targets --all-features -- -D warnings
+
+      - name: Run unit tests
+        run: cargo test -p nucleon-core -p nucleon-runner -p nucleon-cli
+
+  build-and-release:
+    name: Build & Package Release Bundle
+    needs: [format, check-linux]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # v1
+        with:
+          toolchain: stable
+          targets: aarch64-apple-darwin
+
+      - name: Cache Cargo dependencies & build cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Build thin arm64 release binaries & hook
+        run: |
+          cargo build --release --target aarch64-apple-darwin \
+            -p nucleon-cli \
+            -p nucleon-hook
+
+      - name: Ad-hoc sign release binaries for Apple Silicon
+        run: |
+          RELEASE_DIR="target/aarch64-apple-darwin/release"
+          codesign -fs - "${RELEASE_DIR}/nucleon"
+          codesign -fs - "${RELEASE_DIR}/libnucleon.dylib"
+
+      - name: Verify Mach-O thin arm64 format & ad-hoc signatures
+        run: |
+          RELEASE_DIR="target/aarch64-apple-darwin/release"
+          file "${RELEASE_DIR}/nucleon"
+          file "${RELEASE_DIR}/libnucleon.dylib"
+          codesign -dv "${RELEASE_DIR}/nucleon"
+          codesign -dv "${RELEASE_DIR}/libnucleon.dylib"
+
+      - name: Package release bundle
+        run: |
+          BUNDLE_DIR="nucleon-macos-arm64"
+          mkdir -p "${BUNDLE_DIR}/assets"
+
+          # Distribute single binary, backwards-compatible runner symlink, and hook
+          cp target/aarch64-apple-darwin/release/nucleon "${BUNDLE_DIR}/"
+          ln -sf nucleon "${BUNDLE_DIR}/nucleon-runner"
+          cp target/aarch64-apple-darwin/release/libnucleon.dylib "${BUNDLE_DIR}/"
+
+          # Distribute manifests and AoB templates
+          cp assets/bridge-manifest.json "${BUNDLE_DIR}/assets/"
+          cp -R assets/steam-contracts "${BUNDLE_DIR}/assets/"
+
+          # Include documentation & license
+          cp README.md ARCHITECTURE.md SETUP.md TROUBLESHOOTING.md ROADMAP.md LICENSE NOTICE.md "${BUNDLE_DIR}/"
+
+          # Create compressed release tarball and zip
+          tar -czvf nucleon-macos-arm64.tar.gz -C "${BUNDLE_DIR}" .
+          zip -r nucleon-macos-arm64.zip "${BUNDLE_DIR}"
+
+          # Publish the exact repository source and build scripts with these binaries.
+          git archive --format=tar.gz --prefix=nucleon-source/ HEAD -o nucleon-source.tar.gz
+
+          # Generate SHA-256 checksums
+          shasum -a 256 nucleon-macos-arm64.tar.gz nucleon-macos-arm64.zip nucleon-source.tar.gz > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: nucleon-macos-arm64
+          path: |
+            nucleon-macos-arm64.tar.gz
+            nucleon-macos-arm64.zip
+            nucleon-source.tar.gz
+            SHA256SUMS.txt
+          retention-days: 14
+
+      - name: Create draft GitHub Release for version tags
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: "Nucleon ${{ github.ref_name }}"
+          draft: true
+          prerelease: false
+          make_latest: "true"
+          generate_release_notes: true
+          files: |
+            nucleon-macos-arm64.tar.gz
+            nucleon-macos-arm64.zip
+            nucleon-source.tar.gz
+            SHA256SUMS.txt
+
+      - name: Publish draft release for version tags
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release edit "${{ github.ref_name }}" --draft=false --latest
+

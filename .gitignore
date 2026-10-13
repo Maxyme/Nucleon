@@ -1,0 +1,33 @@
+# Rust build artifacts
+target/
+**/*.rs.bk
+
+# macOS system files
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Editor artifacts
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Logs and temporary files
+*.log
+*.tmp
+
+# Translation binaries, runtime libraries, and archives (never commit to source)
+*.dll
+*.dylib
+*.so
+*.tar.zst
+*.tar.gz
+*.tar.xz
+/downloads/
+/vkd3d-proton/
+/dxvk/
+
+# Local investigation notes
+/docs/

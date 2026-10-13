@@ -1,0 +1,98 @@
+format = "nucleon-steam-contract"
+revision = 1
+
+[client]
+platform = "macos"
+architecture = "arm64"
+steam_build = 1788652215
+uuid = "0472949026583363bd8d746421f10435"
+text_sha256 = "bb3f118adeac769750a64d4d13dcab9aa6007ed14af9dd52a37fa81394236978"
+
+[provenance]
+method = "Apple otool arm64 disassembly and Mach-O section inspection, 2026-10-13"
+source = "Locally installed Valve steamclient.dylib"
+limitations = "Legacy profiles seeded candidate locations; binary validation is not a clean-room claim."
+
+[eligibility]
+virtual_address = 0x6962f0
+entry_words = [0xd10103ff, 0xa9024ff4, 0xa9037bfd, 0x9100c3fd, 0xaa0103f4, 0xaa0003f3, 0xb90017e1, 0xd0007f28]
+abi = "c-self-u32-bool"
+evidence = "Function references CCompatManager::BIsCompatibilityToolEnabled; w1 is stored as AppID."
+
+[[patches]]
+kind = "platform-state-read"
+virtual_address = 0x691a3c
+expected_word = 0x395ec008
+evidence = "0000000000691a3c ldrb w8, [x0, #0x7b0]"
+
+[[patches]]
+kind = "platform-state-read"
+virtual_address = 0x691adc
+expected_word = 0x395ec008
+evidence = "0000000000691adc ldrb w8, [x0, #0x7b0]"
+
+[[patches]]
+kind = "platform-state-read"
+virtual_address = 0x691c04
+expected_word = 0x395ec008
+evidence = "0000000000691c04 ldrb w8, [x0, #0x7b0]"
+
+[[patches]]
+kind = "platform-state-read"
+virtual_address = 0x691f04
+expected_word = 0x395ec008
+evidence = "0000000000691f04 ldrb w8, [x0, #0x7b0]"
+
+[[patches]]
+kind = "platform-state-read"
+virtual_address = 0x693800
+expected_word = 0x395ec000
+evidence = "0000000000693800 ldrb w0, [x0, #0x7b0]"
+
+[[patches]]
+kind = "platform-state-read"
+virtual_address = 0x6955cc
+expected_word = 0x395ec008
+evidence = "00000000006955cc ldrb w8, [x0, #0x7b0]"
+
+[[patches]]
+kind = "platform-state-read"
+virtual_address = 0x695794
+expected_word = 0x395ec008
+evidence = "0000000000695794 ldrb w8, [x0, #0x7b0]"
+
+[[patches]]
+kind = "platform-state-read"
+virtual_address = 0x695e20
+expected_word = 0x395ec008
+evidence = "0000000000695e20 ldrb w8, [x0, #0x7b0]"
+
+[[patches]]
+kind = "platform-state-read"
+virtual_address = 0x69633c
+expected_word = 0x395ec268
+evidence = "000000000069633c ldrb w8, [x19, #0x7b0]"
+
+[[patches]]
+kind = "platform-state-read"
+virtual_address = 0x6963d4
+expected_word = 0x395ec268
+evidence = "00000000006963d4 ldrb w8, [x19, #0x7b0]"
+
+[[patches]]
+kind = "platform-state-read"
+virtual_address = 0x698a74
+expected_word = 0x395ec008
+evidence = "0000000000698a74 ldrb w8, [x0, #0x7b0]"
+
+[[patches]]
+kind = "platform-state-read"
+virtual_address = 0x69c08c
+expected_word = 0x395ec008
+evidence = "000000000069c08c ldrb w8, [x0, #0x7b0]"
+
+[[patches]]
+kind = "os-list-tool-gate"
+virtual_address = 0x695ed0
+expected_word = 0xb4fffcc0
+evidence = "0000000000695ed0 cbz x0, 0x695e68"

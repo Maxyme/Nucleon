@@ -1,0 +1,54 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/nucleon-core",
+    "crates/nucleon-runner",
+    "crates/nucleon-hook",
+    "crates/nucleon-cli",
+]
+
+[workspace.package]
+version = "0.2.0"
+edition = "2024"
+license = "GPL-3.0-only"
+
+[workspace.dependencies]
+anyhow = "1.0"
+thiserror = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+log = "0.4"
+env_logger = "0.11"
+clap = { version = "4.5", features = ["derive", "cargo"] }
+ctor = "0.2"
+libc = "0.2"
+object = "0.36"
+memchr = "2.7"
+tempfile = "3.10"
+core-graphics = "0.23"
+core-foundation = "0.9"
+plist = "1.7"
+keyvalues-parser = "0.2"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+frida-gum = { version = "0.17", default-features = false, features = ["auto-download"] }
+frida-gum-sys = { version = "0.17", default-features = false }
+ureq = { version = "2.10", default-features = false, features = ["tls"] }
+zip = { version = "2.2", default-features = false, features = ["deflate"] }
+tar = "0.4"
+flate2 = "1.0"
+zstd = "0.13"
+
+[workspace.lints.rust]
+unsafe_code = "allow"
+unsafe_op_in_unsafe_fn = "deny"
+unused_qualifications = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+correctness = { level = "deny", priority = -1 }
+suspicious = { level = "warn", priority = -1 }
+complexity = { level = "warn", priority = -1 }
+perf = { level = "warn", priority = -1 }
+style = { level = "warn", priority = -1 }
+wildcard_imports = "warn"
+single_component_path_imports = "warn"
