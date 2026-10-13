@@ -19,3 +19,4 @@ pub mod validator;
 pub mod vdf;
 pub mod vkd3d;
 pub mod wine;
+pub mod wine_build;

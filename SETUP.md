@@ -21,6 +21,58 @@ were withdrawn; build from source until another release is published.
 
 ## Register Wine
 
+### Download and patch the recommended build
+
+Wine download and module building are native Nucleon commands; Python is not
+required. The reviewed recipe currently supports Gcenx's plain Wine 11.18.
+
+```sh
+nucleon wine fetch --version 11.18
+brew install mingw-w64 bison flex
+nucleon wine patch rosetta wine-devel-11.18
+nucleon wine use wine-devel-11.18-rosetta
+```
+
+The patch command requires Xcode Command Line Tools, make, patch, and the build
+tools above. It downloads matching Wine source, verifies checksums, applies the
+embedded patch with zero fuzz, and compiles `wow64cpu.dll`. It then copies Wine
+to a new runtime and replaces that DLL in the copy. The input stays unchanged.
+Download and patch commands register the new runtimes but do not select them;
+the explicit `wine use` command does that.
+
+An experimental Steam redirect can be added to a separate copy:
+
+```sh
+nucleon wine patch steam-redirect wine-devel-11.18-rosetta
+```
+
+This rebuilds only Windows-side `ntdll.dll`. Use the resulting runtime in a
+game-specific configuration with `NUCLEON_STEAMCLIENT_REDIRECT=1` and matching
+Valve/`lsteamclient` libraries. It is not a default patch for all Steam games.
+
+You can also supply a matching installation path, output directory, and cached
+archives:
+
+```sh
+nucleon wine fetch --version 11.18 --archive /path/to/wine-devel-11.18-osx64.tar.xz
+nucleon wine patch rosetta /path/to/Wine\ Devel.app \
+  --output /new/runtime --name my-wine-rosetta \
+  --source-archive /path/to/wine-11.18.tar.xz
+```
+
+Outputs must not exist; registration names must be new. Downloads use the managed
+`downloads/wine/11.18` cache; runtime defaults are under `wines/` in Nucleon's
+support directory. The input's core module hashes must match the reviewed build,
+not merely its version string. Other versions/distributions need reviewed recipes.
+Rosetta and Steam redirect can be combined in separate copies; applying a patch
+again to an already changed target DLL is refused.
+
+Each build keeps hashes, compiler arguments, source URL, and a receipt named
+`nucleon-build-<patch>.json`. Its patch, Wine LGPL text, and AUTHORS are retained
+in `share/nucleon-build/`. Rebuilding Wine locally still needs the native toolchain.
+
+### Register an existing runtime
+
 ```sh
 nucleon wine list
 nucleon wine add my-wine /path/to/wine --use-now

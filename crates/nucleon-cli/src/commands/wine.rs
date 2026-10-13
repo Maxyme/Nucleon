@@ -1,11 +1,44 @@
 use super::ui;
-use anyhow::Result;
-use clap::Subcommand;
-use nucleon_core::{steam, wine};
+use anyhow::{Context, Result, ensure};
+use clap::{Subcommand, ValueEnum};
+use nucleon_core::{steam, wine, wine_build};
+use std::num::NonZeroUsize;
 use std::path::PathBuf;
 
 #[derive(Subcommand, Debug, Clone)]
 pub enum WineAction {
+    /// Download and register the recommended Wine build without selecting it
+    Fetch {
+        #[arg(long, default_value = "11.18")]
+        version: String,
+        /// New package directory; defaults to Nucleon's managed wines directory
+        #[arg(long)]
+        output: Option<PathBuf>,
+        /// Use a cached, checksum-verified binary archive instead of downloading
+        #[arg(long)]
+        archive: Option<PathBuf>,
+        /// Unique registration name; defaults to wine-devel-<version>
+        #[arg(long)]
+        name: Option<String>,
+    },
+    /// Rebuild a patched module and register a separate copy; requires native build tools
+    Patch {
+        #[arg(value_enum)]
+        kind: PatchKind,
+        /// Registered Wine identifier or path to the reviewed Wine runtime
+        runtime: String,
+        /// New runtime directory; must not exist
+        #[arg(long)]
+        output: Option<PathBuf>,
+        /// Optional checksum-verified Wine source archive
+        #[arg(long)]
+        source_archive: Option<PathBuf>,
+        #[arg(long, default_value = "8")]
+        jobs: NonZeroUsize,
+        /// Unique registration name for the copy
+        #[arg(long)]
+        name: Option<String>,
+    },
     /// List all discovered Wine runtimes and show the currently active desired version
     List,
     /// Select desired active Wine version for Steam (e.g. 'crossover', 'staging', 'dxmt', or path)
@@ -47,8 +80,111 @@ pub enum WineAction {
     },
 }
 
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum PatchKind {
+    Rosetta,
+    SteamRedirect,
+}
+
+impl From<PatchKind> for wine_build::WinePatch {
+    fn from(kind: PatchKind) -> Self {
+        match kind {
+            PatchKind::Rosetta => Self::Rosetta,
+            PatchKind::SteamRedirect => Self::SteamRedirect,
+        }
+    }
+}
+
+fn ensure_new_name(name: &str) -> Result<()> {
+    ensure!(
+        !name.trim().is_empty(),
+        "Runtime registration name cannot be empty"
+    );
+    let id = name.trim().to_lowercase().replace([' ', '_'], "-");
+    let registry = wine::custom_wines_file();
+    let records = if registry.exists() {
+        serde_json::from_str::<Vec<wine::CustomWineRecord>>(&std::fs::read_to_string(&registry)?)
+            .context("Cannot register Wine while the custom-runtime registry is invalid")?
+    } else {
+        Vec::new()
+    };
+    ensure!(
+        !records.iter().any(|runtime| runtime.id == id),
+        "Runtime name '{name}' is already registered; use --name with a new identifier"
+    );
+    Ok(())
+}
+
 pub fn run(action: WineAction) -> Result<()> {
     match action {
+        WineAction::Fetch {
+            version,
+            output,
+            archive,
+            name,
+        } => {
+            let name = name.unwrap_or_else(|| format!("wine-devel-{version}"));
+            ensure_new_name(&name)?;
+            let output = output.unwrap_or_else(|| wine_build::default_runtime_path(&version, None));
+            ui::header(format!("Fetching reviewed Wine {version}..."));
+            let root = wine_build::fetch(&version, &output, archive.as_deref())?;
+            ensure_new_name(&name)?;
+            let runtime = wine::add_custom_wine(&name, &root)?;
+            ui::success(format!(
+                "Downloaded and registered {} at {}",
+                runtime.id,
+                runtime.root.display()
+            ));
+            ui::info("Active Wine selection was not changed.");
+            println!(
+                "Create a patched copy: nucleon wine patch rosetta {}",
+                runtime.id
+            );
+        }
+        WineAction::Patch {
+            kind,
+            runtime,
+            output,
+            source_archive,
+            jobs,
+            name,
+        } => {
+            let patch = wine_build::WinePatch::from(kind);
+            let version = wine_build::RECOMMENDED_VERSION;
+            let name = name.unwrap_or_else(|| format!("wine-devel-{version}-{}", patch.name()));
+            ensure_new_name(&name)?;
+            let base = wine::resolve_wine_runtime_by_query(&runtime).context(
+                "Wine runtime not found; run nucleon wine fetch or supply an existing runtime path",
+            )?;
+            let output =
+                output.unwrap_or_else(|| wine_build::default_runtime_path(version, Some(patch)));
+            ui::header(format!("Building {} into a new Wine copy...", patch.name()));
+            let root = wine_build::build(&wine_build::BuildOptions {
+                runtime: base.root,
+                output,
+                patch,
+                source_archive,
+                jobs: jobs.get(),
+            })?;
+            ensure_new_name(&name)?;
+            let runtime = wine::add_custom_wine(&name, &root)?;
+            ui::success(format!("Registered {} at {}", runtime.id, root.display()));
+            ui::info("Original runtime and active Wine selection were not changed.");
+            match patch {
+                wine_build::WinePatch::Rosetta => {
+                    println!("Select when ready: nucleon wine use {}", runtime.id)
+                }
+                wine_build::WinePatch::SteamRedirect => {
+                    ui::warn(
+                        "Experimental: use only in a game-specific profile with NUCLEON_STEAMCLIENT_REDIRECT=1 and matching Valve/lsteamclient libraries.",
+                    );
+                    println!(
+                        "Per-game launch option: NUCLEON_WINE={} NUCLEON_STEAMCLIENT_REDIRECT=1 %command%",
+                        runtime.id
+                    );
+                }
+            }
+        }
         WineAction::List | WineAction::Status => {
             ui::header("Discovered Wine Runtimes (Heroic, Homebrew, Whisky, CrossOver, Custom)");
             let runtimes = wine::discover_wine_runtimes();

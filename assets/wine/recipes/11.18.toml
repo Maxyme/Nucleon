@@ -1,0 +1,16 @@
+version = "11.18"
+binary_url = "https://github.com/Gcenx/macOS_Wine_builds/releases/download/11.18/wine-devel-11.18-osx64.tar.xz"
+binary_sha256 = "aa0ea4c82e636ae7bca2076387cb0a5affa26509ad13f119ecd0d62bd7ba6f82"
+source_url = "https://dl.winehq.org/wine/source/11.x/wine-11.18.tar.xz"
+source_sha256 = "c6282f6d4daecf11f3ab9f9a2b6c598f67be7e28c363ba2cae8a3c44b611e7a4"
+
+# Derived from the checksum-verified Gcenx archive above. The core fingerprint
+# rejects a differently patched runtime that reports the same Wine version.
+[core_files]
+"bin/wine" = "6a6189edccf4d780329348a53e07ab872f6960854d17f78ac57527bcf62d1359"
+"bin/wineserver" = "c35d1b1c31fe05d80d4edd92d542ad4c7bc4502a4bfee0d467910268e5c1a982"
+"lib/wine/x86_64-unix/ntdll.so" = "9bc8b63c87d11cf6005a49f18d4bc4cab9b3898222b7be04d8211937cb8ca547"
+
+[module_files]
+"lib/wine/x86_64-windows/wow64cpu.dll" = "1479d4dc375016cdc0f9417663169da08a9a761714c72f4a8fe346c6540922af"
+"lib/wine/x86_64-windows/ntdll.dll" = "958922348a508d88c8bfb7e61380e1970a09c6c19a254ce06c8a2deb17238c6f"
