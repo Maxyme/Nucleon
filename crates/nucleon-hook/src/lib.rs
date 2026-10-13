@@ -16,7 +16,7 @@ pub fn get_gum() -> &'static Gum {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn nucleon_version() -> *const c_char {
-    static VERSION: &[u8] = b"Nucleon 0.2.0 (Rust)\0";
+    static VERSION: &[u8] = concat!("Nucleon ", env!("CARGO_PKG_VERSION"), " (Rust)\0").as_bytes();
     VERSION.as_ptr() as *const c_char
 }
 

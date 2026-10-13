@@ -1,12 +1,12 @@
 # Nucleon
 
-Run Windows games from the native macOS Steam client using Wine and a selected
-graphics backend. Nucleon registers compatibility tools, prepares Wine prefixes,
-and connects games to the running Steam client.
+Nucleon allows running Windows games from the native macOS Steam client using a combination of runtimes (Wine, GPTK4) and different graphical backends.  
 
-The goal is one Steam launch flow with minimal configuration, automatic 32/64-bit
-handling, and reproducible per-game runtimes. CrossOver is optional. Compatibility
-depends on the game, Wine build, backend, and driver; support is experimental.
+The goal is to launch Steam games with minimal configuration, automatic 32/64-bit
+handling, and reproducible per-game runtimes. 
+Compatibility depends on the game, Wine build, backend, and driver; support is experimental.
+
+Note: **CrossOver** is optional but can be used like other wine runtimes.
 
 ## Running locally
 
@@ -61,11 +61,12 @@ visual/input checks before promoting a new configuration.
 
 ## Similar projects / Inspiration
 
-These are projects that share a similar goal, and were used as inspiration and getting this project started. 
+These are projects that share a similar goal, and were used as inspiration for this project. 
 
 - https://github.com/NotProtonNot/NotProton
 - https://github.com/fxgl/steamac
 - https://github.com/Broyojo/hadron
+- https://github.com/dttdrv/mage
 
 ## License
 

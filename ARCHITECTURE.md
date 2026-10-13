@@ -124,7 +124,3 @@ Remaining unsafe operations and unresolved risks:
 - Loader and kernel-copy FFI remain. Compatibility installation owns its pinned
   image and uses kernel copies instead of borrowing patched executable memory.
   The obsolete dyld enumerator and raw-memory scanner were removed.
-
-These are unresolved memory-safety risks, not just inevitable FFI syntax. See
-the [audit](docs/unsafe-audit-2026-10-13.md). Private ABI/lifecycle changes need
-runtime validation before replacing an installed hook.
