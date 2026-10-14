@@ -4,15 +4,31 @@
 //! the installed Valve image.
 use crate::{client_image, fs_util::atomic_write_file, paths};
 use anyhow::{Context, Result, bail, ensure};
-use object::{Object, ObjectSection, ObjectSegment};
+use object::{Object, ObjectSection, ObjectSegment, read::macho::MachHeader};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const EMBEDDED_CONTRACT: &str =
-    include_str!("../../../assets/steam-contracts/macos-arm64/client-1788652215.toml");
+const EMBEDDED_CONTRACTS: &[&str] = &[
+    include_str!("../../../assets/steam-contracts/macos-arm64/client-1788652215.toml"),
+    include_str!("../../../assets/steam-contracts/macos-arm64/client-1791918634.toml"),
+];
+
+fn reviewed_contract(image: &[u8]) -> Result<ClientContract> {
+    let slice = client_image::extract_arm64_slice(image)?;
+    let file = object::File::parse(slice)?;
+    let uuid = file.mach_uuid()?.context("Steam image has no UUID")?;
+    let uuid: String = uuid.iter().map(|byte| format!("{byte:02x}")).collect();
+    for embedded in EMBEDDED_CONTRACTS {
+        let contract: ClientContract = toml::from_str(embedded)?;
+        if contract.client.uuid == uuid {
+            return Ok(contract);
+        }
+    }
+    bail!("Unreviewed Steam image UUID: {uuid}")
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -204,12 +220,17 @@ impl ValidatedContract {
         self.preferred_base
     }
     pub fn validate_loaded_header(&self, snapshot: &[u8]) -> Result<()> {
-        let file = object::File::parse(snapshot)?;
+        // A loaded header snapshot contains load commands, not the on-disk symbol table.
+        // Parsing a whole Object file here would incorrectly require __LINKEDIT bytes.
+        let header = object::macho::MachHeader64::<object::LittleEndian>::parse(snapshot, 0)?;
+        let endian = object::LittleEndian;
         ensure!(
-            file.architecture() == object::Architecture::Aarch64,
+            header.is_little_endian() && header.cputype(endian) == object::macho::CPU_TYPE_ARM64,
             "Loaded Steam image is not ARM64"
         );
-        let uuid = file.mach_uuid()?.context("Loaded image has no UUID")?;
+        let uuid = header
+            .uuid(endian, snapshot, 0)?
+            .context("Loaded image has no UUID")?;
         let uuid: String = uuid.iter().map(|byte| format!("{byte:02x}")).collect();
         ensure!(
             uuid == self.contract.client.uuid,
@@ -246,9 +267,8 @@ pub fn ensure_contract_for_image(path: &Path) -> Result<(PathBuf, ValidatedContr
 
 /// Read-only inspection: no cache writes, native hooks, or Steam changes.
 pub fn inspect_contract_image(path: &Path) -> Result<ValidatedContract> {
-    let contract: ClientContract = toml::from_str(EMBEDDED_CONTRACT)?;
     let image = fs::read(path).with_context(|| format!("Read {}", path.display()))?;
-    validate_image(contract, &image)
+    validate_image(reviewed_contract(&image)?, &image)
 }
 
 pub fn ensure_contract_for_installed_steam() -> Result<(PathBuf, ValidatedContract)> {
@@ -263,14 +283,99 @@ pub fn ensure_contract_for_installed_steam() -> Result<(PathBuf, ValidatedContra
 }
 
 pub fn has_current_cached_contract() -> bool {
-    let Ok(contract) = toml::from_str::<ClientContract>(EMBEDDED_CONTRACT) else {
-        return false;
-    };
-    let cache = cache_path(&contract);
-    let Ok(image) = fs::read(
-        paths::steam_data_dir().join("Steam.AppBundle/Steam/Contents/MacOS/steamclient.dylib"),
-    ) else {
-        return false;
-    };
-    cache.is_file() && validate_image(contract, &image).is_ok()
+    let path =
+        paths::steam_data_dir().join("Steam.AppBundle/Steam/Contents/MacOS/steamclient.dylib");
+    inspect_contract_image(&path).is_ok_and(|reviewed| cache_path(reviewed.contract()).is_file())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reviewed_contracts_have_unique_identities_and_valid_instruction_kinds() {
+        let mut uuids = HashSet::new();
+        for embedded in EMBEDDED_CONTRACTS {
+            let contract: ClientContract = toml::from_str(embedded).unwrap();
+            assert!(uuids.insert(contract.client.uuid));
+            assert!(!contract.patches.is_empty());
+            for site in contract.patches {
+                site.replacement_word().unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn loaded_header_needs_no_symbol_table_payload() {
+        let contract: ClientContract = toml::from_str(EMBEDDED_CONTRACTS[0]).unwrap();
+        let uuid: Vec<u8> = (0..32)
+            .step_by(2)
+            .map(|offset| {
+                u8::from_str_radix(&contract.client.uuid[offset..offset + 2], 16).unwrap()
+            })
+            .collect();
+        let mut header = Vec::new();
+        for word in [
+            0xfeed_facf_u32,
+            object::macho::CPU_TYPE_ARM64,
+            0,
+            6,
+            2,
+            48,
+            0,
+            0,
+            object::macho::LC_UUID,
+            24,
+        ] {
+            header.extend_from_slice(&word.to_le_bytes());
+        }
+        header.extend_from_slice(&uuid);
+        // A real load command references symbol/string data outside this header-only snapshot.
+        for word in [object::macho::LC_SYMTAB, 24, 4096, 1, 8192, 64] {
+            header.extend_from_slice(&word.to_le_bytes());
+        }
+        assert!(object::File::parse(header.as_slice()).is_err());
+        let reviewed = ValidatedContract {
+            contract,
+            text_address: 0,
+            text_size: 0,
+            preferred_base: 0,
+        };
+        reviewed.validate_loaded_header(&header).unwrap();
+        assert!(reviewed.validate_loaded_header(&header[..32]).is_err());
+        header[40] ^= 1;
+        assert!(reviewed.validate_loaded_header(&header).is_err());
+    }
+
+    #[test]
+    #[ignore = "requires a local reviewed Steam client"]
+    fn reviewed_client_rejects_modified_text_and_unknown_uuid() {
+        let path = std::env::var("NUCLEON_TEST_STEAM_CLIENT").unwrap();
+        let image = fs::read(path).unwrap();
+        let contract = reviewed_contract(&image).unwrap();
+        let reviewed = validate_image(contract.clone(), &image).unwrap();
+        let arm64 = client_image::extract_arm64_slice(&image).unwrap();
+        let commands = u32::from_le_bytes(arm64[20..24].try_into().unwrap()) as usize;
+        let mut header = arm64[..32 + commands].to_vec();
+        reviewed.validate_loaded_header(&header).unwrap();
+        assert!(reviewed.validate_loaded_header(&header[..32]).is_err());
+        header[4] ^= 1;
+        assert!(reviewed.validate_loaded_header(&header).is_err());
+        let mut slice = client_image::extract_arm64_slice(&image).unwrap().to_vec();
+        let file = object::File::parse(slice.as_slice()).unwrap();
+        let offset = file
+            .section_by_name("__text")
+            .unwrap()
+            .file_range()
+            .unwrap()
+            .0 as usize;
+        let uuid = file.mach_uuid().unwrap().unwrap();
+        slice[offset] ^= 1;
+        assert!(validate_image(contract, &slice).is_err());
+        // LC_UUID contains the selected identity once in the file header.
+        let uuid_offset = image.windows(16).position(|bytes| bytes == uuid).unwrap();
+        let mut unknown = image;
+        unknown[uuid_offset] ^= 1;
+        assert!(reviewed_contract(&unknown).is_err());
+    }
 }

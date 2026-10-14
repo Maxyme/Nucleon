@@ -1,0 +1,98 @@
+format = "nucleon-steam-contract"
+revision = 1
+
+[client]
+platform = "macos"
+architecture = "arm64"
+steam_build = 1791918634
+uuid = "335cba8adcef3512948915b22ff702d6"
+text_sha256 = "7b9edeb2b7dc06c4fd11006ecbc438ce96d8386630ec8270c5ee0dfd22fc3299"
+
+[provenance]
+method = "Apple otool ARM64 disassembly, Mach-O identity/section inspection, 2026-10-14"
+source = "Locally installed Valve steamclient.dylib; see client-1791918634.md"
+limitations = "Static review establishes the patch sites and ABI, not gameplay compatibility. REA Hopper startup timed out; these observations use Apple otool."
+
+[eligibility]
+virtual_address = 0x6a5adc
+entry_words = [0xd10103ff, 0xa9024ff4, 0xa9037bfd, 0x9100c3fd, 0xaa0103f4, 0xaa0003f3, 0xb90017e1, 0xf0008008]
+abi = "c-self-u32-bool"
+evidence = "Entry stores w1 as AppID and x0 as self; references CCompatManager::BIsCompatibilityToolEnabled at 0x6a5b0c; returns boolean through x0."
+
+[[patches]]
+kind = "platform-state-read"
+virtual_address = 0x6a1e14
+expected_word = 0x39604008
+evidence = "00000000006a1e14 ldrb w8, [x0, #0x810]; manager linux flag written at 0x6a1968 and cleared by DisableCompatibilityLayer at 0x6a3c40."
+
+[[patches]]
+kind = "platform-state-read"
+virtual_address = 0x6a1eb4
+expected_word = 0x39604008
+evidence = "00000000006a1eb4 ldrb w8, [x0, #0x810]; manager linux flag written at 0x6a1968 and cleared by DisableCompatibilityLayer at 0x6a3c40."
+
+[[patches]]
+kind = "platform-state-read"
+virtual_address = 0x6a1fdc
+expected_word = 0x39604008
+evidence = "00000000006a1fdc ldrb w8, [x0, #0x810]; manager linux flag written at 0x6a1968 and cleared by DisableCompatibilityLayer at 0x6a3c40."
+
+[[patches]]
+kind = "platform-state-read"
+virtual_address = 0x6a22dc
+expected_word = 0x39604008
+evidence = "00000000006a22dc ldrb w8, [x0, #0x810]; manager linux flag written at 0x6a1968 and cleared by DisableCompatibilityLayer at 0x6a3c40."
+
+[[patches]]
+kind = "platform-state-read"
+virtual_address = 0x6a3c14
+expected_word = 0x39604000
+evidence = "00000000006a3c14 ldrb w0, [x0, #0x810]; manager linux flag written at 0x6a1968 and cleared by DisableCompatibilityLayer at 0x6a3c40."
+
+[[patches]]
+kind = "platform-state-read"
+virtual_address = 0x6a5034
+expected_word = 0x39604008
+evidence = "00000000006a5034 ldrb w8, [x0, #0x810]; manager linux flag written at 0x6a1968 and cleared by DisableCompatibilityLayer at 0x6a3c40."
+
+[[patches]]
+kind = "platform-state-read"
+virtual_address = 0x6a51fc
+expected_word = 0x39604008
+evidence = "00000000006a51fc ldrb w8, [x0, #0x810]; manager linux flag written at 0x6a1968 and cleared by DisableCompatibilityLayer at 0x6a3c40."
+
+[[patches]]
+kind = "platform-state-read"
+virtual_address = 0x6a5640
+expected_word = 0x39604008
+evidence = "00000000006a5640 ldrb w8, [x0, #0x810]; manager linux flag written at 0x6a1968 and cleared by DisableCompatibilityLayer at 0x6a3c40."
+
+[[patches]]
+kind = "platform-state-read"
+virtual_address = 0x6a5b28
+expected_word = 0x39604268
+evidence = "00000000006a5b28 ldrb w8, [x19, #0x810]; manager linux flag written at 0x6a1968 and cleared by DisableCompatibilityLayer at 0x6a3c40."
+
+[[patches]]
+kind = "platform-state-read"
+virtual_address = 0x6a5bc4
+expected_word = 0x39604268
+evidence = "00000000006a5bc4 ldrb w8, [x19, #0x810]; manager linux flag written at 0x6a1968 and cleared by DisableCompatibilityLayer at 0x6a3c40."
+
+[[patches]]
+kind = "platform-state-read"
+virtual_address = 0x6a8364
+expected_word = 0x39604008
+evidence = "00000000006a8364 ldrb w8, [x0, #0x810]; manager linux flag written at 0x6a1968 and cleared by DisableCompatibilityLayer at 0x6a3c40."
+
+[[patches]]
+kind = "platform-state-read"
+virtual_address = 0x6abd00
+expected_word = 0x39604008
+evidence = "00000000006abd00 ldrb w8, [x0, #0x810]; manager linux flag written at 0x6a1968 and cleared by DisableCompatibilityLayer at 0x6a3c40."
+
+[[patches]]
+kind = "os-list-tool-gate"
+virtual_address = 0x6a56f8
+expected_word = 0xb4fffca0
+evidence = "V_stristr at 0x6a56f4 compares requested OS list with selected tool's list; cbz x0 at 0x6a56f8 returns false via 0x6a568c. The preceding tool pointer is separately checked at 0x6a56d8."
