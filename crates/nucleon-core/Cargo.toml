@@ -18,6 +18,7 @@ object = { workspace = true }
 memchr = { workspace = true }
 plist = { workspace = true }
 keyvalues-parser = { workspace = true }
+steam-vdf-parser = "0.1"
 ureq = { workspace = true }
 zip = { workspace = true }
 tar = { workspace = true }

@@ -1,3 +1,4 @@
+mod appinfo;
 pub mod codesign;
 pub mod native_detect;
 pub mod vdf_mapping;

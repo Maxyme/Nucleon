@@ -167,16 +167,16 @@ pub fn is_app_supported_on_macos_in_appinfo(appid: u32) -> Option<bool> {
         return None;
     }
     let data = fs::read(&appinfo_path).ok()?;
-    let needle = appid.to_le_bytes();
-    let idx = memchr::memmem::find(&data, &needle)?;
-    let size = if idx + 8 <= data.len() {
-        u32::from_le_bytes(data[idx + 4..idx + 8].try_into().ok()?) as usize
-    } else {
-        4096
-    };
-    let scan_len = std::cmp::min(data.len() - idx, std::cmp::max(size, 4096));
-    let chunk = &data[idx..idx + scan_len];
-    Some(memchr::memmem::find(chunk, b"macos").is_some())
+    match super::appinfo::macos_support(&data, appid) {
+        Ok(status) => status,
+        Err(error) => {
+            log::warn!(
+                "Could not read platform support from {}: {error:#}",
+                appinfo_path.display()
+            );
+            None
+        }
+    }
 }
 
 /// Checks if a Steam game with the given AppID is a native macOS game,
