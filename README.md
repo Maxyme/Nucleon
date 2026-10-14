@@ -59,6 +59,10 @@ just test      # Run tests when wanted
 Keep confirmed profiles pinned. Change one component at a time and record
 visual/input checks before promoting a new configuration.
 
+Graphics backend release sources are defined in [assets/downloads.toml](assets/downloads.toml):
+default versions and URL templates. Archive formats are inferred from URL suffixes. `{tag}` includes the `v` prefix;
+`{version}` excludes it. The catalog is embedded at build time; rebuild after editing it.
+
 ## Similar projects / Inspiration
 
 These are projects that share a similar goal, and were used as inspiration for this project. 

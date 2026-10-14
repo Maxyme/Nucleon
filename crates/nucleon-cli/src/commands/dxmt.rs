@@ -68,7 +68,7 @@ To install or configure DXMT (https://github.com/3Shain/dxmt):
             }
         }
         DxmtAction::Fetch { version } => {
-            let ver_str = version.as_deref().unwrap_or(dxmt::DEFAULT_DXMT_VERSION);
+            let ver_str = version.as_deref().unwrap_or(dxmt::default_version()?);
             ui::header(format!(
                 "Fetching official DXMT {ver_str} from GitHub (https://github.com/3Shain/dxmt)..."
             ));

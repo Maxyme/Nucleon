@@ -47,7 +47,7 @@ To install or configure D7VK without committing binaries:
             }
         }
         D7vkAction::Fetch { version } => {
-            let ver_str = version.as_deref().unwrap_or(d7vk::DEFAULT_D7VK_VERSION);
+            let ver_str = version.as_deref().unwrap_or(d7vk::default_version()?);
             ui::header(format!("Fetching official D7VK {ver_str} from GitHub..."));
             let bundle = d7vk::fetch_d7vk(version.as_deref(), None)?;
             ui::success(format!(

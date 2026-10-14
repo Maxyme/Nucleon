@@ -3,6 +3,7 @@ pub mod backend_files;
 pub mod client_image;
 pub mod d7vk;
 pub mod detector;
+mod downloads;
 pub mod dxmt;
 pub mod dxvk;
 pub mod fs_util;

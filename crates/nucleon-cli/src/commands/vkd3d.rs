@@ -53,7 +53,7 @@ To install or configure VKD3D-Proton without committing binaries:
             }
         }
         Vkd3dAction::Fetch { version } => {
-            let ver_str = version.as_deref().unwrap_or(vkd3d::DEFAULT_VKD3D_VERSION);
+            let ver_str = version.as_deref().unwrap_or(vkd3d::default_version()?);
             ui::header(format!(
                 "Fetching official VKD3D-Proton {} from GitHub...",
                 ver_str

@@ -59,7 +59,7 @@ To install or configure DXVK without committing binaries:
             }
         }
         DxvkAction::Fetch { version } => {
-            let ver_str = version.as_deref().unwrap_or(dxvk::DEFAULT_DXVK_VERSION);
+            let ver_str = version.as_deref().unwrap_or(dxvk::default_version()?);
             ui::header(format!("Fetching official DXVK {ver_str} from GitHub..."));
             let bundle = dxvk::fetch_dxvk(version.as_deref(), None)?;
             ui::success(format!(

@@ -3,7 +3,10 @@ use anyhow::{Context, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-pub const DEFAULT_VKD3D_VERSION: &str = "v3.0.1";
+/// Default release version from the embedded download catalog.
+pub fn default_version() -> Result<&'static str> {
+    crate::downloads::default_version("vkd3d")
+}
 
 #[derive(Debug, Clone)]
 pub struct Vkd3dProtonBundle {
@@ -316,89 +319,19 @@ pub fn fetch_vkd3d_proton(
     version: Option<&str>,
     dest_dir: Option<&Path>,
 ) -> Result<Vkd3dProtonBundle> {
-    let tag = version.unwrap_or(DEFAULT_VKD3D_VERSION);
-    let raw_ver = tag.trim_start_matches('v');
-    let archive_name = format!("vkd3d-proton-{raw_ver}.tar.zst");
-    let url = format!(
-        "https://github.com/HansKristian-Work/vkd3d-proton/releases/download/{tag}/{archive_name}"
-    );
-
-    let target_dir = match dest_dir {
-        Some(p) => p.to_path_buf(),
-        None => paths::vkd3d_proton_dir(),
-    };
-    fs::create_dir_all(&target_dir)?;
-
-    let temp_dir = tempfile::tempdir()?;
-    let extract_dir = temp_dir.path().join("extracted");
-    fs::create_dir_all(&extract_dir)?;
-
-    log::info!("Fetching VKD3D-Proton {} from {}...", tag, url);
-
-    let resp = ureq::get(&url)
-        .set("User-Agent", "nucleon-fetcher")
-        .call()
-        .with_context(|| format!("Failed to download VKD3D-Proton from {url}"))?;
-
-    let reader = resp.into_reader();
-    let zstd_decoder = zstd::stream::Decoder::new(reader)
-        .with_context(|| "Failed to initialize zstd decoder for VKD3D-Proton archive")?;
-
-    let mut tar_archive = tar::Archive::new(zstd_decoder);
-    tar_archive
-        .unpack(&extract_dir)
-        .with_context(|| "Failed to unpack VKD3D-Proton tar.zst archive")?;
-
-    // Locate the extracted release folder (usually vkd3d-proton-<ver>)
-    let mut source_bundle_dir = extract_dir.clone();
-    if let Ok(entries) = fs::read_dir(&extract_dir) {
-        for entry in entries.flatten() {
-            let p = entry.path();
-            if p.is_dir() && (p.join("x64").is_dir() || p.join("d3d12.dll").is_file()) {
-                source_bundle_dir = p;
-                break;
-            }
-        }
-    }
-
-    // Copy extracted hierarchy into target_dir
-    if source_bundle_dir.join("x64").is_dir() {
-        let dst_x64 = target_dir.join("x64");
-        fs::create_dir_all(&dst_x64)?;
-        for entry in fs::read_dir(source_bundle_dir.join("x64"))?.flatten() {
-            let p = entry.path();
-            if p.is_file()
-                && let Some(name) = p.file_name()
-            {
-                fs::copy(&p, dst_x64.join(name))?;
-            }
-        }
-    }
-    if source_bundle_dir.join("x86").is_dir() {
-        let dst_x86 = target_dir.join("x86");
-        fs::create_dir_all(&dst_x86)?;
-        for entry in fs::read_dir(source_bundle_dir.join("x86"))?.flatten() {
-            let p = entry.path();
-            if p.is_file()
-                && let Some(name) = p.file_name()
-            {
-                fs::copy(&p, dst_x86.join(name))?;
-            }
-        }
-    }
-
-    // Write version file
-    let _ = fs::write(target_dir.join("version.txt"), format!("{tag}\n"));
-
-    let bundle = inspect_candidate_dir(&target_dir)
-        .context("Extracted archive did not contain valid VKD3D-Proton DLLs")?;
-
-    log::info!(
-        "VKD3D-Proton {} successfully staged at {}",
-        tag,
-        target_dir.display()
-    );
-    Ok(bundle)
+    use crate::downloads;
+    let release = downloads::release("vkd3d", version)?;
+    let target = dest_dir
+        .map(Path::to_path_buf)
+        .unwrap_or_else(paths::vkd3d_proton_dir);
+    downloads::fetch(
+        &release,
+        &target,
+        inspect_candidate_dir,
+        |bundle, extracted, staged| {
+            downloads::copy_layout(&bundle.root, staged, extracted, &["x64", "x86"])
+        },
+    )
 }
 
 #[cfg(test)]

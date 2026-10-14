@@ -1,0 +1,20 @@
+# Release sources embedded in Nucleon. {tag} includes "v"; {version} excludes it.
+[dxvk]
+name = "DXVK"
+default_version = "v2.4.1"
+url = "https://github.com/doitsujin/dxvk/releases/download/{tag}/dxvk-{version}.tar.gz"
+
+[dxmt]
+name = "DXMT"
+default_version = "v0.80"
+url = "https://github.com/3Shain/dxmt/releases/download/{tag}/dxmt-{tag}-builtin.tar.gz"
+
+[vkd3d]
+name = "VKD3D-Proton"
+default_version = "v3.0.1"
+url = "https://github.com/HansKristian-Work/vkd3d-proton/releases/download/{tag}/vkd3d-proton-{version}.tar.zst"
+
+[d7vk]
+name = "D7VK"
+default_version = "v2.3"
+url = "https://github.com/WinterSnowfall/d7vk/releases/download/{tag}/d7vk-{tag}.zip"

@@ -1,10 +1,12 @@
 use crate::paths;
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use std::fs;
-use std::io::Read;
 use std::path::{Path, PathBuf};
 
-pub const DEFAULT_D7VK_VERSION: &str = "v2.3";
+/// Default release version from the embedded download catalog.
+pub fn default_version() -> Result<&'static str> {
+    crate::downloads::default_version("d7vk")
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct D7vkBundle {
@@ -264,78 +266,19 @@ pub fn unstage_d7vk_from_prefix(prefix_dir: &Path, runner_dir: Option<&Path>) ->
 
 /// Fetches D7VK from official GitHub releases into the target directory.
 pub fn fetch_d7vk(version: Option<&str>, dest_dir: Option<&Path>) -> Result<D7vkBundle> {
-    let raw = version.unwrap_or(DEFAULT_D7VK_VERSION);
-    let tag = if raw.starts_with('v') {
-        raw.to_string()
-    } else {
-        format!("v{raw}")
-    };
-
-    let archive_name = format!("d7vk-{tag}.zip");
-    let url =
-        format!("https://github.com/WinterSnowfall/d7vk/releases/download/{tag}/{archive_name}");
-
-    let target_dir = match dest_dir {
-        Some(p) => p.to_path_buf(),
-        None => paths::d7vk_dir(),
-    };
-    fs::create_dir_all(&target_dir)?;
-
-    let temp_dir = tempfile::tempdir()?;
-    let extract_dir = temp_dir.path().join("extracted");
-    fs::create_dir_all(&extract_dir)?;
-
-    log::info!("Fetching D7VK {tag} from {url}...");
-
-    let resp = ureq::get(&url)
-        .set("User-Agent", "nucleon-fetcher")
-        .call()
-        .with_context(|| format!("Failed to download D7VK from {url}"))?;
-
-    let mut reader = resp.into_reader();
-    let mut zip_bytes = Vec::new();
-    reader
-        .read_to_end(&mut zip_bytes)
-        .with_context(|| format!("Failed to read D7VK payload from {url}"))?;
-
-    if zip_bytes.len() < 1000 {
-        bail!("Downloaded D7VK payload from {url} is too small to be a valid archive.");
-    }
-
-    let cursor = std::io::Cursor::new(zip_bytes);
-    let mut archive =
-        zip::ZipArchive::new(cursor).with_context(|| "Failed to parse D7VK zip archive")?;
-
-    archive
-        .extract(&extract_dir)
-        .with_context(|| "Failed to extract D7VK archive")?;
-
-    let candidate = inspect_candidate_dir(&extract_dir)
-        .ok_or_else(|| anyhow::anyhow!("Could not find ddraw.dll in extracted D7VK archive"))?;
-
-    let target_x32 = target_dir.join("x32");
-    fs::create_dir_all(&target_x32)?;
-    let target_ddraw = target_x32.join("ddraw.dll");
-    if target_ddraw.exists() || target_ddraw.is_symlink() {
-        let _ = fs::remove_file(&target_ddraw);
-    }
-    fs::copy(&candidate.x86_ddraw, &target_ddraw)?;
-    let _ = fs::write(target_dir.join("version.txt"), &tag);
-
-    let bundle = inspect_candidate_dir(&target_dir).ok_or_else(|| {
-        anyhow::anyhow!(
-            "Failed to verify staged D7VK bundle in {}",
-            target_dir.display()
-        )
-    })?;
-
-    log::info!(
-        "Successfully fetched and staged D7VK {} at {}",
-        tag,
-        bundle.root.display()
-    );
-
-    Ok(bundle)
+    use crate::downloads;
+    let release = downloads::release("d7vk", version)?;
+    let target = dest_dir
+        .map(Path::to_path_buf)
+        .unwrap_or_else(paths::d7vk_dir);
+    downloads::fetch(
+        &release,
+        &target,
+        inspect_candidate_dir,
+        |bundle, extracted, staged| {
+            downloads::copy_file(&bundle.x86_ddraw, &staged.join("x32/ddraw.dll"), extracted)
+        },
+    )
 }
 
 #[cfg(test)]

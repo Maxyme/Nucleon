@@ -5,7 +5,10 @@ use anyhow::{Context, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-pub const DEFAULT_DXVK_VERSION: &str = "v2.4.1";
+/// Default release version from the embedded download catalog.
+pub fn default_version() -> Result<&'static str> {
+    crate::downloads::default_version("dxvk")
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DxvkBundle {
@@ -385,80 +388,24 @@ pub fn unstage_dxvk_from_prefix(prefix_dir: &Path, runner_dir: Option<&Path>) ->
 
 /// Fetches official DXVK release archive (.tar.gz) from GitHub and unpacks it.
 pub fn fetch_dxvk(version: Option<&str>, dest_dir: Option<&Path>) -> Result<DxvkBundle> {
-    let raw = version.unwrap_or(DEFAULT_DXVK_VERSION);
-    let tag = if raw.starts_with('v') {
-        raw.to_string()
-    } else {
-        format!("v{raw}")
-    };
-    let ver_num = tag.trim_start_matches('v');
-
-    let archive_name = format!("dxvk-{ver_num}.tar.gz");
-    let url = format!("https://github.com/doitsujin/dxvk/releases/download/{tag}/{archive_name}");
-
-    let target_dir = match dest_dir {
-        Some(p) => p.to_path_buf(),
-        None => paths::dxvk_dir(),
-    };
-    fs::create_dir_all(&target_dir)?;
-
-    let temp_dir = tempfile::tempdir()?;
-    let extract_dir = temp_dir.path().join("extracted");
-    fs::create_dir_all(&extract_dir)?;
-
-    log::info!("Fetching DXVK {tag} from {url}...");
-
-    let resp = ureq::get(&url)
-        .set("User-Agent", "nucleon-fetcher")
-        .call()
-        .with_context(|| format!("Failed to download DXVK from {url}"))?;
-
-    let reader = resp.into_reader();
-    let gz = flate2::read::GzDecoder::new(reader);
-    let mut tar_archive = tar::Archive::new(gz);
-    tar_archive
-        .unpack(&extract_dir)
-        .with_context(|| "Failed to unpack DXVK tar.gz archive")?;
-
-    let mut source_bundle_dir = extract_dir.clone();
-    if let Ok(entries) = fs::read_dir(&extract_dir) {
-        for entry in entries.flatten() {
-            let p = entry.path();
-            if p.is_dir() && (p.join("x64").is_dir() || p.join("d3d11.dll").is_file()) {
-                source_bundle_dir = p;
-                break;
-            }
-        }
-    }
-
-    // Copy extracted hierarchy into target_dir
-    for sub in &["x64", "x32"] {
-        let src_sub = source_bundle_dir.join(sub);
-        if src_sub.is_dir() {
-            let dst_sub = target_dir.join(sub);
-            fs::create_dir_all(&dst_sub)?;
-            for entry in fs::read_dir(src_sub)?.flatten() {
-                let p = entry.path();
-                if p.is_file()
-                    && let Some(name) = p.file_name()
-                {
-                    fs::copy(&p, dst_sub.join(name))?;
-                }
-            }
-        }
-    }
-
-    let _ = fs::write(target_dir.join("version.txt"), format!("{tag}\n"));
-
-    let bundle = inspect_candidate_dir(&target_dir)
-        .context("Extracted archive did not contain valid DXVK DLLs")?;
-
-    log::info!(
-        "DXVK {} successfully staged at {}",
-        tag,
-        target_dir.display()
-    );
-    Ok(bundle)
+    use crate::downloads;
+    let release = downloads::release("dxvk", version)?;
+    let target = dest_dir
+        .map(Path::to_path_buf)
+        .unwrap_or_else(paths::dxvk_dir);
+    downloads::fetch(
+        &release,
+        &target,
+        inspect_candidate_dir,
+        |bundle, extracted, staged| {
+            downloads::copy_layout(
+                &bundle.root,
+                staged,
+                extracted,
+                &["x64", "x32", "x86", "x86_64-windows", "i386-windows"],
+            )
+        },
+    )
 }
 
 use crate::backend::{Backend, BackendStatus, GraphicsBackend};

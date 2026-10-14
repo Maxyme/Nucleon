@@ -5,7 +5,10 @@ use anyhow::{Context, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-pub const DEFAULT_DXMT_VERSION: &str = "v0.80";
+/// Default release version from the embedded download catalog.
+pub fn default_version() -> Result<&'static str> {
+    crate::downloads::default_version("dxmt")
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DxmtBundle {
@@ -406,97 +409,32 @@ pub fn unstage_dxmt_from_prefix(prefix_dir: &Path, runner_dir: Option<&Path>) ->
 
 /// Fetches official DXMT release archive (.tar.gz) from GitHub and unpacks it.
 pub fn fetch_dxmt(version: Option<&str>, dest_dir: Option<&Path>) -> Result<DxmtBundle> {
-    let raw = version.unwrap_or(DEFAULT_DXMT_VERSION);
-    let tag = if raw.starts_with('v') {
-        raw.to_string()
-    } else {
-        format!("v{raw}")
-    };
-
-    let archive_name = format!("dxmt-{tag}-builtin.tar.gz");
-    let url = format!("https://github.com/3Shain/dxmt/releases/download/{tag}/{archive_name}");
-
-    let target_dir = match dest_dir {
-        Some(p) => p.to_path_buf(),
-        None => paths::dxmt_dir(),
-    };
-    fs::create_dir_all(&target_dir)?;
-
-    let temp_dir = tempfile::tempdir()?;
-    let extract_dir = temp_dir.path().join("extracted");
-    fs::create_dir_all(&extract_dir)?;
-
-    log::info!("Fetching DXMT {tag} from {url}...");
-
-    let resp = ureq::get(&url)
-        .set("User-Agent", "nucleon-fetcher")
-        .call()
-        .with_context(|| format!("Failed to download DXMT from {url}"))?;
-
-    let reader = resp.into_reader();
-    let gz = flate2::read::GzDecoder::new(reader);
-    let mut tar_archive = tar::Archive::new(gz);
-    tar_archive
-        .unpack(&extract_dir)
-        .with_context(|| "Failed to unpack DXMT tar.gz archive")?;
-
-    let mut source_bundle_dir = extract_dir.clone();
-    if let Ok(entries) = fs::read_dir(&extract_dir) {
-        for entry in entries.flatten() {
-            let p = entry.path();
-            if p.is_dir()
-                && (p.join("x86_64-windows").is_dir()
-                    || p.join("x64").is_dir()
-                    || p.join("d3d11.dll").is_file())
-            {
-                source_bundle_dir = p;
-                break;
-            }
-        }
-    }
-
-    // Copy extracted hierarchy into target_dir
-    let subdirs = [
-        "x86_64-windows",
-        "i386-windows",
-        "x86_64-unix",
-        "x64",
-        "x32",
-    ];
-    for sub in &subdirs {
-        let src_sub = source_bundle_dir.join(sub);
-        if src_sub.is_dir() {
-            let dst_sub = target_dir.join(sub);
-            fs::create_dir_all(&dst_sub)?;
-            for file_entry in fs::read_dir(&src_sub)?.flatten() {
-                let fp = file_entry.path();
-                if fp.is_file()
-                    && let Some(name) = fp.file_name()
-                {
-                    fs::copy(&fp, dst_sub.join(name))?;
-                }
-            }
-        }
-    }
-
-    // Also copy any flat DLLs or so files if present
-    for entry in fs::read_dir(&source_bundle_dir)?.flatten() {
-        let fp = entry.path();
-        if fp.is_file()
-            && let Some(name) = fp.file_name()
-        {
-            let _ = fs::copy(&fp, target_dir.join(name));
-        }
-    }
-
-    let _ = fs::write(target_dir.join("version.txt"), format!("{tag}\n"));
-
-    inspect_candidate_dir(&target_dir).ok_or_else(|| {
-        anyhow::anyhow!(
-            "Failed to validate DXMT installation after extracting to {}",
-            target_dir.display()
-        )
-    })
+    use crate::downloads;
+    let release = downloads::release("dxmt", version)?;
+    let target = dest_dir
+        .map(Path::to_path_buf)
+        .unwrap_or_else(paths::dxmt_dir);
+    downloads::fetch(
+        &release,
+        &target,
+        inspect_candidate_dir,
+        |bundle, extracted, staged| {
+            downloads::copy_layout(
+                &bundle.root,
+                staged,
+                extracted,
+                &[
+                    "x86_64-windows",
+                    "i386-windows",
+                    "x86-windows",
+                    "x86_64-unix",
+                    "x64",
+                    "x32",
+                    "x86",
+                ],
+            )
+        },
+    )
 }
 
 use crate::backend::{Backend, BackendStatus, GraphicsBackend};
