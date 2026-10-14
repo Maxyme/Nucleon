@@ -547,6 +547,44 @@ pub fn is_pe_file_64_bit(path: &Path) -> bool {
     true
 }
 
+/// Prefer shader helpers shipped with a game when Wine's builtin implementations are incomplete.
+/// Only known DirectX helper DLLs matching the executable's architecture are considered.
+pub fn bundled_directx_helpers(directory: &Path, is64: bool) -> Vec<String> {
+    let mut helpers = Vec::new();
+    if let Ok(entries) = fs::read_dir(directory) {
+        for path in entries.flatten().map(|entry| entry.path()) {
+            let Some(name) = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .map(str::to_ascii_lowercase)
+            else {
+                continue;
+            };
+            let Some(stem) = name.strip_suffix(".dll") else {
+                continue;
+            };
+            let supported = [
+                ("d3dx9_", 24..=43),
+                ("d3dx10_", 33..=43),
+                ("d3dx11_", 42..=43),
+                ("d3dcompiler_", 33..=47),
+            ]
+            .iter()
+            .any(|(prefix, versions)| {
+                stem.strip_prefix(prefix)
+                    .and_then(|v| v.parse::<u32>().ok())
+                    .is_some_and(|v| versions.contains(&v))
+            });
+            if supported && crate::runtime_checks::pe(Some(&path), is64) {
+                helpers.push(stem.to_string());
+            }
+        }
+    }
+    helpers.sort();
+    helpers.dedup();
+    helpers
+}
+
 /// Loader DLLs that link a title against the Steam client. A game that loads one of these calls
 /// `SteamAPI_Init()` during startup, and titles that treat a failed handshake as fatal (Denuvo
 /// builds in particular) exit or ask Steam to relaunch them before they ever reach graphics.
@@ -669,6 +707,37 @@ mod tests {
             }
         }
         data
+    }
+
+    #[test]
+    fn bundled_shader_helpers_require_a_supported_name_and_matching_pe_architecture() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("D3DX9_43.dll"),
+            pe_with_libraries(false, &[], &[]),
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("D3DCompiler_43.dll"),
+            pe_with_libraries(false, &[], &[]),
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("d3dx11_43.dll"),
+            pe_with_libraries(true, &[], &[]),
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("d3dcompiler_99.dll"),
+            pe_with_libraries(false, &[], &[]),
+        )
+        .unwrap();
+        fs::write(dir.path().join("d3dx9_42.dll"), b"not a PE").unwrap();
+        assert_eq!(
+            bundled_directx_helpers(dir.path(), false),
+            ["d3dcompiler_43", "d3dx9_43"]
+        );
+        assert_eq!(bundled_directx_helpers(dir.path(), true), ["d3dx11_43"]);
     }
 
     #[test]

@@ -196,7 +196,10 @@ pub fn configure_prefix_registry(prefix_dir: &Path, runner_dir: &Path) -> Result
 }
 
 pub fn stage_bridge_libraries(prefix_dir: &Path) -> Result<()> {
-    let bridge = paths::bridge_dir();
+    stage_bridge_libraries_from(prefix_dir, &paths::bridge_dir())
+}
+
+fn stage_bridge_libraries_from(prefix_dir: &Path, bridge: &Path) -> Result<()> {
     let steam_dir = prefix_dir.join("drive_c/Program Files (x86)/Steam");
     let legacy_dir = steam_dir.join("legacycompat");
     let sys32 = prefix_dir.join("drive_c/windows/system32");
@@ -261,6 +264,7 @@ pub fn stage_bridge_libraries(prefix_dir: &Path) -> Result<()> {
     // Copy architecture-specific triggers if present
     let x64_lsteam = bridge.join("x86_64-windows/lsteamclient.dll");
     if x64_lsteam.is_file() {
+        fs::create_dir_all(steam_dir.join("x86_64-windows"))?;
         // The standalone shim and games must both resolve the macOS forwarding bridge. A Valve
         // Windows client in the Steam directory shadows this bridge and cannot see native Steam.
         for target in [
@@ -268,16 +272,21 @@ pub fn stage_bridge_libraries(prefix_dir: &Path) -> Result<()> {
             sys32.join("steamclient64.dll"),
             steam_dir.join("lsteamclient.dll"),
             steam_dir.join("steamclient64.dll"),
+            steam_dir.join("x86_64-windows/lsteamclient.dll"),
         ] {
             fs::copy(&x64_lsteam, target)?;
         }
     }
     let i386_lsteam = bridge.join("i386-windows/lsteamclient.dll");
     if i386_lsteam.is_file() {
+        // Builtin lookup follows the original lsteamclient name, even when a game loads
+        // steamclient.dll. A flat x64 trigger would be selected for a 32-bit game.
+        fs::create_dir_all(steam_dir.join("i386-windows"))?;
         for target in [
             syswow64.join("lsteamclient.dll"),
             syswow64.join("steamclient.dll"),
             steam_dir.join("steamclient.dll"),
+            steam_dir.join("i386-windows/lsteamclient.dll"),
         ] {
             fs::copy(&i386_lsteam, target)?;
         }
@@ -289,6 +298,29 @@ pub fn stage_bridge_libraries(prefix_dir: &Path) -> Result<()> {
         let _ = fs::copy(&x64_unix_lsteam, steam_dir.join("lsteamclient.so"));
         let _ = fs::copy(&x64_unix_lsteam, steam_dir.join("steamclient.so"));
         let _ = fs::copy(&x64_unix_lsteam, steam_dir.join("steamclient64.so"));
+    }
+
+    // Standard builtin PE lookup also changes Unix-library lookup. Point that lookup
+    // at the prefix-private files that steam_ntdll::bind_prefix relinks afterward.
+    #[cfg(unix)]
+    if steam_dir.join("lsteamclient.so").is_file() {
+        let unix_dir = steam_dir.join("x86_64-unix");
+        fs::create_dir_all(&unix_dir)?;
+        for name in [
+            "lsteamclient.so",
+            "steamclient.so",
+            "steamclient64.so",
+            "ntdll.so",
+        ] {
+            let target = std::path::PathBuf::from(format!("../{name}"));
+            let destination = unix_dir.join(name);
+            if fs::read_link(&destination).ok().as_ref() != Some(&target) {
+                let staging = tempfile::tempdir_in(&unix_dir)?;
+                let link = staging.path().join(name);
+                std::os::unix::fs::symlink(target, &link)?;
+                fs::rename(link, destination)?;
+            }
+        }
     }
 
     // Copy legacycompat files and legacy Steam.dll
@@ -315,6 +347,59 @@ pub fn stage_bridge_libraries(prefix_dir: &Path) -> Result<()> {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn steam_bridge_builtin_lookup_preserves_both_architectures_and_bound_unix_library() {
+        let dir = tempdir().unwrap();
+        let bridge = dir.path().join("bridge");
+        let prefix = dir.path().join("prefix");
+        for arch in ["i386-windows", "x86_64-windows", "x86_64-unix"] {
+            fs::create_dir_all(bridge.join(arch)).unwrap();
+        }
+        fs::write(
+            bridge.join("i386-windows/lsteamclient.dll"),
+            b"32-bit bridge",
+        )
+        .unwrap();
+        fs::write(
+            bridge.join("x86_64-windows/lsteamclient.dll"),
+            b"64-bit bridge",
+        )
+        .unwrap();
+        fs::write(bridge.join("x86_64-unix/lsteamclient.so"), b"Unix bridge").unwrap();
+        stage_bridge_libraries_from(&prefix, &bridge).unwrap();
+        let steam = prefix.join("drive_c/Program Files (x86)/Steam");
+        assert_eq!(
+            fs::read(steam.join("i386-windows/lsteamclient.dll")).unwrap(),
+            b"32-bit bridge"
+        );
+        assert_eq!(
+            fs::read(steam.join("x86_64-windows/lsteamclient.dll")).unwrap(),
+            b"64-bit bridge"
+        );
+        assert_eq!(
+            fs::read(steam.join("steamclient.dll")).unwrap(),
+            b"32-bit bridge"
+        );
+        assert_eq!(
+            fs::read(steam.join("steamclient64.dll")).unwrap(),
+            b"64-bit bridge"
+        );
+        #[cfg(unix)]
+        {
+            crate::fs_util::atomic_write_file(steam.join("lsteamclient.so"), b"Bound Unix bridge")
+                .unwrap();
+            assert_eq!(
+                fs::read(steam.join("x86_64-unix/lsteamclient.so")).unwrap(),
+                b"Bound Unix bridge"
+            );
+            assert_eq!(
+                fs::read_link(steam.join("x86_64-unix/ntdll.so")).unwrap(),
+                Path::new("../ntdll.so")
+            );
+        }
+        stage_bridge_libraries_from(&prefix, &bridge).unwrap();
+    }
 
     #[test]
     fn test_stage_bridge_libraries_structure() {

@@ -92,6 +92,18 @@ client libraries and `lsteamclient` connect games to that client. The prefix's
 `steam.exe` helper is used when the recipe needs it; direct execution is another
 path. This mechanism is separate from the in-game overlay.
 
+Prefix staging keeps `i386-windows/lsteamclient.dll` and
+`x86_64-windows/lsteamclient.dll` beneath the Steam bridge search root. Wine's
+builtin lookup follows the original module name, so a flat x64 bridge can shadow
+its 32-bit alias and fail relocation. The `x86_64-unix` lookup links to the same
+prefix-private Unix libraries and ntdll binding used by the flat aliases.
+Braid's Steam initialization and menu were verified with this layout.
+
+Matching game-bundled D3DX and D3DCompiler DLLs receive native-first overrides.
+This lets older effects use the shipped implementation when Wine's builtin
+compiler lacks support, as observed with Braid's `d3dx9_43` and `d3dcompiler_43`.
+The runner logs which bundled helpers it selects.
+
 The Rust binder checks x86_64 bridge architecture and required ntdll exports,
 rewrites the dependency to `@loader_path/ntdll.so`, and stages a symlink to the
 selected Wine. Matching symbols are a prerequisite, not proof of future ABI

@@ -852,6 +852,23 @@ fn run_with_args_inner(args: &[String]) -> Result<()> {
             break;
         }
     }
+    if let Some(directory) = target_exe.parent() {
+        let helpers = nucleon_core::detector::bundled_directx_helpers(
+            directory,
+            nucleon_core::detector::is_pe_file_64_bit(&target_exe),
+        );
+        if !helpers.is_empty() {
+            let overrides = exec_env.entry("WINEDLLOVERRIDES".into()).or_default();
+            if !overrides.is_empty() {
+                overrides.push(';');
+            }
+            overrides.push_str(&format!("{}=n,b", helpers.join(",")));
+            log_runner(&format!(
+                "Using bundled native DirectX helpers: {}",
+                helpers.join(", ")
+            ));
+        }
+    }
     if let Some(ref id) = compat_appid {
         exec_env.insert("SteamAppId".to_string(), id.clone());
         exec_env.insert("SteamGameId".to_string(), id.clone());
