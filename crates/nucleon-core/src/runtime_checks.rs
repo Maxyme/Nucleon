@@ -1,0 +1,317 @@
+//! File-level compatibility checks used before Automatic chooses a graphics path.
+use anyhow::{Result, bail};
+use object::read::macho::{FatArch, MachOFatFile32, MachOFatFile64};
+use object::{Architecture, BinaryFormat, Object, ObjectSection, ObjectSymbol};
+use sha2::{Digest, Sha256};
+use std::{fs, path::Path};
+
+pub(crate) fn slices(data: &[u8]) -> Result<Vec<&[u8]>> {
+    Ok(match object::FileKind::parse(data)? {
+        object::FileKind::MachOFat32 => MachOFatFile32::parse(data)?
+            .arches()
+            .iter()
+            .map(|a| a.data(data))
+            .collect::<std::result::Result<Vec<_>, _>>()?,
+        object::FileKind::MachOFat64 => MachOFatFile64::parse(data)?
+            .arches()
+            .iter()
+            .map(|a| a.data(data))
+            .collect::<std::result::Result<Vec<_>, _>>()?,
+        _ => vec![data],
+    })
+}
+
+pub(crate) fn native_arch(path: &Path, arch: Architecture) -> bool {
+    fs::read(path)
+        .ok()
+        .and_then(|data| {
+            slices(&data).ok().map(|images| {
+                images.iter().any(|image| {
+                    object::File::parse(*image).is_ok_and(|f| {
+                        f.format() == BinaryFormat::MachO && f.architecture() == arch
+                    })
+                })
+            })
+        })
+        .unwrap_or(false)
+}
+
+pub(crate) fn wine_arch(root: &Path) -> Option<Architecture> {
+    // Prefer the host ntdll over launch scripts or universal executable wrappers.
+    for (dir, arch) in [
+        ("x86_64-unix", Architecture::X86_64),
+        ("aarch64-unix", Architecture::Aarch64),
+    ] {
+        for lib in ["lib/wine", "lib64/wine"] {
+            if native_arch(&root.join(lib).join(dir).join("ntdll.so"), arch) {
+                return Some(arch);
+            }
+        }
+    }
+    for name in ["bin/wine", "bin/wine64"] {
+        let path = root.join(name);
+        for arch in [Architecture::X86_64, Architecture::Aarch64] {
+            if native_arch(&path, arch) {
+                return Some(arch);
+            }
+        }
+    }
+    None
+}
+
+pub(crate) fn dxmt(bundle: &crate::dxmt::DxmtBundle, root: &Path, is64: bool) -> bool {
+    let files = if is64 {
+        [
+            bundle.x64_d3d11.as_deref(),
+            bundle.x64_dxgi.as_deref(),
+            bundle.x64_winemetal.as_deref(),
+        ]
+    } else {
+        [
+            bundle.x86_d3d11.as_deref(),
+            bundle.x86_dxgi.as_deref(),
+            bundle.x86_winemetal.as_deref(),
+        ]
+    };
+    files.into_iter().all(|p| pe(p, is64))
+        && crate::dxmt::validate_runtime(bundle, Some(root)).is_ok()
+        && wine_arch(root).is_some_and(|arch| {
+            bundle
+                .x64_winemetal_so
+                .as_deref()
+                .is_some_and(|p| native_arch(p, arch))
+        })
+}
+
+pub(crate) fn pe(path: Option<&Path>, is64: bool) -> bool {
+    path.and_then(|p| fs::read(p).ok()).is_some_and(|data| {
+        object::File::parse(data.as_slice()).is_ok_and(|f| {
+            f.format() == BinaryFormat::Pe
+                && f.architecture()
+                    == if is64 {
+                        Architecture::X86_64
+                    } else {
+                        Architecture::I386
+                    }
+        })
+    })
+}
+
+pub(crate) fn vulkan(icd: &Path, root: &Path) -> bool {
+    let Some(arch) = wine_arch(root) else {
+        return false;
+    };
+    let Some(json) = fs::read(icd)
+        .ok()
+        .and_then(|data| serde_json::from_slice::<serde_json::Value>(&data).ok())
+    else {
+        return false;
+    };
+    let Some(library) = json["ICD"]["library_path"].as_str() else {
+        return false;
+    };
+    let version = json["ICD"]["api_version"].as_str().unwrap_or("");
+    let mut parts = version.split('.').filter_map(|v| v.parse::<u32>().ok());
+    if (parts.next().unwrap_or(0), parts.next().unwrap_or(0)) < (1, 3) {
+        return false;
+    }
+    let library = Path::new(library);
+    let library = if library.is_absolute() {
+        library.to_path_buf()
+    } else {
+        icd.parent().unwrap_or(Path::new(".")).join(library)
+    };
+    native_arch(&library, arch)
+}
+
+pub(crate) fn has_export(data: &[u8], aliases: &[&str]) -> bool {
+    slices(data).is_ok_and(|images| {
+        images.iter().any(|image| {
+            object::File::parse(*image).is_ok_and(|f| {
+                f.symbols().chain(f.dynamic_symbols()).any(|s| {
+                    s.is_definition()
+                        && s.is_global()
+                        && s.name()
+                            .is_ok_and(|name| aliases.contains(&name.trim_start_matches('_')))
+                }) || f.exports().is_ok_and(|exports| {
+                    exports.iter().any(|e| {
+                        std::str::from_utf8(e.name())
+                            .is_ok_and(|name| aliases.contains(&name.trim_start_matches('_')))
+                    })
+                })
+            })
+        })
+    })
+}
+
+/// Compare loadable code/data, architecture, and UUID, excluding code-signature blobs.
+pub(crate) fn hook_identity(data: &[u8]) -> Result<Vec<[u8; 32]>> {
+    let mut hashes = Vec::new();
+    for image in slices(data)? {
+        let f = object::File::parse(image)?;
+        if f.format() != BinaryFormat::MachO || f.kind() != object::ObjectKind::Dynamic {
+            bail!("Hook must be a Mach-O dynamic library");
+        }
+        let mut hash = Sha256::new();
+        hash.update(format!("{:?}", f.architecture()));
+        if let Some(uuid) = f.mach_uuid()? {
+            hash.update(uuid);
+        }
+        let mut count = 0;
+        for section in f.sections() {
+            hash.update(section.segment_name()?.unwrap_or("").as_bytes());
+            hash.update(section.name()?.as_bytes());
+            hash.update(section.address().to_le_bytes());
+            hash.update(section.size().to_le_bytes());
+            hash.update(section.data()?);
+            count += 1;
+        }
+        if count == 0 {
+            bail!("Hook has no loadable sections");
+        }
+        hashes.push(hash.finalize().into());
+    }
+    if hashes.is_empty() {
+        bail!("Hook contains no architectures");
+    }
+    hashes.sort();
+    Ok(hashes)
+}
+
+#[cfg(test)]
+pub(crate) fn test_image(symbol: &str, text: u8) -> Vec<u8> {
+    // A small valid x86_64 dylib with one text section and an exported symbol.
+    let mut data = vec![0u8; 256];
+    let mut put =
+        |offset: usize, value: u32| data[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+    for (offset, value) in [
+        (0, 0xfeedfacf),
+        (4, 0x01000007),
+        (8, 3),
+        (12, 6),
+        (16, 2),
+        (20, 176),
+        (32, 0x19),
+        (36, 152),
+        (96, 1),
+        (184, 2),
+        (188, 24),
+        (192, 224),
+        (196, 1),
+        (200, 240),
+        (204, (symbol.len() + 3) as u32),
+        (152, 208),
+        (224, 1),
+    ] {
+        put(offset, value);
+    }
+    data[40..46].copy_from_slice(b"__TEXT");
+    data[104..110].copy_from_slice(b"__text");
+    data[120..126].copy_from_slice(b"__TEXT");
+    data[136..144].copy_from_slice(&208u64.to_le_bytes());
+    data[144..152].copy_from_slice(&8u64.to_le_bytes());
+    data[208..216].fill(text);
+    data[228] = 0x0f;
+    data[229] = 1;
+    data[232..240].copy_from_slice(&208u64.to_le_bytes());
+    data.truncate(241);
+    data.push(b'_');
+    data.extend_from_slice(symbol.as_bytes());
+    data.push(0);
+    data
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pe_image(is64: bool) -> Vec<u8> {
+        let mut b = vec![0u8; 512];
+        b[..2].copy_from_slice(b"MZ");
+        b[60..64].copy_from_slice(&128u32.to_le_bytes());
+        b[128..132].copy_from_slice(b"PE\0\0");
+        b[132..134].copy_from_slice(&(if is64 { 0x8664u16 } else { 0x14cu16 }).to_le_bytes());
+        b[148..150].copy_from_slice(&(if is64 { 240u16 } else { 224u16 }).to_le_bytes());
+        b[152..154].copy_from_slice(&(if is64 { 0x20bu16 } else { 0x10bu16 }).to_le_bytes());
+        b
+    }
+
+    #[test]
+    fn pe_preflight_rejects_wrong_architecture_and_placeholder_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let dll = dir.path().join("dxgi.dll");
+        fs::write(&dll, pe_image(true)).unwrap();
+        assert!(pe(Some(&dll), true));
+        assert!(!pe(Some(&dll), false));
+        fs::write(&dll, b"placeholder").unwrap();
+        assert!(!pe(Some(&dll), true));
+        assert!(!pe(None, true));
+    }
+
+    #[test]
+    fn vulkan_preflight_checks_relative_library_host_arch_and_api_version() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("wine");
+        fs::create_dir_all(root.join("bin")).unwrap();
+        fs::write(root.join("bin/wine"), test_image("wine", 1)).unwrap();
+        let icd = dir.path().join("driver.json");
+        let library = dir.path().join("driver.dylib");
+        let write_icd = |version| {
+            fs::write(
+                &icd,
+                serde_json::json!({"ICD":{"library_path":"driver.dylib","api_version":version}})
+                    .to_string(),
+            )
+            .unwrap()
+        };
+        write_icd("1.4.0");
+        assert!(!vulkan(&icd, &root));
+        let mut arm = test_image("driver", 1);
+        arm[4..8].copy_from_slice(&0x0100000cu32.to_le_bytes());
+        fs::write(&library, arm).unwrap();
+        assert!(!vulkan(&icd, &root));
+        fs::write(&library, test_image("driver", 1)).unwrap();
+        assert!(vulkan(&icd, &root));
+        write_icd("1.2.0");
+        assert!(!vulkan(&icd, &root));
+    }
+
+    #[test]
+    fn dxmt_preflight_rejects_incomplete_and_mismatched_builtin_bundles() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("wine");
+        fs::create_dir_all(root.join("bin")).unwrap();
+        fs::write(root.join("bin/wine"), test_image("wine", 1)).unwrap();
+        let bundle_dir = dir.path().join("dxmt");
+        fs::create_dir_all(&bundle_dir).unwrap();
+        fs::write(bundle_dir.join("d3d11.dll"), pe_image(true)).unwrap();
+        let bundle = crate::dxmt::inspect_candidate_dir(&bundle_dir).unwrap();
+        assert!(!dxmt(&bundle, &root, true));
+        for name in ["dxgi.dll", "winemetal.dll"] {
+            fs::write(bundle_dir.join(name), pe_image(true)).unwrap();
+        }
+        fs::write(bundle_dir.join("winemetal.so"), test_image("metal", 1)).unwrap();
+        let bundle = crate::dxmt::inspect_candidate_dir(&bundle_dir).unwrap();
+        assert!(dxmt(&bundle, &root, true));
+        assert!(!dxmt(&bundle, &root, false));
+        let mut builtin = pe_image(true);
+        builtin[64..80].copy_from_slice(b"Wine builtin DLL");
+        fs::write(bundle_dir.join("d3d11.dll"), builtin).unwrap();
+        assert!(!dxmt(&bundle, &root, true));
+    }
+
+    #[test]
+    fn capabilities_require_exports_rather_than_embedded_strings() {
+        assert!(!has_export(
+            b"D3DKMTEnumAdapters2",
+            &["D3DKMTEnumAdapters2"]
+        ));
+        let mut data = test_image("unrelated", 1);
+        data.extend_from_slice(b"D3DKMTEnumAdapters2");
+        assert!(!has_export(&data, &["D3DKMTEnumAdapters2"]));
+        assert!(has_export(
+            &test_image("D3DKMTEnumAdapters2", 1),
+            &["D3DKMTEnumAdapters2"]
+        ));
+    }
+}
