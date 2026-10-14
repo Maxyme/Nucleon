@@ -1,9 +1,11 @@
 use anyhow::Result;
 use nucleon_core::{guard, paths, steam, validator};
-use std::fs;
 use std::process::Command;
 
 pub fn run_launch(appid: u32, hud: bool, engine: Option<String>) -> Result<()> {
+    if let Some(value) = engine.as_deref() {
+        nucleon_core::configuration::engine("--engine", value)?;
+    }
     println!("==> Launching game AppID {}...", appid);
 
     // Ensure Steam update guard, permissions, manifests, WebUI, and compat mappings are clean
@@ -21,7 +23,8 @@ pub fn run_launch(appid: u32, hud: bool, engine: Option<String>) -> Result<()> {
     if let Some(ref eng) = engine {
         ov["engine"] = serde_json::Value::String(eng.clone());
     }
-    let _ = fs::write(&override_file, ov.to_string());
+    paths::ensure_dirs()?;
+    nucleon_core::fs_util::atomic_write_file(&override_file, ov.to_string())?;
 
     let mut cmd = Command::new("open");
     cmd.arg(format!("steam://run/{}", appid));

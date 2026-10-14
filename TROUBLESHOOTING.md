@@ -90,3 +90,24 @@ safety of a private Steam ABI. Ask for a diff and evidence.
 - [Direct ntdll binding](docs/ntdll-compat-rust-investigation.md)
 - [Unsafe audit](docs/unsafe-audit-2026-10-13.md)
 - [Provenance audit](docs/notproton-provenance-and-overlay-audit.md)
+
+## Invalid configuration
+
+Launch errors name the environment variable or configuration file, the invalid
+value, and a correction. Steam launches also record the full error in
+`~/Library/Application Support/nucleon/nucleon-runner.log` (`nucleon logs --runner`).
+A malformed launch override is retained so you can correct or remove it.
+
+Engine names must be recognized (`auto`, `gptk`, `dxmt`, `dxvk`, `vkd3d`,
+`kosmickrisp`, or `wine`). An explicit `auto` overrides a saved per-game engine.
+Boolean environment settings accept `1`/`0` or `true`/`false`. Remove a bad variable
+from Steam Launch Options to restore the default.
+
+`backend.toml` must contain a valid TOML string such as `backend = "auto"`.
+Status output shows invalid backend settings; Automatic launches reject them.
+For missing Wine installations, use `nucleon wine list` and `nucleon wine use
+<name>`. Saved component paths can be reset with the corresponding command,
+such as `nucleon dxvk clear-path` or `nucleon kosmickrisp clear-path`.
+Vulkan overrides must name readable ICD JSON manifests whose driver libraries
+exist. `VK_DRIVER_FILES` takes precedence over `VK_ICD_FILENAMES`; colon-separated
+manifest lists are preserved in the game's environment.

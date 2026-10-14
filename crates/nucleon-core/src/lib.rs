@@ -23,3 +23,5 @@ pub mod wine;
 pub mod wine_build;
 
 pub(crate) mod runtime_checks;
+
+pub mod configuration;

@@ -346,17 +346,17 @@ pub fn clear_custom_kosmickrisp_path() -> Result<()> {
 
 /// Locates the Mesa KosmicKrisp Vulkan ICD manifest on macOS.
 pub fn find_kosmickrisp_icd() -> Option<PathBuf> {
-    // 1. Explicit environment variables, in priority order.
-    let env_paths = [
+    // A winning explicit override must not silently use another configured driver.
+    for name in [
         "VK_DRIVER_FILES",
         "VK_ICD_FILENAMES",
         "KOSMICKRISP_ICD_PATH",
-    ]
-    .iter()
-    .filter_map(|var| env::var(var).ok().map(PathBuf::from))
-    .collect::<Vec<_>>();
-
-    find_kosmickrisp_icd_with(&env_paths)
+    ] {
+        if let Some(value) = env::var_os(name) {
+            return env::split_paths(&value).find(|path| path.is_file());
+        }
+    }
+    find_kosmickrisp_icd_with(&[])
 }
 
 /// Resolves the KosmicKrisp ICD manifest, preferring `env_paths` (the environment-provided

@@ -131,43 +131,48 @@ pub fn backend_config_file() -> PathBuf {
     paths::support_dir().join("backend.toml")
 }
 
-/// Resolves the currently active graphics backend along with its resolution origin.
+/// Strict resolution for launch: never hide an invalid higher-priority setting.
+pub fn resolve_active_backend_with_origin() -> Result<(GraphicsBackend, String)> {
+    for name in ["NUCLEON_BACKEND", "NUCLEON_GRAPHICS_BACKEND"] {
+        if let Some(value) = crate::configuration::environment(name)? {
+            let backend = GraphicsBackend::from_str(&value).with_context(|| format!(
+                "Invalid {name}={value:?}. Correct it or remove {name} from Steam Launch Options"))?;
+            return Ok((backend, format!("from environment variable {name}")));
+        }
+    }
+    let path = backend_config_file();
+    if let Some(contents) = crate::configuration::optional_file(&path)? {
+        return parse_backend_configuration(&contents, &path)
+            .map(|backend| (backend, format!("from config file ({})", path.display())));
+    }
+    Ok((GraphicsBackend::Auto, "default (auto)".into()))
+}
+
+fn parse_backend_configuration(contents: &str, path: &Path) -> Result<GraphicsBackend> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Config {
+        backend: String,
+    }
+    let config: Config = toml::from_str(contents).with_context(|| format!(
+        "Invalid backend configuration {}. Set backend = \"auto\" (or dxvk, dxmt, d3dmetal, kosmickrisp), or remove the file to reset it", path.display()))?;
+    GraphicsBackend::from_str(&config.backend).with_context(|| {
+        format!(
+            "Invalid backend in {}. Correct its backend value or remove the file",
+            path.display()
+        )
+    })
+}
+
+/// Read-only status still displays configuration errors when it cannot resolve a backend.
 pub fn get_active_backend_with_origin() -> (GraphicsBackend, String) {
-    // 1. Environment variable: NUCLEON_BACKEND or NUCLEON_GRAPHICS_BACKEND
-    for var in &["NUCLEON_BACKEND", "NUCLEON_GRAPHICS_BACKEND"] {
-        if let Ok(val) = std::env::var(var) {
-            let trimmed = val.trim();
-            if !trimmed.is_empty()
-                && let Ok(b) = GraphicsBackend::from_str(trimmed)
-            {
-                return (b, format!("from environment variable {var}"));
-            }
-        }
-    }
-
-    // 2. Persisted config file: backend.toml
-    let conf_path = backend_config_file();
-    if conf_path.is_file()
-        && let Ok(content) = fs::read_to_string(&conf_path)
-    {
-        for line in content.lines() {
-            let trimmed = line.trim();
-            if trimmed.starts_with('#') || trimmed.is_empty() {
-                continue;
-            }
-            if let Some((k, v)) = trimmed.split_once('=')
-                && k.trim() == "backend"
-            {
-                let clean_val = v.trim().trim_matches('"').trim_matches('\'');
-                if let Ok(b) = GraphicsBackend::from_str(clean_val) {
-                    return (b, format!("from config file ({})", conf_path.display()));
-                }
-            }
-        }
-    }
-
-    // 3. Default fallback
-    (GraphicsBackend::Auto, "default (auto)".to_string())
+    resolve_active_backend_with_origin().unwrap_or_else(|error| {
+        log::warn!("Backend configuration failed: {error:#}");
+        (
+            GraphicsBackend::Auto,
+            format!("CONFIGURATION ERROR (Automatic launch blocked): {error:#}"),
+        )
+    })
 }
 
 /// Returns the currently active graphics backend.
@@ -481,6 +486,29 @@ impl Backend for KosmicKrispBackend {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn backend_configuration_uses_toml_and_rejects_invalid_settings() {
+        let path = Path::new("/tmp/example/backend.toml");
+        assert_eq!(
+            parse_backend_configuration("backend = 'dxvk' # chosen backend", path).unwrap(),
+            GraphicsBackend::Dxvk
+        );
+        for contents in [
+            "",
+            "backend = 'typo'",
+            "backend = 1",
+            "backed = 'auto'",
+            "backend = '",
+        ] {
+            let error = format!(
+                "{:#}",
+                parse_backend_configuration(contents, path).unwrap_err()
+            );
+            assert!(error.contains("/tmp/example/backend.toml"));
+            assert!(error.contains("remove the file"));
+        }
+    }
 
     #[test]
     fn test_backend_parsing_and_display() {
