@@ -31,9 +31,9 @@ pub fn is_steam_installed() -> bool {
 pub fn is_steam_patched() -> bool {
     let plist = paths::steam_info_plist();
     let hook_dylib = paths::steam_app().join("Contents/MacOS/nucleon.dylib");
-    hook_dylib.exists()
-        || is_plist_dyld_injected(&plist, "nucleon.dylib")
-        || has_any_plist_dyld_insert(&plist)
+    hook_dylib.is_file()
+        && is_plist_dyld_injected(&plist, &hook_dylib.to_string_lossy())
+        && has_compat_tools_environment(&plist)
 }
 
 pub fn has_any_plist_dyld_insert(plist_path: &Path) -> bool {
@@ -68,6 +68,30 @@ pub fn is_plist_dyld_injected(plist_path: &Path, needle: &str) -> bool {
         .unwrap_or(false)
 }
 
+const COMPAT_TOOLS_ENV: &str = "STEAM_EXTRA_COMPAT_TOOLS_PATHS";
+
+fn compat_tools_path() -> PathBuf {
+    paths::home_dir().join("Library/Application Support/Steam/compatibilitytools.d")
+}
+
+fn has_compat_tools_environment(plist_path: &Path) -> bool {
+    plist::Value::from_file(plist_path)
+        .ok()
+        .and_then(|value| {
+            value
+                .as_dictionary()?
+                .get("LSEnvironment")?
+                .as_dictionary()?
+                .get(COMPAT_TOOLS_ENV)?
+                .as_string()
+                .map(|s| {
+                    s.split(':')
+                        .any(|path| Path::new(path) == compat_tools_path())
+                })
+        })
+        .unwrap_or(false)
+}
+
 pub fn inject_plist_dyld_insert(plist_path: &Path, dylib_path: &Path) -> Result<bool> {
     let mut root = plist::Value::from_file(plist_path)
         .with_context(|| format!("Failed to read plist at {}", plist_path.display()))?;
@@ -92,12 +116,32 @@ pub fn inject_plist_dyld_insert(plist_path: &Path, dylib_path: &Path) -> Result<
         .and_then(|v| v.as_dictionary_mut())
         .context("LSEnvironment is not a dictionary")?;
 
-    if let Some(current) = ls_dict
+    let tools = compat_tools_path();
+    let tools = tools
+        .to_str()
+        .context("Invalid non-UTF8 compatibility tools path")?;
+    let current_tools = match ls_dict.get(COMPAT_TOOLS_ENV) {
+        Some(value) => value
+            .as_string()
+            .context("Compatibility tools environment must be a string")?,
+        None => "",
+    };
+    let tools_present = current_tools.split(':').any(|path| path == tools);
+    if ls_dict
         .get("DYLD_INSERT_LIBRARIES")
         .and_then(|v| v.as_string())
-        && current == dylib_str
+        == Some(dylib_str)
+        && tools_present
     {
         return Ok(false);
+    }
+    if !tools_present {
+        let updated = if current_tools.is_empty() {
+            tools.to_string()
+        } else {
+            format!("{current_tools}:{tools}")
+        };
+        ls_dict.insert(COMPAT_TOOLS_ENV.to_string(), plist::Value::String(updated));
     }
 
     ls_dict.insert(
@@ -105,7 +149,9 @@ pub fn inject_plist_dyld_insert(plist_path: &Path, dylib_path: &Path) -> Result<
         plist::Value::String(dylib_str.to_string()),
     );
 
-    root.to_file_xml(plist_path)
+    let mut xml = Vec::new();
+    root.to_writer_xml(&mut xml)?;
+    crate::fs_util::atomic_write_file(plist_path, xml)
         .with_context(|| format!("Failed to write plist to {}", plist_path.display()))?;
 
     Ok(true)
@@ -132,6 +178,26 @@ pub fn remove_plist_dyld_insert(plist_path: &Path) -> Result<bool> {
     {
         if ls_dict.remove("DYLD_INSERT_LIBRARIES").is_some() {
             modified = true;
+        }
+        // Remove only Nucleon's tools directory; preserve any other configured search paths.
+        if let Some(current) = ls_dict.get(COMPAT_TOOLS_ENV).and_then(|v| v.as_string()) {
+            let tools = compat_tools_path();
+            let remaining = current
+                .split(':')
+                .filter(|p| Path::new(p) != tools)
+                .collect::<Vec<_>>()
+                .join(":");
+            if remaining != current {
+                if remaining.is_empty() {
+                    ls_dict.remove(COMPAT_TOOLS_ENV);
+                } else {
+                    ls_dict.insert(
+                        COMPAT_TOOLS_ENV.to_string(),
+                        plist::Value::String(remaining),
+                    );
+                }
+                modified = true;
+            }
         }
         if ls_dict.is_empty() {
             remove_ls_env = true;
@@ -286,6 +352,38 @@ pub fn fix_steam_permissions() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn launch_environment_migrates_existing_injection_and_preserves_custom_tools() {
+        let dir = tempfile::tempdir().unwrap();
+        let plist_path = dir.path().join("Info.plist");
+        let dylib = dir.path().join("nucleon.dylib");
+        let mut env = plist::Dictionary::new();
+        env.insert(
+            "DYLD_INSERT_LIBRARIES".into(),
+            plist::Value::String(dylib.to_string_lossy().into_owned()),
+        );
+        env.insert(
+            COMPAT_TOOLS_ENV.into(),
+            plist::Value::String("/custom/tools".into()),
+        );
+        let mut root = plist::Dictionary::new();
+        root.insert("LSEnvironment".into(), plist::Value::Dictionary(env));
+        plist::Value::Dictionary(root)
+            .to_file_xml(&plist_path)
+            .unwrap();
+        assert!(!has_compat_tools_environment(&plist_path));
+        assert!(inject_plist_dyld_insert(&plist_path, &dylib).unwrap());
+        assert!(has_compat_tools_environment(&plist_path));
+        assert!(!inject_plist_dyld_insert(&plist_path, &dylib).unwrap());
+        assert!(remove_plist_dyld_insert(&plist_path).unwrap());
+        let restored = plist::Value::from_file(&plist_path).unwrap();
+        let env = restored.as_dictionary().unwrap()["LSEnvironment"]
+            .as_dictionary()
+            .unwrap();
+        assert_eq!(env[COMPAT_TOOLS_ENV].as_string(), Some("/custom/tools"));
+        assert!(!env.contains_key("DYLD_INSERT_LIBRARIES"));
+    }
 
     #[test]
     fn test_plist_dyld_injection_lifecycle() {

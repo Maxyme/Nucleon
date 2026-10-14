@@ -1,9 +1,7 @@
-use crate::{
-    get_gum,
-    scanner::{PinnedImage, snapshot_memory},
-};
+use super::installation::Transaction;
+use crate::scanner::{PinnedImage, snapshot_memory};
 use anyhow::{Context, Result, bail, ensure};
-use frida_gum::{NativePointer, interceptor::Interceptor};
+use frida_gum::NativePointer;
 use nucleon_core::steam_contract::ValidatedContract;
 use std::ffi::c_void;
 use std::sync::{Mutex, OnceLock};
@@ -113,13 +111,11 @@ pub fn install_contract(image: PinnedImage, reviewed: &ValidatedContract) -> Res
         ));
     }
 
-    let mut interceptor = Interceptor::obtain(get_gum());
-    interceptor.begin_transaction();
+    let mut transaction = Transaction::begin()?;
     // Transaction end below is unconditional on every Result path. Gum's
     // transaction controls detour publication; code-site patches are individually
     // verified and rolled back on failure, not claimed to be jointly atomic.
     let mut applied = Vec::new();
-    let mut query_replaced = false;
     let result = (|| -> Result<()> {
         for (address, previous, replacement) in &plan {
             ensure!(
@@ -130,13 +126,12 @@ pub fn install_contract(image: PinnedImage, reviewed: &ValidatedContract) -> Res
             applied.push((*address, *previous));
             patch_instruction(*address, *replacement)?;
         }
-        let pointer = interceptor
-            .replace_fast(
+        let pointer = transaction
+            .replace(
                 NativePointer(query_address as *mut c_void),
                 NativePointer(eligibility_override as *mut c_void),
             )
             .map_err(|error| anyhow::anyhow!("Eligibility detour failed: {error:?}"))?;
-        query_replaced = true;
         ensure!(!pointer.0.is_null(), "Gum returned a null trampoline");
         // SAFETY: the exact entry witness and contract declare this function ABI;
         // Gum returns the callable original for this same entry.
@@ -148,16 +143,16 @@ pub fn install_contract(image: PinnedImage, reviewed: &ValidatedContract) -> Res
     })();
     let mut rollback_error = None;
     if result.is_err() {
-        if query_replaced {
-            interceptor.revert(NativePointer(query_address as *mut c_void));
-        }
         for (address, previous) in applied.into_iter().rev() {
             if let Err(error) = patch_instruction(address, previous) {
                 rollback_error = Some(error);
             }
         }
     }
-    interceptor.end_transaction();
+    if result.is_ok() {
+        transaction.commit();
+    }
+    drop(transaction);
     if let Some(error) = rollback_error {
         // Retain the image when rollback is incomplete; no published pointer can dangle.
         installed.image = Some(image);

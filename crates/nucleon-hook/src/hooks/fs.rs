@@ -1,11 +1,12 @@
-use crate::get_gum;
+use super::installation::{self, Original};
 use frida_gum::NativePointer;
-use frida_gum::interceptor::Interceptor;
+use std::sync::OnceLock;
+
 use log::info;
 use std::ffi::{c_char, c_int, c_void};
 
-pub static mut ORIG_CHMOD: *mut c_void = std::ptr::null_mut();
-pub static mut ORIG_FCHMOD: *mut c_void = std::ptr::null_mut();
+static ORIG_CHMOD: Original = Original::new();
+static ORIG_FCHMOD: Original = Original::new();
 
 /// Interposes chmod to ensure user read and write permissions (0600) are never stripped.
 ///
@@ -18,8 +19,12 @@ pub static mut ORIG_FCHMOD: *mut c_void = std::ptr::null_mut();
 /// Caller must pass a valid null-terminated C string pointer for `path`.
 pub unsafe extern "C" fn hook_chmod(path: *const c_char, mode: libc::mode_t) -> c_int {
     unsafe {
+        let Some(pointer) = ORIG_CHMOD.load() else {
+            *libc::__error() = libc::EIO;
+            return -1;
+        };
         let orig: extern "C" fn(*const c_char, libc::mode_t) -> c_int =
-            std::mem::transmute(ORIG_CHMOD);
+            std::mem::transmute(pointer);
         let mut safe_mode = mode | libc::S_IRUSR | libc::S_IWUSR;
         if (mode & (libc::S_IXUSR | libc::S_IXGRP | libc::S_IXOTH)) != 0 {
             safe_mode |= libc::S_IXUSR;
@@ -34,7 +39,11 @@ pub unsafe extern "C" fn hook_chmod(path: *const c_char, mode: libc::mode_t) -> 
 /// Caller must pass a valid file descriptor `fd`.
 pub unsafe extern "C" fn hook_fchmod(fd: c_int, mode: libc::mode_t) -> c_int {
     unsafe {
-        let orig: extern "C" fn(c_int, libc::mode_t) -> c_int = std::mem::transmute(ORIG_FCHMOD);
+        let Some(pointer) = ORIG_FCHMOD.load() else {
+            *libc::__error() = libc::EIO;
+            return -1;
+        };
+        let orig: extern "C" fn(c_int, libc::mode_t) -> c_int = std::mem::transmute(pointer);
         let mut safe_mode = mode | libc::S_IRUSR | libc::S_IWUSR;
         if (mode & (libc::S_IXUSR | libc::S_IXGRP | libc::S_IXOTH)) != 0 {
             safe_mode |= libc::S_IXUSR;
@@ -43,32 +52,23 @@ pub unsafe extern "C" fn hook_fchmod(fd: c_int, mode: libc::mode_t) -> c_int {
     }
 }
 
-pub fn install_fs_hooks() -> Result<(), anyhow::Error> {
-    let gum = get_gum();
-    let mut interceptor = Interceptor::obtain(gum);
+static INSTALLED: OnceLock<Result<(), String>> = OnceLock::new();
 
-    unsafe {
-        let chmod_ptr = libc::chmod as *mut c_void;
-        let orig_chmod = interceptor
-            .replace_fast(
-                NativePointer(chmod_ptr),
+pub fn install_fs_hooks() -> anyhow::Result<()> {
+    installation::once(&INSTALLED, || {
+        installation::install(&[
+            (
+                NativePointer(libc::chmod as *mut c_void),
                 NativePointer(hook_chmod as *mut c_void),
-            )
-            .map_err(|e| anyhow::anyhow!("Frida Gum hook chmod failed: {e:?}"))?;
-        ORIG_CHMOD = orig_chmod.0;
-
-        let fchmod_ptr = libc::fchmod as *mut c_void;
-        let orig_fchmod = interceptor
-            .replace_fast(
-                NativePointer(fchmod_ptr),
+                &ORIG_CHMOD,
+            ),
+            (
+                NativePointer(libc::fchmod as *mut c_void),
                 NativePointer(hook_fchmod as *mut c_void),
-            )
-            .map_err(|e| anyhow::anyhow!("Frida Gum hook fchmod failed: {e:?}"))?;
-        ORIG_FCHMOD = orig_fchmod.0;
-
-        info!(
-            "Installed filesystem permission guards (chmod, fchmod) to prevent 'missing file privileges'"
-        );
-    }
-    Ok(())
+                &ORIG_FCHMOD,
+            ),
+        ])?;
+        info!("Installed fs hooks");
+        Ok(())
+    })
 }

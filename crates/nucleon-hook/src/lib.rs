@@ -54,19 +54,7 @@ fn init() {
         std::process::id()
     );
 
-    // Export STEAM_EXTRA_COMPAT_TOOLS_PATHS so Steam searches compatibilitytools.d
-    let tools_path =
-        paths::home_dir().join("Library/Application Support/Steam/compatibilitytools.d");
-    // FIXME: constructor ordering only excludes Nucleon's own worker threads.
-    // Steam or native libraries may already have threads reading the environment.
-    // Move this value to the launcher's environment before Steam starts, then
-    // remove this process-global mutation. It is not proven safe by this ordering.
-    unsafe { std::env::set_var("STEAM_EXTRA_COMPAT_TOOLS_PATHS", &tools_path) };
-    info!(
-        "Set STEAM_EXTRA_COMPAT_TOOLS_PATHS={}",
-        tools_path.display()
-    );
-
+    // Steam's launch configuration supplies compatibility-tool paths before native threads start.
     // 1. Install spawn environment sanitization
     if let Err(e) = hooks::spawn::install_spawn_hooks() {
         warn!("Failed to install spawn hooks: {e:#}");

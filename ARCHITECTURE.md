@@ -143,3 +143,12 @@ Remaining unsafe operations and unresolved risks:
 - Loader and kernel-copy FFI remain. Compatibility installation owns its pinned
   image and uses kernel copies instead of borrowing patched executable memory.
   The obsolete dyld enumerator and raw-memory scanner were removed.
+
+Native detour installation is serialized across hook groups and runs once per group.
+Original trampolines use release/acquire publication before the Gum transaction
+activates any replacement. Failed preparation reverts the whole group and caches
+the error; callbacks never transmute null pointers. Transaction cleanup also runs
+on unwinding. Steam's `LSEnvironment` supplies `STEAM_EXTRA_COMPAT_TOOLS_PATHS`
+before launch, preserving additional configured tool directories. The native
+constructor never changes the process environment. Direct executable launches
+must supply any additional tool paths in their own launch environment.

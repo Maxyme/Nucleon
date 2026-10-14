@@ -1,12 +1,13 @@
-use crate::get_gum;
+use super::installation::{self, Original};
 use frida_gum::NativePointer;
-use frida_gum::interceptor::Interceptor;
+use std::sync::OnceLock;
+
 use log::info;
 use std::ffi::{CStr, c_char, c_int, c_void};
 
-pub static mut ORIG_POSIX_SPAWN: *mut c_void = std::ptr::null_mut();
-pub static mut ORIG_POSIX_SPAWNP: *mut c_void = std::ptr::null_mut();
-pub static mut ORIG_EXECVE: *mut c_void = std::ptr::null_mut();
+static ORIG_POSIX_SPAWN: Original = Original::new();
+static ORIG_POSIX_SPAWNP: Original = Original::new();
+static ORIG_EXECVE: Original = Original::new();
 
 fn target_keeps_insert(path: &str) -> bool {
     path.ends_with("steam_osx") || path.ends_with("Steam Helper")
@@ -51,6 +52,9 @@ pub unsafe extern "C" fn hook_posix_spawn(
     envp: *const *const c_char,
 ) -> c_int {
     unsafe {
+        let Some(pointer) = ORIG_POSIX_SPAWN.load() else {
+            return libc::EIO;
+        };
         let orig: extern "C" fn(
             *mut libc::pid_t,
             *const c_char,
@@ -58,7 +62,7 @@ pub unsafe extern "C" fn hook_posix_spawn(
             *const libc::posix_spawnattr_t,
             *const *const c_char,
             *const *const c_char,
-        ) -> c_int = std::mem::transmute(ORIG_POSIX_SPAWN);
+        ) -> c_int = std::mem::transmute(pointer);
 
         if path.is_null() || envp.is_null() {
             return orig(pid, path, file_actions, attrp, argv, envp);
@@ -87,6 +91,9 @@ pub unsafe extern "C" fn hook_posix_spawnp(
     envp: *const *const c_char,
 ) -> c_int {
     unsafe {
+        let Some(pointer) = ORIG_POSIX_SPAWNP.load() else {
+            return libc::EIO;
+        };
         let orig: extern "C" fn(
             *mut libc::pid_t,
             *const c_char,
@@ -94,7 +101,7 @@ pub unsafe extern "C" fn hook_posix_spawnp(
             *const libc::posix_spawnattr_t,
             *const *const c_char,
             *const *const c_char,
-        ) -> c_int = std::mem::transmute(ORIG_POSIX_SPAWNP);
+        ) -> c_int = std::mem::transmute(pointer);
 
         if path.is_null() || envp.is_null() {
             return orig(pid, path, file_actions, attrp, argv, envp);
@@ -120,11 +127,15 @@ pub unsafe extern "C" fn hook_execve(
     envp: *const *const c_char,
 ) -> c_int {
     unsafe {
+        let Some(pointer) = ORIG_EXECVE.load() else {
+            *libc::__error() = libc::EIO;
+            return -1;
+        };
         let orig: extern "C" fn(
             *const c_char,
             *const *const c_char,
             *const *const c_char,
-        ) -> c_int = std::mem::transmute(ORIG_EXECVE);
+        ) -> c_int = std::mem::transmute(pointer);
 
         if path.is_null() || envp.is_null() {
             return orig(path, argv, envp);
@@ -140,41 +151,28 @@ pub unsafe extern "C" fn hook_execve(
     }
 }
 
-pub fn install_spawn_hooks() -> Result<(), anyhow::Error> {
-    let gum = get_gum();
-    let mut interceptor = Interceptor::obtain(gum);
+static INSTALLED: OnceLock<Result<(), String>> = OnceLock::new();
 
-    unsafe {
-        let spawn_ptr = libc::posix_spawn as *mut c_void;
-        let spawnp_ptr = libc::posix_spawnp as *mut c_void;
-        let execve_ptr = libc::execve as *mut c_void;
-
-        let orig_spawn = interceptor
-            .replace_fast(
-                NativePointer(spawn_ptr),
+pub fn install_spawn_hooks() -> anyhow::Result<()> {
+    installation::once(&INSTALLED, || {
+        installation::install(&[
+            (
+                NativePointer(libc::posix_spawn as *mut c_void),
                 NativePointer(hook_posix_spawn as *mut c_void),
-            )
-            .map_err(|e| anyhow::anyhow!("Frida Gum hook posix_spawn failed: {e:?}"))?;
-        ORIG_POSIX_SPAWN = orig_spawn.0;
-
-        let orig_spawnp = interceptor
-            .replace_fast(
-                NativePointer(spawnp_ptr),
+                &ORIG_POSIX_SPAWN,
+            ),
+            (
+                NativePointer(libc::posix_spawnp as *mut c_void),
                 NativePointer(hook_posix_spawnp as *mut c_void),
-            )
-            .map_err(|e| anyhow::anyhow!("Frida Gum hook posix_spawnp failed: {e:?}"))?;
-        ORIG_POSIX_SPAWNP = orig_spawnp.0;
-
-        let orig_exec = interceptor
-            .replace_fast(
-                NativePointer(execve_ptr),
+                &ORIG_POSIX_SPAWNP,
+            ),
+            (
+                NativePointer(libc::execve as *mut c_void),
                 NativePointer(hook_execve as *mut c_void),
-            )
-            .map_err(|e| anyhow::anyhow!("Frida Gum hook execve failed: {e:?}"))?;
-        ORIG_EXECVE = orig_exec.0;
-        info!(
-            "Installed posix_spawn, posix_spawnp, and execve hooks to sanitize child environments via Frida Gum"
-        );
-    }
-    Ok(())
+                &ORIG_EXECVE,
+            ),
+        ])?;
+        info!("Installed spawn hooks");
+        Ok(())
+    })
 }
