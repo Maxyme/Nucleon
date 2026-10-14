@@ -13,7 +13,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;
-use sysinfo::{Pid, ProcessesToUpdate, Signal, System};
+use sysinfo::{ProcessesToUpdate, System};
+
+mod process;
+use process::{OwnedChild, TERMINATION_GRACE};
 
 #[derive(Debug, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
@@ -277,21 +280,25 @@ fn set_runner_lib_env(cmd: &mut Command, runner_dir: &Path) {
 
 /// Always reap a helper after it exits or is killed at its deadline.
 fn wait_child_with_timeout(
-    child: &mut std::process::Child,
+    child: &mut OwnedChild,
     timeout: Duration,
 ) -> Result<Option<std::process::ExitStatus>> {
     let start = std::time::Instant::now();
     loop {
         match child.try_wait() {
-            Ok(Some(status)) => return Ok(Some(status)),
+            Ok(Some(status)) => {
+                child.terminate(TERMINATION_GRACE)?;
+                return Ok(Some(status));
+            }
             Ok(None) if start.elapsed() < timeout => {
                 thread::sleep(
                     Duration::from_millis(50).min(timeout.saturating_sub(start.elapsed())),
                 );
             }
             result => {
-                child.kill().context("Failed to stop subprocess helper")?;
-                child.wait().context("Failed to reap subprocess helper")?;
+                child
+                    .terminate(TERMINATION_GRACE)
+                    .context("Failed to stop subprocess helper group")?;
                 if let Err(error) = result {
                     return Err(error).context("Failed to poll subprocess helper");
                 }
@@ -315,7 +322,7 @@ fn run_wineserver_helper(
     if let Some(runner) = wineserver.parent().and_then(Path::parent) {
         set_runner_lib_env(&mut command, runner);
     }
-    let mut child = command.spawn().with_context(|| {
+    let mut child = OwnedChild::spawn(&mut command).with_context(|| {
         format!(
             "Cannot start wineserver {argument} at {}",
             wineserver.display()
@@ -346,31 +353,7 @@ fn termination_flag() -> Result<Arc<AtomicBool>> {
     Ok(flag)
 }
 
-/// Recursively terminates all child processes of a given PID using sysinfo (kill-tree algorithm).
-pub fn kill_process_tree_sysinfo(sys: &System, root_pid: Pid, signal: Signal) {
-    let child_pids: Vec<Pid> = sys
-        .processes()
-        .iter()
-        .filter(|(_, p)| p.parent() == Some(root_pid))
-        .map(|(pid, _)| *pid)
-        .collect();
-
-    for child_pid in child_pids {
-        kill_process_tree_sysinfo(sys, child_pid, signal);
-    }
-
-    if let Some(proc) = sys.process(root_pid) {
-        let _ = proc.kill_with(signal);
-    }
-}
-
-fn terminate_wine_prefix(
-    runner_dir: &Path,
-    pfx_dir: &Path,
-    mut child: Option<&mut std::process::Child>,
-    child_id: u32,
-    _target_exe: Option<&Path>,
-) {
+fn terminate_wine_prefix(runner_dir: &Path, pfx_dir: &Path, child: &mut OwnedChild) {
     // wineserver is scoped by WINEPREFIX. A shared Wine path or executable name is not
     // evidence of ownership: other games can be using that same runtime.
     let wineserver_bin = runner_dir.join("bin/wineserver");
@@ -379,17 +362,8 @@ fn terminate_wine_prefix(
     {
         log_runner(&format!("Wineserver shutdown failed: {error:#}"));
     }
-    if child_id > 0 {
-        let mut sys = System::new();
-        sys.refresh_processes(ProcessesToUpdate::All, true);
-        kill_process_tree_sysinfo(&sys, Pid::from_u32(child_id), Signal::Term);
-        thread::sleep(Duration::from_millis(300));
-        sys.refresh_processes(ProcessesToUpdate::All, true);
-        kill_process_tree_sysinfo(&sys, Pid::from_u32(child_id), Signal::Kill);
-    }
-    if let Some(ref mut child) = child {
-        let _ = child.kill();
-        let _ = child.wait();
+    if let Err(error) = child.terminate(TERMINATION_GRACE) {
+        log_runner(&format!("Launcher group shutdown failed: {error:#}"));
     }
     wait_wineserver(&wineserver_bin, pfx_dir, 1000);
 }
@@ -994,7 +968,7 @@ fn run_with_args_inner(args: &[String]) -> Result<()> {
         cmd.stderr(std::process::Stdio::from(err_file));
     }
 
-    let mut child = cmd.spawn().with_context(|| format!("Cannot launch Wine {}. Check that this binary is executable and matches your Mac's architecture", wine_bin.display()))?;
+    let mut child = OwnedChild::spawn(&mut cmd).with_context(|| format!("Cannot launch Wine {}. Check that this binary is executable and matches your Mac's architecture", wine_bin.display()))?;
 
     // Focus activation after slight delay
     thread::spawn(|| {
@@ -1009,14 +983,7 @@ fn run_with_args_inner(args: &[String]) -> Result<()> {
     loop {
         if term_flag.load(Ordering::SeqCst) {
             log_runner("Termination signal received, stopping Wine processes cleanly");
-            let child_id = child.id();
-            terminate_wine_prefix(
-                &runner_dir,
-                &pfx_dir,
-                Some(&mut child),
-                child_id,
-                Some(&target_exe),
-            );
+            terminate_wine_prefix(&runner_dir, &pfx_dir, &mut child);
             std::process::exit(0);
         }
 
@@ -1045,7 +1012,7 @@ fn run_with_args_inner(args: &[String]) -> Result<()> {
                         log_runner(
                             "No Wine game processes detected after primary launcher exit, shutting down",
                         );
-                        terminate_wine_prefix(&runner_dir, &pfx_dir, None, 0, Some(&target_exe));
+                        terminate_wine_prefix(&runner_dir, &pfx_dir, &mut child);
                         break;
                     }
                 }
@@ -1053,7 +1020,7 @@ fn run_with_args_inner(args: &[String]) -> Result<()> {
                 Err(e) => {
                     log_runner(&format!("Error waiting on Wine process: {}", e));
                     exit_code = 1;
-                    terminate_wine_prefix(&runner_dir, &pfx_dir, None, 0, Some(&target_exe));
+                    terminate_wine_prefix(&runner_dir, &pfx_dir, &mut child);
                     break;
                 }
             }
@@ -1064,7 +1031,7 @@ fn run_with_args_inner(args: &[String]) -> Result<()> {
                 thread::sleep(Duration::from_millis(500));
                 if !is_wine_game_process_running(&runner_dir, &target_exe, &pfx_dir) {
                     log_runner("All Wine game processes have terminated, exiting cleanly");
-                    terminate_wine_prefix(&runner_dir, &pfx_dir, None, 0, Some(&target_exe));
+                    terminate_wine_prefix(&runner_dir, &pfx_dir, &mut child);
                     break;
                 }
             }
@@ -1079,10 +1046,11 @@ fn run_with_args_inner(args: &[String]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sysinfo::{Pid, Signal};
 
     #[test]
     fn helper_timeout_kills_and_reaps_the_child() {
-        let mut child = Command::new("sleep").arg("30").spawn().unwrap();
+        let mut child = OwnedChild::spawn(Command::new("sleep").arg("30")).unwrap();
         let pid = Pid::from_u32(child.id());
         assert!(
             wait_child_with_timeout(&mut child, Duration::from_millis(10))
@@ -1101,7 +1069,7 @@ mod tests {
     #[test]
     fn helper_wait_preserves_exit_status_and_prefix_scope() {
         use std::os::unix::fs::PermissionsExt;
-        let mut child = Command::new("sh").args(["-c", "exit 7"]).spawn().unwrap();
+        let mut child = OwnedChild::spawn(Command::new("sh").args(["-c", "exit 7"])).unwrap();
         assert_eq!(
             wait_child_with_timeout(&mut child, Duration::from_secs(2))
                 .unwrap()
@@ -1162,19 +1130,18 @@ mod tests {
         let ready = dir.path().join("ready");
         for signal in [Signal::Interrupt, Signal::Term, Signal::Hangup] {
             let _ = fs::remove_file(&ready);
-            let mut child = Command::new(env::current_exe().unwrap())
+            let mut command = Command::new(env::current_exe().unwrap());
+            command
                 .args(["--exact", "tests::signal_handler_worker", "--nocapture"])
                 .env("NUCLEON_TEST_SIGNAL_READY", &ready)
-                .env_remove("NUCLEON_TEST_DUPLICATE_HANDLER")
-                .spawn()
-                .unwrap();
+                .env_remove("NUCLEON_TEST_DUPLICATE_HANDLER");
+            let mut child = OwnedChild::spawn(&mut command).unwrap();
             let start = std::time::Instant::now();
             while !ready.is_file() && start.elapsed() < Duration::from_secs(5) {
                 thread::sleep(Duration::from_millis(10));
             }
             if !ready.is_file() {
-                let _ = child.kill();
-                let _ = child.wait();
+                let _ = child.terminate(Duration::ZERO);
                 panic!("Signal worker did not become ready");
             }
             let pid = Pid::from_u32(child.id());
@@ -1190,12 +1157,12 @@ mod tests {
                 "Signal worker failed for {signal:?}"
             );
         }
-        let mut child = Command::new(env::current_exe().unwrap())
+        let mut command = Command::new(env::current_exe().unwrap());
+        command
             .args(["--exact", "tests::signal_handler_worker", "--nocapture"])
             .env("NUCLEON_TEST_SIGNAL_READY", &ready)
-            .env("NUCLEON_TEST_DUPLICATE_HANDLER", "1")
-            .spawn()
-            .unwrap();
+            .env("NUCLEON_TEST_DUPLICATE_HANDLER", "1");
+        let mut child = OwnedChild::spawn(&mut command).unwrap();
         assert!(
             wait_child_with_timeout(&mut child, Duration::from_secs(6))
                 .unwrap()
@@ -1414,39 +1381,6 @@ mod tests {
             "/opt/wine",
             ""
         ));
-    }
-
-    #[test]
-    fn test_kill_process_tree_sysinfo_terminates_process() {
-        let mut child = Command::new("sleep")
-            .arg("30")
-            .spawn()
-            .expect("Failed to spawn sleep command");
-
-        let pid = Pid::from_u32(child.id());
-        let mut sys = System::new();
-        sys.refresh_processes(ProcessesToUpdate::All, true);
-        assert!(sys.process(pid).is_some());
-
-        kill_process_tree_sysinfo(&sys, pid, Signal::Term);
-
-        // Wait up to 1 second for child to terminate
-        let mut exited = false;
-        for _ in 0..10 {
-            if let Ok(Some(_)) = child.try_wait() {
-                exited = true;
-                break;
-            }
-            thread::sleep(Duration::from_millis(100));
-        }
-
-        if !exited {
-            let _ = child.kill();
-        }
-        assert!(
-            exited,
-            "Process should have been terminated by kill_process_tree_sysinfo"
-        );
     }
 
     #[test]

@@ -1278,6 +1278,7 @@ dependencies = [
  "env_logger",
  "log",
  "nucleon-core",
+ "rustix",
  "serde",
  "serde_json",
  "sysinfo",
