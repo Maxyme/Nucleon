@@ -46,8 +46,11 @@ experiment's profiles, bridge files, and logs.
 
 Keep exact Wine/backend/driver recipes pinned. Import-table detection is a hint,
 not proof that a backend supports a game. Dynamic loads and feature requirements
-can differ. Automatic Wine routing does not promise a usable fallback for every
-title, and does not automatically select GPTK.
+can differ. Automatic routing prefers GPTK for DX12 and DXMT for DX11, then uses installed
+Vulkan translation layers. Explicit engine/backend choices take precedence. A
+per-game Wine selection keeps automatic routing on that runtime. Missing DX12
+backends produce an actionable error rather than an OpenGL fallback. These
+preferences do not predict performance or guarantee game compatibility.
 
 GPTK assembly publishes complete generations with Wine/GPTK provenance stamps.
 Launches resolve an immutable generation. Unix-call ABI pairing comes from the

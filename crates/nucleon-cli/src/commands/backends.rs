@@ -156,7 +156,7 @@ pub fn run(action: BackendsAction) -> Result<()> {
                 "To manage individual components: nucleon wine backends <dxvk|vkd3d|d7vk|dxmt|kosmickrisp> --help"
             );
             println!(
-                "Note: Apple GPTK 4 is an independent runner & D3DMetal backend (manage with: nucleon gptk --help)"
+                "Note: Apple GPTK is an independent runner & D3DMetal backend (manage with: nucleon gptk --help)"
             );
         }
         BackendsAction::Kosmickrisp { action } => kosmickrisp::run(action)?,

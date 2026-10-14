@@ -99,7 +99,7 @@ pub fn check_prerequisites(gptk_override: Option<&Path>) -> Vec<PrerequisiteChec
         remediation: "Install Wine via Homebrew ('brew install --cask wine-staging') or configure existing Wine ('nucleon wine add <name> <path>').".to_string(),
     });
 
-    // 4. Apple GPTK 4 Components (User-supplied)
+    // 4. Apple GPTK Components (User-supplied)
     let gptk_info = runner::get_gptk_resolution_info(gptk_override);
     let gptk_ok = gptk_info.is_some();
     let (gptk_details, gptk_remedy) = if let Some((comps, origin)) = gptk_info {
@@ -111,7 +111,7 @@ pub fn check_prerequisites(gptk_override: Option<&Path>) -> Vec<PrerequisiteChec
         )
     };
     checks.push(PrerequisiteCheck {
-        name: "Apple GPTK 4 (User-Supplied)",
+        name: "Apple GPTK (User-Supplied)",
         passed: gptk_ok,
         required: true,
         details: gptk_details,

@@ -668,7 +668,7 @@ fn plan_runner(state: &RunnerHostState, engine: TargetEngine) -> RunnerPlan {
 fn assembly_guidance(engine: TargetEngine) -> Option<String> {
     match engine {
         TargetEngine::Gptk => Some(
-            "Failed to resolve Apple GPTK runner. Please ensure Apple GPTK 4 components are configured via 'nucleon gptk set-path <DIR>', --gptk-path, or NUCLEON_GPTK_PATH."
+            "Failed to resolve Apple GPTK runner. Please ensure Apple GPTK components are configured via 'nucleon gptk set-path <DIR>', --gptk-path, or NUCLEON_GPTK_PATH."
                 .to_string(),
         ),
         _ => None,
@@ -781,7 +781,7 @@ pub fn require_engine_capabilities(runner_dir: &Path, engine: TargetEngine) -> R
         return Ok(());
     }
     Err(anyhow::anyhow!(
-        "{} cannot run Apple GPTK 4 (D3DMetal): this Wine does not implement {}. \
+        "{} cannot run Apple GPTK (D3DMetal): this Wine does not implement {}. \
          Choose a D3DMetal-capable Wine build (`nucleon wine set <name>`) or map the game to a \
          non-D3DMetal backend such as DXMT or KosmicKrisp.",
         runner_dir.display(),
@@ -1131,70 +1131,32 @@ pub fn resolve_gptk_components(custom_path: Option<&Path>) -> Result<(PathBuf, P
 /// Attaches the "not configured" guidance when discovery found nothing to use.
 fn require_configured_gptk(components: Option<(PathBuf, PathBuf)>) -> Result<(PathBuf, PathBuf)> {
     components.context(
-        "Apple Game Porting Toolkit 4.0 path is not configured. The GPTK4 path must be provided by the user: configure it via 'nucleon gptk set-path <DIR>', pass '--gptk-path <DIR>', or set NUCLEON_GPTK_PATH=<DIR>.",
+        "Apple Game Porting Toolkit path is not configured. The GPTK path must be provided by the user: configure it via 'nucleon gptk set-path <DIR>', pass '--gptk-path <DIR>', or set NUCLEON_GPTK_PATH=<DIR>.",
     )
 }
 
 /// Detects the version of Apple Game Porting Toolkit (GPTK) from D3DMetal.framework
-/// plists (version.plist / Info.plist) or directory naming conventions.
+/// plists (version.plist / Info.plist). Missing metadata leaves the version unknown.
 pub fn detect_gptk_version(custom_path: Option<&Path>) -> Option<String> {
-    // 1. Try to inspect D3DMetal.framework plists
-    if let Ok(Some((fw, _))) = find_gptk_components(custom_path) {
-        let candidates = [
-            fw.join("Resources/version.plist"),
-            fw.join("Versions/Current/Resources/version.plist"),
-            fw.join("version.plist"),
-            fw.join("Resources/Info.plist"),
-            fw.join("Versions/Current/Resources/Info.plist"),
-            fw.join("Info.plist"),
-        ];
-
-        for c in &candidates {
-            if c.is_file()
-                && let Ok(plist::Value::Dictionary(dict)) = plist::Value::from_file(c)
-                && let Some(plist::Value::String(ver)) = dict.get("CFBundleShortVersionString")
-            {
-                let trimmed = ver.trim();
-                if !trimmed.is_empty() {
-                    return Some(trimmed.to_string());
-                }
-            }
-        }
-    }
-
-    // 2. Fallback to runner directory name or custom path naming
-    let paths_to_check = [custom_path.map(Path::to_path_buf), find_gptk_runner()];
-
-    for p_opt in paths_to_check.into_iter().flatten() {
-        let p_str = p_opt.to_string_lossy().to_lowercase();
-        if p_str.contains("gptk-4-beta2") || p_str.contains("4.0b2") || p_str.contains("4.0_beta_2")
-        {
-            return Some("4.0b2".to_string());
-        } else if p_str.contains("gptk-4") || p_str.contains("4.0") {
-            return Some("4.0".to_string());
-        } else if p_str.contains("gptk-2") || p_str.contains("2.0") {
-            return Some("2.0".to_string());
-        }
-    }
-
-    None
-}
-
-/// Formats the raw GPTK version into a clean, human-readable display string for Steam dropdowns.
-/// e.g. "4.0b2" -> "4.0 Beta 2", "4.0" -> "4.0", "2.0" -> "2.0"
-pub fn format_gptk_version(raw_ver: &str) -> String {
-    let lower = raw_ver.to_lowercase();
-    if lower == "4.0b2" || lower == "4.0-beta2" || lower == "4.0_beta_2" {
-        "4.0 Beta 2".to_string()
-    } else if lower == "4.0b1" || lower == "4.0-beta1" || lower == "4.0_beta_1" {
-        "4.0 Beta 1".to_string()
-    } else if lower == "2.0b1" || lower == "2.0-beta1" {
-        "2.0 Beta 1".to_string()
-    } else if let Some(stripped) = lower.strip_prefix('v') {
-        stripped.to_string()
-    } else {
-        raw_ver.to_string()
-    }
+    let (framework, _) = find_gptk_components(custom_path).ok()??;
+    [
+        "Resources/version.plist",
+        "Versions/Current/Resources/version.plist",
+        "version.plist",
+        "Resources/Info.plist",
+        "Versions/Current/Resources/Info.plist",
+        "Info.plist",
+    ]
+    .into_iter()
+    .find_map(|relative| {
+        let metadata = plist::Value::from_file(framework.join(relative)).ok()?;
+        let version = metadata
+            .as_dictionary()?
+            .get("CFBundleShortVersionString")?
+            .as_string()?
+            .trim();
+        (!version.is_empty()).then(|| version.to_string())
+    })
 }
 
 /// Formats a raw Vulkan API version (e.g. "1.4.0", "1.4.304", or "1.4")
@@ -1554,7 +1516,7 @@ pub fn assemble_runner(
     paths::ensure_dirs()?;
     let target = paths::current_runner()
         .canonicalize()
-        .unwrap_or_else(|_| paths::runners_dir().join("gptk-4-beta2"));
+        .unwrap_or_else(|_| paths::runners_dir().join("gptk"));
 
     let has_explicit = custom_wine.is_some() || custom_gptk.is_some();
     let assembled = runner_is_assembled(&target);
@@ -1592,7 +1554,7 @@ pub fn assemble_runner(
     let host_abi = gptk_abi::detect_wine_unix_call_abi(&wine_src);
 
     let staging = tempfile::Builder::new()
-        .prefix(".gptk-4-beta2-")
+        .prefix(".gptk-")
         .tempdir_in(paths::runners_dir())?;
     assemble_runner_tree(staging.path(), &wine_src, &d3dm_fw, &d3d_shared, host_abi)?;
     // Reject a source updated while rsync or GPTK staging was in progress.
@@ -2373,17 +2335,6 @@ mod tests {
     }
 
     #[test]
-    fn test_format_gptk_version() {
-        assert_eq!(format_gptk_version("4.0b2"), "4.0 Beta 2");
-        assert_eq!(format_gptk_version("4.0-beta2"), "4.0 Beta 2");
-        assert_eq!(format_gptk_version("4.0b1"), "4.0 Beta 1");
-        assert_eq!(format_gptk_version("2.0b1"), "2.0 Beta 1");
-        assert_eq!(format_gptk_version("v4.0"), "4.0");
-        assert_eq!(format_gptk_version("4.0"), "4.0");
-        assert_eq!(format_gptk_version("2.0"), "2.0");
-    }
-
-    #[test]
     fn test_format_vulkan_version() {
         assert_eq!(format_vulkan_version("1.4.0"), "1.4");
         assert_eq!(format_vulkan_version("1.4.304"), "1.4");
@@ -2394,11 +2345,13 @@ mod tests {
     #[test]
     fn test_detect_gptk_version_from_plist() {
         let dir = tempdir().unwrap();
-        let fw = dir.path().join("D3DMetal.framework");
+        let components = dir.path().join("gptk-99-beta12");
+        let fw = components.join("D3DMetal.framework");
         let res = fw.join("Resources");
         fs::create_dir_all(&res).unwrap();
-        let shared = dir.path().join("libd3dshared.dylib");
+        let shared = components.join("libd3dshared.dylib");
         fs::write(&shared, "fake").unwrap();
+        assert_eq!(detect_gptk_version(Some(&components)), None);
 
         let plist_content = r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -2408,10 +2361,17 @@ mod tests {
     <string>4.0b2</string>
 </dict>
 </plist>"#;
-        fs::write(res.join("version.plist"), plist_content).unwrap();
-
-        let detected = detect_gptk_version(Some(dir.path()));
-        assert_eq!(detected, Some("4.0b2".to_string()));
+        for version in ["4.0b3", "5.1b12", "6.2.1", "7.0", "8.0rc1"] {
+            fs::write(
+                res.join("version.plist"),
+                plist_content.replace("4.0b2", version),
+            )
+            .unwrap();
+            assert_eq!(
+                detect_gptk_version(Some(&components)).as_deref(),
+                Some(version)
+            );
+        }
     }
 
     #[test]
@@ -2539,7 +2499,7 @@ mod tests {
         assert!(
             resolve_err
                 .to_string()
-                .contains("Apple Game Porting Toolkit 4.0 path is not configured"),
+                .contains("Apple Game Porting Toolkit path is not configured"),
             "got: {resolve_err}"
         );
 

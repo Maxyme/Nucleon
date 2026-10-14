@@ -167,7 +167,7 @@ pub fn install_compatibility_tool(runner_bin: &Path) -> Result<()> {
     let wine_root = None;
 
     // 1. Register Automatic tool: Nucleon (Wine + Automatic Graphics Backend)
-    // Auto runner is for Wine only: routes between Wine graphics backends (KosmicKrisp Vulkan vs WineD3D OpenGL)
+    // Automatic routing selects installed Metal or Vulkan backends, with WineD3D as a fallback.
     let auto_tool_dir = paths::steam_compat_tools_dir();
     vdf::write_tool_bundle_with_wine(
         &auto_tool_dir,
@@ -184,10 +184,7 @@ pub fn install_compatibility_tool(runner_bin: &Path) -> Result<()> {
     if runner::find_gptk_runner().is_some() {
         let gptk_ver = runner::detect_gptk_version(None);
         let display_name = if let Some(ref ver) = gptk_ver {
-            format!(
-                "Nucleon (GPTK {} + Apple D3DMetal)",
-                runner::format_gptk_version(ver)
-            )
+            format!("Nucleon (GPTK {ver} + Apple D3DMetal)")
         } else {
             "Nucleon (GPTK + Apple D3DMetal)".to_string()
         };

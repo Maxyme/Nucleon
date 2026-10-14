@@ -76,21 +76,18 @@ pub fn run() -> Result<()> {
     }
     if let Some((comps, origin)) = runner::get_gptk_resolution_info(None) {
         ui::sub_kv(
-            "Apple GPTK 4 (DX11/12):",
+            "Apple GPTK (DX11/12):",
             format!("✓ {} ({origin})", comps.0.display()),
         );
     } else {
         println!(
-            "    ○ Apple GPTK 4 (DX11/12):        ✗ Not found (run 'nucleon gptk set-path <DIR>')"
+            "    ○ Apple GPTK (DX11/12):        ✗ Not found (run 'nucleon gptk set-path <DIR>')"
         );
     }
     if steam::is_gptk_tool_registered() {
         let display_name = steam::registered_gptk_tool_display_name().unwrap_or_else(|| {
             if let Some(v) = runner::detect_gptk_version(None) {
-                format!(
-                    "Nucleon (GPTK {} + Apple D3DMetal)",
-                    runner::format_gptk_version(&v)
-                )
+                format!("Nucleon (GPTK {v} + Apple D3DMetal)")
             } else {
                 "Nucleon (GPTK + Apple D3DMetal)".to_string()
             }

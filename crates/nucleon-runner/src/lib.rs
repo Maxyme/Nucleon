@@ -25,6 +25,25 @@ struct LaunchOverride {
     wine: Option<String>,
 }
 
+/// Explicit backend choices win; inferred GPTK must not discard a per-game Wine selection.
+fn select_automatic_engine(
+    api: &nucleon_core::detector::GraphicsApi,
+    mut available: nucleon_core::detector::AutoBackends,
+    configured: nucleon_core::backend::GraphicsBackend,
+    custom_wine: bool,
+) -> Result<nucleon_core::detector::TargetEngine> {
+    use nucleon_core::backend::GraphicsBackend;
+    use nucleon_core::detector::TargetEngine;
+    available.gptk &= !custom_wine;
+    match configured {
+        GraphicsBackend::Auto => available.select(api),
+        GraphicsBackend::D3DMetal => Ok(TargetEngine::Gptk),
+        GraphicsBackend::Dxmt => Ok(TargetEngine::Dxmt),
+        GraphicsBackend::Dxvk => Ok(TargetEngine::Dxvk),
+        GraphicsBackend::KosmicKrisp => Ok(TargetEngine::KosmicKrisp),
+    }
+}
+
 /// Determines whether to launch the game through the prefix's `steam.exe` client shim or directly.
 ///
 /// Steamworks imports do not determine the launch protocol: 64-bit games such as DiRT Rally 2.0
@@ -393,18 +412,25 @@ pub fn run_with_args(args: &[String]) -> Result<()> {
 
     let (engine, api_desc) = match requested_engine {
         Some(nucleon_core::detector::TargetEngine::Auto) | None => {
-            // Auto runner is for Wine only: automatically selects the optimal Wine graphics backend
-            // (Mesa KosmicKrisp Vulkan for DX11/12/Vulkan/D7VK/OpenGL via Zink vs WineD3D for DX9/10).
             let detection = nucleon_core::detector::detect_target_engine(&target_exe);
-            let wine_engine = detection.wine_engine();
+            let custom_wine = game_profile.wine.is_some()
+                || ["NUCLEON_WINE", "NUCLEON_WINE_PATH", "WINE_PATH"]
+                    .iter()
+                    .any(|key| env::var_os(key).is_some());
+            let wine_engine = select_automatic_engine(
+                &detection.api,
+                nucleon_core::detector::AutoBackends::discover(),
+                nucleon_core::backend::get_active_backend(),
+                custom_wine,
+            )?;
             log_runner(&format!(
-                "Wine Auto Runner: detected graphics API {:?} (found: {:?}) -> routing within Wine to {:?}",
+                "Automatic Runner: detected graphics API {:?} (found: {:?}) -> selecting {:?}",
                 detection.api, detection.detected_dll, wine_engine
             ));
             (
                 wine_engine,
                 format!(
-                    "Wine Auto Detection: {:?} (DLL: {:?}) -> {}",
+                    "Automatic Detection: {:?} (DLL: {:?}) -> {}",
                     detection.api,
                     detection.detected_dll,
                     wine_engine.display_name()
@@ -816,6 +842,55 @@ pub fn run_with_args(args: &[String]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_automatic_engine_preserves_backend_and_wine_overrides() {
+        use nucleon_core::backend::GraphicsBackend;
+        use nucleon_core::detector::{AutoBackends, GraphicsApi, TargetEngine};
+        let available = AutoBackends {
+            gptk: true,
+            vkd3d: true,
+            vulkan: true,
+            ..AutoBackends::default()
+        };
+        assert_eq!(
+            select_automatic_engine(
+                &GraphicsApi::DirectX12,
+                available,
+                GraphicsBackend::Auto,
+                false
+            )
+            .unwrap(),
+            TargetEngine::Gptk
+        );
+        assert_eq!(
+            select_automatic_engine(
+                &GraphicsApi::DirectX12,
+                available,
+                GraphicsBackend::Auto,
+                true
+            )
+            .unwrap(),
+            TargetEngine::Vkd3d
+        );
+        for (backend, engine) in [
+            (GraphicsBackend::D3DMetal, TargetEngine::Gptk),
+            (GraphicsBackend::Dxmt, TargetEngine::Dxmt),
+            (GraphicsBackend::Dxvk, TargetEngine::Dxvk),
+            (GraphicsBackend::KosmicKrisp, TargetEngine::KosmicKrisp),
+        ] {
+            assert_eq!(
+                select_automatic_engine(
+                    &GraphicsApi::Unknown,
+                    AutoBackends::default(),
+                    backend,
+                    true
+                )
+                .unwrap(),
+                engine
+            );
+        }
+    }
 
     #[test]
     fn test_is_wine_game_process_line_ignores_self_and_nucleon() {

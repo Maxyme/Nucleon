@@ -12,7 +12,7 @@ use std::path::PathBuf;
 #[derive(Parser)]
 #[command(name = "nucleon")]
 #[command(
-    about = "Nucleon: High-performance standalone Windows game translation on macOS using Wine & Apple GPTK 4"
+    about = "Nucleon: High-performance standalone Windows game translation on macOS using Wine & Apple GPTK"
 )]
 #[command(version)]
 struct Cli {
@@ -96,7 +96,7 @@ enum Commands {
         #[command(subcommand)]
         action: BackendsAction,
     },
-    /// Manage Apple Game Porting Toolkit 4 (runner & D3DMetal backend)
+    /// Manage Apple Game Porting Toolkit (runner & D3DMetal backend)
     Gptk {
         #[command(subcommand)]
         action: GptkAction,

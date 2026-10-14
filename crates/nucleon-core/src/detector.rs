@@ -3,7 +3,7 @@
 use crate::d7vk;
 use crate::dxmt;
 use crate::dxvk;
-use crate::runner;
+use crate::{runner, vkd3d, wine};
 use object::Object;
 use std::fs;
 use std::path::Path;
@@ -102,41 +102,61 @@ pub struct GraphicsApiInfo {
     pub detected_dll: Option<String>,
 }
 
-impl GraphicsApiInfo {
-    /// DirectX 12 and Vulkan route to KosmicKrisp (Vulkan 1.4);
-    /// DirectDraw/DX1–7 routes to KosmicKrisp if D7VK is installed;
-    /// DirectX 11 routes to DXMT (if installed) or DXVK (if installed), otherwise WineStaging;
-    /// OpenGL, DirectX 10, DirectX 9, and legacy titles default to WineStaging (WineD3D / native OpenGL).
-    pub fn wine_engine(&self) -> TargetEngine {
-        match self.api {
-            GraphicsApi::DirectX12 | GraphicsApi::Vulkan => {
-                if runner::is_kosmickrisp_installed() {
-                    TargetEngine::KosmicKrisp
-                } else {
-                    TargetEngine::WineStaging
-                }
-            }
-            GraphicsApi::DirectX7OrOlder => {
-                if d7vk::is_d7vk_installed() && runner::is_kosmickrisp_installed() {
-                    TargetEngine::KosmicKrisp
-                } else {
-                    TargetEngine::WineStaging
-                }
-            }
-            GraphicsApi::DirectX11 => {
-                if dxmt::is_dxmt_installed() {
-                    TargetEngine::Dxmt
-                } else if dxvk::is_dxvk_installed() && runner::is_kosmickrisp_installed() {
-                    TargetEngine::KosmicKrisp
-                } else {
-                    TargetEngine::WineStaging
-                }
-            }
-            GraphicsApi::OpenGL
-            | GraphicsApi::DirectX10
-            | GraphicsApi::DirectX9OrOlder
-            | GraphicsApi::Unknown => TargetEngine::WineStaging,
+/// Installed components used by automatic routing. Separate discovery from selection so the
+/// fallback policy can be tested without consulting the user's machine.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct AutoBackends {
+    pub gptk: bool,
+    pub dxmt: bool,
+    pub dxvk: bool,
+    pub vkd3d: bool,
+    pub vulkan: bool,
+    pub d7vk: bool,
+}
+
+impl AutoBackends {
+    pub fn discover() -> Self {
+        let wine_root = wine::get_active_wine_runtime()
+            .map(|runtime| runtime.root)
+            .or_else(runner::find_gptk_runner);
+        Self {
+            gptk: runner::find_gptk_components(None).ok().flatten().is_some()
+                && wine_root.is_some_and(|root| runner::missing_d3dmetal_exports(&root).is_empty()),
+            dxmt: dxmt::is_dxmt_installed(),
+            dxvk: dxvk::is_dxvk_installed(),
+            vkd3d: vkd3d::is_vkd3d_proton_installed(),
+            vulkan: runner::is_kosmickrisp_installed(),
+            d7vk: d7vk::is_d7vk_installed(),
         }
+    }
+
+    /// A preference policy, not a performance prediction. Every Vulkan translator also requires
+    /// the Vulkan driver; GPTK and DXMT use Metal directly.
+    pub fn select(&self, api: &GraphicsApi) -> anyhow::Result<TargetEngine> {
+        Ok(match api {
+            GraphicsApi::DirectX12 if self.gptk => TargetEngine::Gptk,
+            GraphicsApi::DirectX12 if self.vkd3d && self.vulkan => TargetEngine::Vkd3d,
+            GraphicsApi::DirectX12 => anyhow::bail!(
+                "No usable DirectX 12 backend found. Configure GPTK with a D3DMetal-capable Wine, \
+                 or install VKD3D-Proton and KosmicKrisp; WineD3D/OpenGL cannot serve this API."
+            ),
+            GraphicsApi::DirectX11 if self.dxmt => TargetEngine::Dxmt,
+            GraphicsApi::DirectX11 if self.gptk => TargetEngine::Gptk,
+            GraphicsApi::DirectX11 | GraphicsApi::DirectX10 | GraphicsApi::DirectX9OrOlder
+                if self.dxvk && self.vulkan =>
+            {
+                TargetEngine::Dxvk
+            }
+            GraphicsApi::DirectX7OrOlder if self.d7vk && self.vulkan => TargetEngine::KosmicKrisp,
+            GraphicsApi::Vulkan if self.vulkan => TargetEngine::KosmicKrisp,
+            _ => TargetEngine::WineStaging,
+        })
+    }
+}
+
+impl GraphicsApiInfo {
+    pub fn auto_engine(&self) -> anyhow::Result<TargetEngine> {
+        AutoBackends::discover().select(&self.api)
     }
 }
 
@@ -539,34 +559,88 @@ mod tests {
     }
 
     #[test]
-    fn test_wine_engine_routing() {
-        let info_dx11 = GraphicsApiInfo {
-            api: GraphicsApi::DirectX11,
-            engine: TargetEngine::Gptk,
-            detected_dll: Some("d3d11.dll".into()),
+    fn test_auto_backend_preferences_and_fallbacks() {
+        let all = AutoBackends {
+            gptk: true,
+            dxmt: true,
+            dxvk: true,
+            vkd3d: true,
+            vulkan: true,
+            d7vk: true,
         };
-        // Auto runner is for Wine only: DX11 routes to DXMT if installed, KosmicKrisp if DXVK+KosmicKrisp, or WineStaging
-        let wine_eng = info_dx11.wine_engine();
-        assert!(
-            wine_eng == TargetEngine::Dxmt
-                || wine_eng == TargetEngine::KosmicKrisp
-                || wine_eng == TargetEngine::WineStaging
+        for (api, expected) in [
+            (GraphicsApi::DirectX12, TargetEngine::Gptk),
+            (GraphicsApi::DirectX11, TargetEngine::Dxmt),
+            (GraphicsApi::DirectX10, TargetEngine::Dxvk),
+            (GraphicsApi::DirectX9OrOlder, TargetEngine::Dxvk),
+            (GraphicsApi::DirectX7OrOlder, TargetEngine::KosmicKrisp),
+            (GraphicsApi::Vulkan, TargetEngine::KosmicKrisp),
+            (GraphicsApi::OpenGL, TargetEngine::WineStaging),
+            (GraphicsApi::Unknown, TargetEngine::WineStaging),
+        ] {
+            assert_eq!(all.select(&api).unwrap(), expected);
+            let absent = AutoBackends::default().select(&api);
+            if api == GraphicsApi::DirectX12 {
+                assert!(absent.is_err());
+            } else {
+                assert_eq!(absent.unwrap(), TargetEngine::WineStaging);
+            }
+        }
+        let no_gptk = AutoBackends { gptk: false, ..all };
+        assert_eq!(
+            no_gptk.select(&GraphicsApi::DirectX12).unwrap(),
+            TargetEngine::Vkd3d
         );
-
-        let info_dx9 = GraphicsApiInfo {
-            api: GraphicsApi::DirectX9OrOlder,
-            engine: TargetEngine::WineStaging,
-            detected_dll: Some("d3d9.dll".into()),
+        for missing in [
+            AutoBackends {
+                vkd3d: false,
+                ..no_gptk
+            },
+            AutoBackends {
+                vulkan: false,
+                ..no_gptk
+            },
+        ] {
+            assert!(missing.select(&GraphicsApi::DirectX12).is_err());
+        }
+        let no_dxmt = AutoBackends { dxmt: false, ..all };
+        assert_eq!(
+            no_dxmt.select(&GraphicsApi::DirectX11).unwrap(),
+            TargetEngine::Gptk
+        );
+        let vulkan_only = AutoBackends {
+            gptk: false,
+            ..no_dxmt
         };
-        assert_eq!(info_dx9.wine_engine(), TargetEngine::WineStaging);
-
-        let info_gl = GraphicsApiInfo {
-            api: GraphicsApi::OpenGL,
-            engine: TargetEngine::WineStaging,
-            detected_dll: Some("opengl32.dll".into()),
-        };
-        let wine_eng_gl = info_gl.wine_engine();
-        assert_eq!(wine_eng_gl, TargetEngine::WineStaging);
+        assert_eq!(
+            vulkan_only.select(&GraphicsApi::DirectX11).unwrap(),
+            TargetEngine::Dxvk
+        );
+        for available in [
+            AutoBackends {
+                dxvk: false,
+                ..vulkan_only
+            },
+            AutoBackends {
+                vulkan: false,
+                ..vulkan_only
+            },
+        ] {
+            assert_eq!(
+                available.select(&GraphicsApi::DirectX11).unwrap(),
+                TargetEngine::WineStaging
+            );
+            assert_eq!(
+                available.select(&GraphicsApi::DirectX9OrOlder).unwrap(),
+                TargetEngine::WineStaging
+            );
+        }
+        assert_eq!(
+            AutoBackends { d7vk: false, ..all }
+                .select(&GraphicsApi::DirectX7OrOlder)
+                .unwrap(),
+            TargetEngine::WineStaging
+        );
     }
 
     #[test]

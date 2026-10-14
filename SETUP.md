@@ -113,6 +113,15 @@ These are alternatives, not a required sequence. Automatically fetched upstream
 releases may differ from the macOS builds used in confirmed profiles. Vulkan
 drivers must match Wine's host architecture and the backend's feature needs.
 
+The Wine / Automatic Steam option detects the game's graphics API and checks
+installed backends. Its default preference is GPTK then VKD3D-Proton for DX12;
+DXMT, GPTK, then DXVK for DX11; and DXVK for DX9/10. Vulkan paths require
+KosmicKrisp. Older DirectDraw games can use D7VK with KosmicKrisp; OpenGL and
+unknown APIs retain Wine's defaults. Missing DX12 backends stop with setup
+instructions. These preferences are not benchmark results. Explicit engine
+and backend choices take precedence; a per-game Wine choice keeps automatic
+routing on that runtime.
+
 ## Steam bridge and integration
 
 You need Windows client libraries matching installed Steam and the bridge/helper
