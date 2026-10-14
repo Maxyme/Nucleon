@@ -486,7 +486,9 @@ pub fn run_with_args(args: &[String]) -> Result<()> {
                         nucleon_core::detector::AutoBackends::discover_for(
                             &root,
                             &detection.api,
-                            nucleon_core::detector::is_pe_file_64_bit(&target_exe),
+                            nucleon_core::detector::is_pe_file_64_bit(
+                                detection.binary.as_deref().unwrap_or(&target_exe),
+                            ),
                             icd,
                             dxvk,
                         )
@@ -497,8 +499,11 @@ pub fn run_with_args(args: &[String]) -> Result<()> {
                 custom_wine,
             )?;
             log_runner(&format!(
-                "Automatic Runner: detected graphics API {:?} (found: {:?}) -> selecting {:?}",
-                detection.api, detection.detected_dll, wine_engine
+                "Automatic Runner: detected graphics API {:?} (found: {:?}, evidence: {}) -> selecting {:?}",
+                detection.api,
+                detection.detected_dll,
+                detection.evidence.description(),
+                wine_engine
             ));
             (
                 wine_engine,

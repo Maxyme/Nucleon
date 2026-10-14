@@ -44,9 +44,14 @@ overrides. Fields include `engine`, `wine`, `dxvk_path`, `vulkan_icd`,
 `~/Library/Application Support/nucleon`; `NUCLEON_SUPPORT_DIR` isolates an
 experiment's profiles, bridge files, and logs.
 
-Keep exact Wine/backend/driver recipes pinned. Import-table detection is a hint,
-not proof that a backend supports a game. Dynamic loads and feature requirements
-can differ. Automatic routing prefers GPTK for DX12 and DXMT for DX11, then uses installed
+Keep exact Wine/backend/driver recipes pinned. Graphics detection reads ordinary
+and delay-load PE import descriptors, including ordinal-only imports. Explicit
+Direct3D libraries take precedence over shared DXGI; DXGI alone leaves the version
+unknown. When no concrete graphics import is found, complete DLL names embedded
+in the image can provide a labeled heuristic for packed games or dynamic loading.
+The CLI and runner log identify the evidence source. Directory scans stay inside
+the requested game and use a stable order. Detection remains a hint: dynamic loads
+and feature requirements can differ. Automatic routing prefers GPTK for DX12 and DXMT for DX11, then uses installed
 Vulkan translation layers. Candidates must contain readable PE DLLs for the game's
 architecture. DXMT builtins must match the selected Wine; its Metal module and the
 Vulkan ICD library must match the Wine host architecture. Vulkan manifests must

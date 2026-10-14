@@ -6,7 +6,7 @@ use crate::dxvk;
 use crate::{runner, vkd3d, wine};
 use object::Object;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Fast, zero-allocation ASCII case-insensitive substring search over raw binary slices.
 fn bytes_contains_ascii_case_insensitive(data: &[u8], needle: &[u8]) -> bool {
@@ -95,11 +95,32 @@ pub enum GraphicsApi {
     Unknown,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DetectionEvidence {
+    Imports,
+    DelayImports,
+    DllNameHeuristic,
+    None,
+}
+
+impl DetectionEvidence {
+    pub fn description(self) -> &'static str {
+        match self {
+            Self::Imports => "PE imports",
+            Self::DelayImports => "PE delay-load imports",
+            Self::DllNameHeuristic => "DLL-name heuristic",
+            Self::None => "No graphics dependency found",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct GraphicsApiInfo {
     pub api: GraphicsApi,
     pub engine: TargetEngine,
     pub detected_dll: Option<String>,
+    pub evidence: DetectionEvidence,
+    pub binary: Option<PathBuf>,
 }
 
 /// Installed components used by automatic routing. Separate discovery from selection so the
@@ -116,11 +137,15 @@ pub struct AutoBackends {
 
 impl AutoBackends {
     pub fn discover() -> Self {
+        Self::discover_for_api(&GraphicsApi::DirectX11, true)
+    }
+
+    fn discover_for_api(api: &GraphicsApi, is64: bool) -> Self {
         let wine_root = wine::get_active_wine_runtime()
             .map(|runtime| runtime.root)
             .or_else(runner::find_gptk_runner);
         wine_root
-            .map(|root| Self::discover_for(&root, &GraphicsApi::DirectX11, true, None, None))
+            .map(|root| Self::discover_for(&root, api, is64, None, None))
             .unwrap_or_default()
     }
 
@@ -222,17 +247,27 @@ impl AutoBackends {
 
 impl GraphicsApiInfo {
     pub fn auto_engine(&self) -> anyhow::Result<TargetEngine> {
-        AutoBackends::discover().select(&self.api)
+        let is64 = self
+            .binary
+            .as_deref()
+            .map(is_pe_file_64_bit)
+            .unwrap_or(true);
+        AutoBackends::discover_for_api(&self.api, is64).select(&self.api)
     }
 }
 
 /// Inspects a PE binary (or directory) and detects the Graphics API and recommended engine.
 pub fn detect_target_engine(exe_path: &Path) -> GraphicsApiInfo {
-    // 1. Try to inspect the primary executable
-    if let Ok(info) = inspect_pe_file(exe_path)
+    // Inspect the requested directory itself, never neighboring game directories.
+    if exe_path.is_dir() {
+        return scan_directory_for_graphics_api(exe_path, 3)
+            .unwrap_or_else(|| classify_libraries(&[]));
+    }
+    let primary = inspect_pe_file(exe_path).ok();
+    if let Some(info) = &primary
         && info.api != GraphicsApi::Unknown
     {
-        return info;
+        return info.clone();
     }
 
     // 2. If unknown (e.g. wrapper launcher), scan neighboring and subdirectories for game binaries
@@ -242,141 +277,193 @@ pub fn detect_target_engine(exe_path: &Path) -> GraphicsApiInfo {
         return info;
     }
 
-    // Default to GPTK for modern compatibility if ambiguous
-    GraphicsApiInfo {
-        api: GraphicsApi::Unknown,
-        engine: TargetEngine::Gptk,
-        detected_dll: None,
-    }
+    primary.unwrap_or_else(|| classify_libraries(&[]))
 }
 
 pub fn inspect_pe_file(path: &Path) -> Result<GraphicsApiInfo, anyhow::Error> {
     // Own the bytes so concurrent file replacement/truncation cannot invalidate
     // a borrowed mapping while object parsing is in progress.
     let data = fs::read(path)?;
-    inspect_pe_bytes(&data)
+    let mut info = inspect_pe_bytes(&data)?;
+    info.binary = Some(path.to_path_buf());
+    Ok(info)
 }
 
-pub fn inspect_pe_bytes(data: &[u8]) -> Result<GraphicsApiInfo, anyhow::Error> {
-    let mut imported_dlls = Vec::new();
+const GRAPHICS_DLLS: &[(&str, GraphicsApi, TargetEngine)] = &[
+    ("d3d12.dll", GraphicsApi::DirectX12, TargetEngine::Gptk),
+    ("d3d12core.dll", GraphicsApi::DirectX12, TargetEngine::Gptk),
+    ("d3d11.dll", GraphicsApi::DirectX11, TargetEngine::Gptk),
+    (
+        "d3d10.dll",
+        GraphicsApi::DirectX10,
+        TargetEngine::WineStaging,
+    ),
+    (
+        "d3d10_1.dll",
+        GraphicsApi::DirectX10,
+        TargetEngine::WineStaging,
+    ),
+    (
+        "d3d10core.dll",
+        GraphicsApi::DirectX10,
+        TargetEngine::WineStaging,
+    ),
+    (
+        "d3d9.dll",
+        GraphicsApi::DirectX9OrOlder,
+        TargetEngine::WineStaging,
+    ),
+    (
+        "d3d8.dll",
+        GraphicsApi::DirectX9OrOlder,
+        TargetEngine::WineStaging,
+    ),
+    (
+        "ddraw.dll",
+        GraphicsApi::DirectX7OrOlder,
+        TargetEngine::WineStaging,
+    ),
+    (
+        "vulkan-1.dll",
+        GraphicsApi::Vulkan,
+        TargetEngine::KosmicKrisp,
+    ),
+    (
+        "opengl32.dll",
+        GraphicsApi::OpenGL,
+        TargetEngine::WineStaging,
+    ),
+    // DXGI is shared by DX10, DX11, DX12, and renderer wrappers. It is not a version witness.
+    ("dxgi.dll", GraphicsApi::Unknown, TargetEngine::WineStaging),
+];
 
-    if let Ok(file) = object::File::parse(data)
-        && let Ok(imports) = file.imports()
-    {
-        for import in imports {
-            let lib = String::from_utf8_lossy(import.library()).to_lowercase();
-            imported_dlls.push(lib);
+fn classify_libraries(libraries: &[(String, DetectionEvidence)]) -> GraphicsApiInfo {
+    for (dll, api, engine) in GRAPHICS_DLLS {
+        if let Some((_, evidence)) = libraries.iter().find(|(library, _)| library == dll) {
+            return GraphicsApiInfo {
+                api: api.clone(),
+                engine: *engine,
+                detected_dll: Some((*dll).into()),
+                evidence: *evidence,
+                binary: None,
+            };
         }
     }
+    GraphicsApiInfo {
+        api: GraphicsApi::Unknown,
+        engine: TargetEngine::WineStaging,
+        detected_dll: None,
+        evidence: DetectionEvidence::None,
+        binary: None,
+    }
+}
 
-    // Fallback: If import table parsing was empty or truncated, scan ASCII / UTF-8 byte sequences
-    if imported_dlls.is_empty() {
-        for dll in &[
-            "d3d12.dll",
-            "d3d11.dll",
-            "dxgi.dll",
-            "d3d10.dll",
-            "d3d10_1.dll",
-            "d3d10core.dll",
-            "d3d9.dll",
-            "d3d8.dll",
-            "ddraw.dll",
-            "vulkan-1.dll",
-            "opengl32.dll",
-        ] {
-            if bytes_contains_ascii_case_insensitive(data, dll.as_bytes()) {
-                imported_dlls.push(dll.to_string());
+fn pe_libraries<'data, Pe: object::read::pe::ImageNtHeaders>(
+    file: &object::read::pe::PeFile<'data, Pe>,
+) -> Vec<(String, DetectionEvidence)> {
+    use object::{endian::LittleEndian, read::pe::ImageOptionalHeader};
+    let mut libraries = Vec::new();
+    let mut add = |name: &[u8], evidence| {
+        let name = String::from_utf8_lossy(name);
+        // Import names can contain a directory. Compare complete basenames, not substrings.
+        let name = name
+            .rsplit(['/', '\\'])
+            .next()
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        libraries.push((name, evidence));
+    };
+    // Read DLL descriptors directly: libraries imported only by ordinal still count.
+    if let Ok(Some(table)) = file.import_table()
+        && let Ok(mut descriptors) = table.descriptors()
+    {
+        while let Ok(Some(descriptor)) = descriptors.next() {
+            if let Ok(name) = table.name(descriptor.name.get(LittleEndian)) {
+                add(name, DetectionEvidence::Imports);
             }
         }
     }
-
-    // Evaluate priorities:
-    // 1. DirectX 12 (highest priority modern API)
-    if imported_dlls.iter().any(|d| d.contains("d3d12")) {
-        return Ok(GraphicsApiInfo {
-            api: GraphicsApi::DirectX12,
-            engine: TargetEngine::Gptk,
-            detected_dll: Some("d3d12.dll".into()),
-        });
-    }
-
-    // 2. DirectX 11
-    if imported_dlls.iter().any(|d| d.contains("d3d11")) {
-        return Ok(GraphicsApiInfo {
-            api: GraphicsApi::DirectX11,
-            engine: TargetEngine::Gptk,
-            detected_dll: Some("d3d11.dll".into()),
-        });
-    }
-
-    // 3. DXGI without explicit d3d12/d3d11 is almost always DX11/12
-    if imported_dlls.iter().any(|d| d.contains("dxgi")) {
-        return Ok(GraphicsApiInfo {
-            api: GraphicsApi::DirectX11,
-            engine: TargetEngine::Gptk,
-            detected_dll: Some("dxgi.dll".into()),
-        });
-    }
-
-    // 4. DirectX 10
-    if imported_dlls.iter().any(|d| d.contains("d3d10")) {
-        return Ok(GraphicsApiInfo {
-            api: GraphicsApi::DirectX10,
-            engine: TargetEngine::WineStaging,
-            detected_dll: Some("d3d10.dll".into()),
-        });
-    }
-
-    // 5. DirectX 9 / 8
-    if let Some(dll) = imported_dlls
-        .iter()
-        .find(|d| d.contains("d3d9") || d.contains("d3d8"))
+    if let Ok(Some(table)) = file
+        .data_directories()
+        .delay_load_import_table(file.data(), &file.section_table())
+        && let Ok(mut descriptors) = table.descriptors()
     {
-        return Ok(GraphicsApiInfo {
-            api: GraphicsApi::DirectX9OrOlder,
-            engine: TargetEngine::WineStaging,
-            detected_dll: Some(dll.clone()),
-        });
+        while let Ok(Some(descriptor)) = descriptors.next() {
+            // Bit 0 selects RVAs; older descriptors store absolute VAs.
+            // https://learn.microsoft.com/en-us/windows/win32/debug/pe-format#delay-load-import-tables-image-only
+            let address = descriptor.dll_name_rva.get(LittleEndian);
+            let address = match descriptor.attributes.get(LittleEndian) {
+                1 => Some(address),
+                0 => u64::from(address)
+                    .checked_sub(file.nt_headers().optional_header().image_base())
+                    .and_then(|rva| u32::try_from(rva).ok()),
+                _ => None,
+            };
+            if let Some(address) = address
+                && let Ok(name) = table.name(address)
+            {
+                add(name, DetectionEvidence::DelayImports);
+            }
+        }
     }
+    libraries
+}
 
-    // 6. DirectDraw / DirectX 1-7 (ddraw.dll)
-    // Routes to KosmicKrisp if D7VK is installed, otherwise falls back to WineStaging (WineD3D).
-    if let Some(dll) = imported_dlls.iter().find(|d| d.contains("ddraw")) {
-        let engine = if d7vk::is_d7vk_installed() {
-            TargetEngine::KosmicKrisp
-        } else {
-            TargetEngine::WineStaging
+fn contains_dll_name(data: &[u8], dll: &str) -> bool {
+    let needle = dll.as_bytes();
+    if data.len() < needle.len() {
+        return false;
+    }
+    let filename_char =
+        |byte: u8| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.');
+    let mut cursor = 0;
+    let last = data.len() - needle.len();
+    while cursor <= last {
+        let Some(offset) = memchr::memchr2(
+            needle[0].to_ascii_lowercase(),
+            needle[0].to_ascii_uppercase(),
+            &data[cursor..=last],
+        ) else {
+            break;
         };
-        return Ok(GraphicsApiInfo {
-            api: GraphicsApi::DirectX7OrOlder,
-            engine,
-            detected_dll: Some(dll.clone()),
-        });
+        let index = cursor + offset;
+        if data[index..index + needle.len()].eq_ignore_ascii_case(needle)
+            && (index == 0 || !filename_char(data[index - 1]))
+            && (index + needle.len() == data.len() || !filename_char(data[index + needle.len()]))
+        {
+            return true;
+        }
+        cursor = index + 1;
+    }
+    false
+}
+
+pub fn inspect_pe_bytes(data: &[u8]) -> Result<GraphicsApiInfo, anyhow::Error> {
+    let libraries = match object::File::parse(data) {
+        Ok(object::File::Pe32(file)) => pe_libraries(&file),
+        Ok(object::File::Pe64(file)) => pe_libraries(&file),
+        _ => Vec::new(),
+    };
+    let parsed = classify_libraries(&libraries);
+    if parsed.api != GraphicsApi::Unknown {
+        return Ok(parsed);
     }
 
-    // 6. Vulkan -> Route to Mesa KosmicKrisp (Vulkan 1.4 conformant driver on Metal 4)
-    if imported_dlls.iter().any(|d| d.contains("vulkan-1")) {
-        return Ok(GraphicsApiInfo {
-            api: GraphicsApi::Vulkan,
-            engine: TargetEngine::KosmicKrisp,
-            detected_dll: Some("vulkan-1.dll".into()),
-        });
+    // Packed games and dynamically loaded renderers may have only non-graphics imports.
+    // Report this evidence as a heuristic; it never overrides an explicit graphics import.
+    let hints = GRAPHICS_DLLS
+        .iter()
+        .filter(|(dll, _, _)| contains_dll_name(data, dll))
+        .map(|(dll, _, _)| ((*dll).to_string(), DetectionEvidence::DllNameHeuristic))
+        .collect::<Vec<_>>();
+    let heuristic = classify_libraries(&hints);
+    if heuristic.api != GraphicsApi::Unknown {
+        return Ok(heuristic);
     }
-
-    // 7. OpenGL
-    if imported_dlls.iter().any(|d| d.contains("opengl32")) {
-        return Ok(GraphicsApiInfo {
-            api: GraphicsApi::OpenGL,
-            engine: TargetEngine::WineStaging,
-            detected_dll: Some("opengl32.dll".into()),
-        });
+    if parsed.detected_dll.is_some() {
+        return Ok(parsed);
     }
-
-    Ok(GraphicsApiInfo {
-        api: GraphicsApi::Unknown,
-        engine: TargetEngine::Gptk,
-        detected_dll: None,
-    })
+    Ok(heuristic)
 }
 
 fn scan_directory_for_graphics_api(dir: &Path, depth: u32) -> Option<GraphicsApiInfo> {
@@ -385,8 +472,12 @@ fn scan_directory_for_graphics_api(dir: &Path, depth: u32) -> Option<GraphicsApi
     }
 
     if let Ok(entries) = fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let p = entry.path();
+        let mut candidates = entries
+            .flatten()
+            .map(|entry| entry.path())
+            .collect::<Vec<_>>();
+        candidates.sort_by_key(|path| (path.is_dir(), path.clone()));
+        for p in candidates {
             if p.is_file() {
                 if let Some(ext) = p.extension().and_then(|e| e.to_str())
                     && ext.eq_ignore_ascii_case("exe")
@@ -505,14 +596,211 @@ pub fn file_uses_steamworks(path: &Path) -> bool {
 mod tests {
     use super::*;
 
+    /// A PE32/PE32+ fixture with actual import descriptors and ordinal thunks.
+    fn pe_with_libraries(is64: bool, imports: &[&str], delays: &[&str]) -> Vec<u8> {
+        let mut data = vec![0u8; 1536];
+        let put16 = |data: &mut [u8], offset: usize, value: u16| {
+            data[offset..offset + 2].copy_from_slice(&value.to_le_bytes())
+        };
+        let put32 = |data: &mut [u8], offset: usize, value: u32| {
+            data[offset..offset + 4].copy_from_slice(&value.to_le_bytes())
+        };
+        data[..2].copy_from_slice(b"MZ");
+        put32(&mut data, 60, 128);
+        data[128..132].copy_from_slice(b"PE\0\0");
+        put16(&mut data, 132, if is64 { 0x8664 } else { 0x14c });
+        put16(&mut data, 134, 1);
+        let opt_size = if is64 { 240 } else { 224 };
+        put16(&mut data, 148, opt_size as u16);
+        let opt = 152;
+        put16(&mut data, opt, if is64 { 0x20b } else { 0x10b });
+        put32(&mut data, opt + 60, 512);
+        let directories = opt + if is64 { 112 } else { 96 };
+        put32(&mut data, directories - 4, 16);
+        let section = opt + opt_size;
+        data[section..section + 6].copy_from_slice(b".idata");
+        for (offset, value) in [
+            (8, 1024),
+            (12, 4096),
+            (16, 1024),
+            (20, 512),
+            (36, 0x40000040),
+        ] {
+            put32(&mut data, section + offset, value);
+        }
+        if !imports.is_empty() {
+            put32(&mut data, directories + 8, 4096);
+            put32(
+                &mut data,
+                directories + 12,
+                ((imports.len() + 1) * 20) as u32,
+            );
+        }
+        if !delays.is_empty() {
+            put32(&mut data, directories + 13 * 8, 4096 + 256);
+            put32(
+                &mut data,
+                directories + 13 * 8 + 4,
+                ((delays.len() + 1) * 32) as u32,
+            );
+        }
+        for (index, name) in imports.iter().chain(delays).enumerate() {
+            let name_offset = 512 + 512 + index * 64;
+            data[name_offset..name_offset + name.len()].copy_from_slice(name.as_bytes());
+            let name_rva = (name_offset - 512 + 4096) as u32;
+            let thunk = 512 + 896 + index * 16;
+            let thunk_rva = (thunk - 512 + 4096) as u32;
+            if is64 {
+                data[thunk..thunk + 8].copy_from_slice(&0x8000000000000001u64.to_le_bytes());
+            } else {
+                put32(&mut data, thunk, 0x80000001);
+            }
+            if index < imports.len() {
+                let descriptor = 512 + index * 20;
+                put32(&mut data, descriptor, thunk_rva);
+                put32(&mut data, descriptor + 12, name_rva);
+                put32(&mut data, descriptor + 16, thunk_rva);
+            } else {
+                let descriptor = 512 + 256 + (index - imports.len()) * 32;
+                put32(&mut data, descriptor, 1);
+                put32(&mut data, descriptor + 4, name_rva);
+                put32(&mut data, descriptor + 12, thunk_rva);
+                put32(&mut data, descriptor + 16, thunk_rva);
+            }
+        }
+        data
+    }
+
+    #[test]
+    fn explicit_dx10_imports_take_priority_over_shared_dxgi() {
+        for is64 in [false, true] {
+            for dll in ["d3d10.dll", "d3d10_1.dll", "d3d10core.dll"] {
+                for delay in [false, true] {
+                    let data = if delay {
+                        pe_with_libraries(is64, &["dxgi.dll"], &[dll])
+                    } else {
+                        pe_with_libraries(is64, &["dxgi.dll", dll], &[])
+                    };
+                    let info = inspect_pe_bytes(&data).unwrap();
+                    assert_eq!(info.api, GraphicsApi::DirectX10);
+                    assert_eq!(info.detected_dll.as_deref(), Some(dll));
+                    assert_eq!(
+                        info.evidence,
+                        if delay {
+                            DetectionEvidence::DelayImports
+                        } else {
+                            DetectionEvidence::Imports
+                        }
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn dxgi_alone_is_ambiguous_and_never_claims_dx11() {
+        for data in [
+            pe_with_libraries(true, &["dxgi.dll"], &[]),
+            b"MZ\0dxgi.dll\0".to_vec(),
+        ] {
+            let info = inspect_pe_bytes(&data).unwrap();
+            assert_eq!(info.api, GraphicsApi::Unknown);
+            assert_eq!(info.detected_dll.as_deref(), Some("dxgi.dll"));
+        }
+    }
+
+    #[test]
+    fn legacy_delay_descriptors_convert_virtual_addresses_to_rvas() {
+        let mut data = pe_with_libraries(false, &["kernel32.dll"], &["d3d10_1.dll"]);
+        let base = 0x400000u32;
+        data[152 + 28..152 + 32].copy_from_slice(&base.to_le_bytes());
+        let descriptor = 512 + 256;
+        data[descriptor..descriptor + 4].copy_from_slice(&0u32.to_le_bytes());
+        let name = u32::from_le_bytes(data[descriptor + 4..descriptor + 8].try_into().unwrap());
+        data[descriptor + 4..descriptor + 8].copy_from_slice(&(base + name).to_le_bytes());
+        let info = inspect_pe_bytes(&data).unwrap();
+        assert_eq!(info.api, GraphicsApi::DirectX10);
+        assert_eq!(info.evidence, DetectionEvidence::DelayImports);
+    }
+
+    #[test]
+    fn regular_and_delay_imports_use_the_highest_explicit_directx_version() {
+        for is64 in [false, true] {
+            let data = pe_with_libraries(is64, &["d3d10.dll", "D3D11.DLL"], &["d3d12.dll"]);
+            let info = inspect_pe_bytes(&data).unwrap();
+            assert_eq!(info.api, GraphicsApi::DirectX12);
+            assert_eq!(info.evidence, DetectionEvidence::DelayImports);
+            let data = pe_with_libraries(is64, &["d3d10.dll"], &["D3D11.DLL"]);
+            assert_eq!(inspect_pe_bytes(&data).unwrap().api, GraphicsApi::DirectX11);
+        }
+    }
+
+    #[test]
+    fn heuristics_do_not_override_parsed_graphics_or_match_similar_filenames() {
+        let mut data = pe_with_libraries(true, &["d3d10_1.dll", "dxgi.dll"], &[]);
+        data.extend_from_slice(b"\0d3d12.dll\0");
+        let info = inspect_pe_bytes(&data).unwrap();
+        assert_eq!(info.api, GraphicsApi::DirectX10);
+        assert_eq!(info.evidence, DetectionEvidence::Imports);
+        for name in [
+            "notd3d11.dll",
+            "d3d12.dll.backup",
+            "fake_dxgi.dll",
+            "d3dcompiler_47.dll",
+        ] {
+            assert_eq!(
+                inspect_pe_bytes(&pe_with_libraries(true, &[name], &[]))
+                    .unwrap()
+                    .api,
+                GraphicsApi::Unknown,
+                "{name}"
+            );
+        }
+        // Dynamic loading can coexist with an otherwise valid, non-graphics import table.
+        let mut dynamic = pe_with_libraries(true, &["kernel32.dll"], &[]);
+        dynamic.extend_from_slice(b"\0D3D11.DLL\0");
+        let info = inspect_pe_bytes(&dynamic).unwrap();
+        assert_eq!(info.api, GraphicsApi::DirectX11);
+        assert_eq!(info.evidence, DetectionEvidence::DllNameHeuristic);
+    }
+
+    #[test]
+    fn folder_detection_stays_within_requested_game_and_skips_crash_reporters() {
+        let dir = tempfile::tempdir().unwrap();
+        let game = dir.path().join("Game");
+        fs::create_dir(&game).unwrap();
+        fs::write(
+            dir.path().join("neighbor.exe"),
+            pe_with_libraries(true, &["d3d12.dll"], &[]),
+        )
+        .unwrap();
+        assert_eq!(detect_target_engine(&game).api, GraphicsApi::Unknown);
+        fs::write(
+            game.join("a-crashreporter.exe"),
+            pe_with_libraries(true, &["d3d12.dll"], &[]),
+        )
+        .unwrap();
+        fs::write(
+            game.join("game.exe"),
+            pe_with_libraries(true, &["d3d10.dll", "dxgi.dll"], &[]),
+        )
+        .unwrap();
+        assert_eq!(detect_target_engine(&game).api, GraphicsApi::DirectX10);
+        let wrapper = game.join("launcher.exe");
+        fs::write(&wrapper, pe_with_libraries(true, &["kernel32.dll"], &[])).unwrap();
+        let detected = detect_target_engine(&wrapper);
+        assert_eq!(detected.api, GraphicsApi::DirectX10);
+        assert_eq!(detected.binary, Some(game.join("game.exe")));
+    }
+
     #[test]
     fn test_image_uses_steamworks_detects_protected_binaries() {
         // A Denuvo-style binary has no readable import table, so only the name scan can see this.
-        let packed = b"MZ\x90\x00...packed...SteamAPI_Init\x00steam_api64.dll\x00d3d11.dll";
+        let packed = b"MZ\x90\x00...packed\0SteamAPI_Init\x00steam_api64.dll\x00d3d11.dll";
         assert!(image_uses_steamworks(packed));
 
         // A title without Steamworks must not be wrapped just because it happens to be a game.
-        let bare = b"MZ\x90\x00...SomeHeader...d3d9.dll\x00opengl32.dll";
+        let bare = b"MZ\x90\x00...SomeHeader\0d3d9.dll\x00opengl32.dll";
         assert!(!image_uses_steamworks(bare));
 
         // Case differences must not hide the dependency.
@@ -522,43 +810,43 @@ mod tests {
     #[test]
     fn test_detection_priorities() {
         // Simulated binary containing d3d12.dll
-        let bytes_dx12 = b"MZ\x90\x00...SomeHeader...d3d12.dll\x00kernel32.dll\x00";
+        let bytes_dx12 = b"MZ\x90\x00...SomeHeader\0d3d12.dll\x00kernel32.dll\x00";
         let info = inspect_pe_bytes(bytes_dx12).unwrap();
         assert_eq!(info.api, GraphicsApi::DirectX12);
         assert_eq!(info.engine, TargetEngine::Gptk);
 
         // Simulated binary containing d3d11.dll
-        let bytes_dx11 = b"MZ\x90\x00...SomeHeader...d3d11.dll\x00dxgi.dll\x00";
+        let bytes_dx11 = b"MZ\x90\x00...SomeHeader\0d3d11.dll\x00dxgi.dll\x00";
         let info = inspect_pe_bytes(bytes_dx11).unwrap();
         assert_eq!(info.api, GraphicsApi::DirectX11);
         assert_eq!(info.engine, TargetEngine::Gptk);
 
         // Simulated binary containing d3d10.dll
-        let bytes_dx10 = b"MZ\x90\x00...SomeHeader...d3d10.dll\x00user32.dll\x00";
+        let bytes_dx10 = b"MZ\x90\x00...SomeHeader\0d3d10.dll\x00user32.dll\x00";
         let info = inspect_pe_bytes(bytes_dx10).unwrap();
         assert_eq!(info.api, GraphicsApi::DirectX10);
         assert_eq!(info.engine, TargetEngine::WineStaging);
 
         // Simulated binary containing d3d9.dll
-        let bytes_dx9 = b"MZ\x90\x00...SomeHeader...d3d9.dll\x00user32.dll\x00";
+        let bytes_dx9 = b"MZ\x90\x00...SomeHeader\0d3d9.dll\x00user32.dll\x00";
         let info = inspect_pe_bytes(bytes_dx9).unwrap();
         assert_eq!(info.api, GraphicsApi::DirectX9OrOlder);
         assert_eq!(info.engine, TargetEngine::WineStaging);
 
         // Simulated binary containing vulkan-1.dll
-        let bytes_vk = b"MZ\x90\x00...SomeHeader...vulkan-1.dll\x00kernel32.dll\x00";
+        let bytes_vk = b"MZ\x90\x00...SomeHeader\0vulkan-1.dll\x00kernel32.dll\x00";
         let info = inspect_pe_bytes(bytes_vk).unwrap();
         assert_eq!(info.api, GraphicsApi::Vulkan);
         assert_eq!(info.engine, TargetEngine::KosmicKrisp);
 
         // Simulated binary containing opengl32.dll
-        let bytes_gl = b"MZ\x90\x00...SomeHeader...opengl32.dll\x00gdi32.dll\x00";
+        let bytes_gl = b"MZ\x90\x00...SomeHeader\0opengl32.dll\x00gdi32.dll\x00";
         let info = inspect_pe_bytes(bytes_gl).unwrap();
         assert_eq!(info.api, GraphicsApi::OpenGL);
         assert_eq!(info.engine, TargetEngine::WineStaging);
 
         // Simulated binary containing ddraw.dll
-        let bytes_ddraw = b"MZ\x90\x00...SomeHeader...ddraw.dll\x00kernel32.dll\x00";
+        let bytes_ddraw = b"MZ\x90\x00...SomeHeader\0ddraw.dll\x00kernel32.dll\x00";
         let info = inspect_pe_bytes(bytes_ddraw).unwrap();
         assert_eq!(info.api, GraphicsApi::DirectX7OrOlder);
         assert_eq!(info.detected_dll, Some("ddraw.dll".into()));
