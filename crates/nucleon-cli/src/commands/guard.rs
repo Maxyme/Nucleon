@@ -1,5 +1,5 @@
 use super::ui;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Subcommand;
 use nucleon_core::{guard, paths};
 use std::fs;
@@ -183,7 +183,7 @@ pub fn run(action: GuardAction) -> Result<()> {
             ctrlc::set_handler(move || {
                 term_clone.store(true, Ordering::SeqCst);
             })
-            .ok();
+            .context("Cannot install SIGINT/SIGTERM/SIGHUP handler; watcher was not started")?;
             let hook_dylib = super::find_hook_dylib();
             guard::run_guard_watcher(term, Duration::from_secs(interval), hook_dylib.as_deref())?;
             println!("Watcher stopped.");

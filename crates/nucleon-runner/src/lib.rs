@@ -275,34 +275,75 @@ fn set_runner_lib_env(cmd: &mut Command, runner_dir: &Path) {
     }
 }
 
-fn wait_wineserver(wineserver_bin: &Path, pfx_dir: &Path, timeout_ms: u64) {
-    if !wineserver_bin.is_file() {
-        return;
-    }
-    let mut cmd = Command::new(wineserver_bin);
-    cmd.arg("-w");
-    cmd.env("WINEPREFIX", pfx_dir);
-    if let Some(runner_dir) = wineserver_bin.parent().and_then(|p| p.parent()) {
-        set_runner_lib_env(&mut cmd, runner_dir);
-    }
-
-    if let Ok(mut child) = cmd.spawn() {
-        let start = std::time::Instant::now();
-        let timeout = Duration::from_millis(timeout_ms);
-        loop {
-            match child.try_wait() {
-                Ok(Some(_)) => break,
-                Ok(None) => {
-                    if start.elapsed() >= timeout {
-                        let _ = child.kill();
-                        break;
-                    }
-                    thread::sleep(Duration::from_millis(50));
+/// Always reap a helper after it exits or is killed at its deadline.
+fn wait_child_with_timeout(
+    child: &mut std::process::Child,
+    timeout: Duration,
+) -> Result<Option<std::process::ExitStatus>> {
+    let start = std::time::Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return Ok(Some(status)),
+            Ok(None) if start.elapsed() < timeout => {
+                thread::sleep(
+                    Duration::from_millis(50).min(timeout.saturating_sub(start.elapsed())),
+                );
+            }
+            result => {
+                child.kill().context("Failed to stop subprocess helper")?;
+                child.wait().context("Failed to reap subprocess helper")?;
+                if let Err(error) = result {
+                    return Err(error).context("Failed to poll subprocess helper");
                 }
-                Err(_) => break,
+                return Ok(None);
             }
         }
     }
+}
+
+fn run_wineserver_helper(
+    wineserver: &Path,
+    prefix: &Path,
+    argument: &str,
+    timeout: Duration,
+) -> Result<()> {
+    if !wineserver.is_file() {
+        return Ok(());
+    }
+    let mut command = Command::new(wineserver);
+    command.arg(argument).env("WINEPREFIX", prefix);
+    if let Some(runner) = wineserver.parent().and_then(Path::parent) {
+        set_runner_lib_env(&mut command, runner);
+    }
+    let mut child = command.spawn().with_context(|| {
+        format!(
+            "Cannot start wineserver {argument} at {}",
+            wineserver.display()
+        )
+    })?;
+    wait_child_with_timeout(&mut child, timeout)?.with_context(|| {
+        format!(
+            "Wineserver {argument} helper timed out after {} ms",
+            timeout.as_millis()
+        )
+    })?;
+    Ok(())
+}
+
+fn wait_wineserver(wineserver: &Path, prefix: &Path, timeout_ms: u64) {
+    if let Err(error) =
+        run_wineserver_helper(wineserver, prefix, "-w", Duration::from_millis(timeout_ms))
+    {
+        log_runner(&format!("Wineserver wait failed: {error:#}"));
+    }
+}
+
+fn termination_flag() -> Result<Arc<AtomicBool>> {
+    let flag = Arc::new(AtomicBool::new(false));
+    let handler_flag = Arc::clone(&flag);
+    ctrlc::set_handler(move || handler_flag.store(true, Ordering::SeqCst))
+        .context("Cannot install SIGINT/SIGTERM/SIGHUP handler; game was not launched")?;
+    Ok(flag)
 }
 
 /// Recursively terminates all child processes of a given PID using sysinfo (kill-tree algorithm).
@@ -333,24 +374,10 @@ fn terminate_wine_prefix(
     // wineserver is scoped by WINEPREFIX. A shared Wine path or executable name is not
     // evidence of ownership: other games can be using that same runtime.
     let wineserver_bin = runner_dir.join("bin/wineserver");
-    if wineserver_bin.is_file() {
-        let mut cmd = Command::new(&wineserver_bin);
-        cmd.arg("-k").env("WINEPREFIX", pfx_dir);
-        set_runner_lib_env(&mut cmd, runner_dir);
-        if let Ok(mut server) = cmd.spawn() {
-            let start = std::time::Instant::now();
-            loop {
-                if let Ok(Some(_)) = server.try_wait() {
-                    break;
-                }
-                if start.elapsed() >= Duration::from_millis(1500) {
-                    let _ = server.kill();
-                    let _ = server.wait();
-                    break;
-                }
-                thread::sleep(Duration::from_millis(50));
-            }
-        }
+    if let Err(error) =
+        run_wineserver_helper(&wineserver_bin, pfx_dir, "-k", Duration::from_millis(1500))
+    {
+        log_runner(&format!("Wineserver shutdown failed: {error:#}"));
     }
     if child_id > 0 {
         let mut sys = System::new();
@@ -874,14 +901,8 @@ fn run_with_args_inner(args: &[String]) -> Result<()> {
         exec_env.insert("SteamGameId".to_string(), id.clone());
     }
 
-    // Setup signal handler for prompt SIGTERM exit
-    let term_flag = Arc::new(AtomicBool::new(false));
-    let term_clone = Arc::clone(&term_flag);
-
-    ctrlc::set_handler(move || {
-        term_clone.store(true, Ordering::SeqCst);
-    })
-    .ok();
+    // Register before spawning Wine so handler failures cannot leave an unsupervised game.
+    let term_flag = termination_flag()?;
 
     // Working directory is the parent of the exe if available
     let game_cwd = if let Some(exe_path) = game_args.first().map(Path::new) {
@@ -1058,6 +1079,129 @@ fn run_with_args_inner(args: &[String]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn helper_timeout_kills_and_reaps_the_child() {
+        let mut child = Command::new("sleep").arg("30").spawn().unwrap();
+        let pid = Pid::from_u32(child.id());
+        assert!(
+            wait_child_with_timeout(&mut child, Duration::from_millis(10))
+                .unwrap()
+                .is_none()
+        );
+        let mut system = System::new();
+        system.refresh_processes(ProcessesToUpdate::Some(&[pid]), true);
+        assert!(
+            system.process(pid).is_none(),
+            "Timed-out helper must not remain as a zombie"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn helper_wait_preserves_exit_status_and_prefix_scope() {
+        use std::os::unix::fs::PermissionsExt;
+        let mut child = Command::new("sh").args(["-c", "exit 7"]).spawn().unwrap();
+        assert_eq!(
+            wait_child_with_timeout(&mut child, Duration::from_secs(2))
+                .unwrap()
+                .unwrap()
+                .code(),
+            Some(7)
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let server = dir.path().join("wineserver");
+        let prefix = dir.path().join("prefix with spaces");
+        fs::create_dir(&prefix).unwrap();
+        fs::write(
+            &server,
+            "#!/bin/sh\nprintf '%s\\n' \"$WINEPREFIX\" \"$1\" > \"$WINEPREFIX/helper-args\"\n",
+        )
+        .unwrap();
+        fs::set_permissions(&server, fs::Permissions::from_mode(0o755)).unwrap();
+        for argument in ["-k", "-w"] {
+            run_wineserver_helper(&server, &prefix, argument, Duration::from_secs(2)).unwrap();
+            assert_eq!(
+                fs::read_to_string(prefix.join("helper-args")).unwrap(),
+                format!("{}\n{argument}\n", prefix.display())
+            );
+        }
+    }
+
+    // Each worker runs in its own test process, keeping ctrlc's global handler out of other tests.
+    #[test]
+    fn signal_handler_worker() {
+        let Ok(ready) = env::var("NUCLEON_TEST_SIGNAL_READY") else {
+            return;
+        };
+        let flag = termination_flag().unwrap();
+        if env::var_os("NUCLEON_TEST_DUPLICATE_HANDLER").is_some() {
+            let error = termination_flag().unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("Cannot install SIGINT/SIGTERM/SIGHUP handler")
+            );
+            return;
+        }
+        fs::write(ready, b"ready").unwrap();
+        let start = std::time::Instant::now();
+        while !flag.load(Ordering::SeqCst) && start.elapsed() < Duration::from_secs(5) {
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            flag.load(Ordering::SeqCst),
+            "Termination signal was not handled"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn termination_signals_reach_the_handler_and_registration_failures_are_reported() {
+        let dir = tempfile::tempdir().unwrap();
+        let ready = dir.path().join("ready");
+        for signal in [Signal::Interrupt, Signal::Term, Signal::Hangup] {
+            let _ = fs::remove_file(&ready);
+            let mut child = Command::new(env::current_exe().unwrap())
+                .args(["--exact", "tests::signal_handler_worker", "--nocapture"])
+                .env("NUCLEON_TEST_SIGNAL_READY", &ready)
+                .env_remove("NUCLEON_TEST_DUPLICATE_HANDLER")
+                .spawn()
+                .unwrap();
+            let start = std::time::Instant::now();
+            while !ready.is_file() && start.elapsed() < Duration::from_secs(5) {
+                thread::sleep(Duration::from_millis(10));
+            }
+            if !ready.is_file() {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("Signal worker did not become ready");
+            }
+            let pid = Pid::from_u32(child.id());
+            let mut system = System::new();
+            system.refresh_processes(ProcessesToUpdate::Some(&[pid]), true);
+            let sent = system
+                .process(pid)
+                .and_then(|process| process.kill_with(signal));
+            let status = wait_child_with_timeout(&mut child, Duration::from_secs(6)).unwrap();
+            assert_eq!(sent, Some(true));
+            assert!(
+                status.is_some_and(|status| status.success()),
+                "Signal worker failed for {signal:?}"
+            );
+        }
+        let mut child = Command::new(env::current_exe().unwrap())
+            .args(["--exact", "tests::signal_handler_worker", "--nocapture"])
+            .env("NUCLEON_TEST_SIGNAL_READY", &ready)
+            .env("NUCLEON_TEST_DUPLICATE_HANDLER", "1")
+            .spawn()
+            .unwrap();
+        assert!(
+            wait_child_with_timeout(&mut child, Duration::from_secs(6))
+                .unwrap()
+                .is_some_and(|status| status.success())
+        );
+    }
 
     #[test]
     fn engine_precedence_preserves_explicit_auto_and_rejects_invalid_winners() {
