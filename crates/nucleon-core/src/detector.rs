@@ -4,33 +4,18 @@ use crate::d7vk;
 use crate::dxmt;
 use crate::dxvk;
 use crate::{runner, vkd3d, wine};
+use aho_corasick::{AhoCorasick, MatchKind};
 use object::Object;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
-/// Fast, zero-allocation ASCII case-insensitive substring search over raw binary slices.
-fn bytes_contains_ascii_case_insensitive(data: &[u8], needle: &[u8]) -> bool {
-    if needle.is_empty() || data.len() < needle.len() {
-        return false;
-    }
-    let first_lower = needle[0].to_ascii_lowercase();
-    let first_upper = needle[0].to_ascii_uppercase();
-    let pat_len = needle.len();
-    let mut i = 0;
-    while i <= data.len() - pat_len {
-        if let Some(pos) =
-            memchr::memchr2(first_lower, first_upper, &data[i..=data.len() - pat_len])
-        {
-            let candidate_start = i + pos;
-            if data[candidate_start..candidate_start + pat_len].eq_ignore_ascii_case(needle) {
-                return true;
-            }
-            i = candidate_start + 1;
-        } else {
-            break;
-        }
-    }
-    false
+fn dll_matcher<'a>(dlls: impl IntoIterator<Item = &'a str>) -> AhoCorasick {
+    AhoCorasick::builder()
+        .ascii_case_insensitive(true)
+        .match_kind(MatchKind::Standard)
+        .build(dlls)
+        .expect("Static DLL patterns must compile")
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -409,33 +394,26 @@ fn pe_libraries<'data, Pe: object::read::pe::ImageNtHeaders>(
     libraries
 }
 
-fn contains_dll_name(data: &[u8], dll: &str) -> bool {
-    let needle = dll.as_bytes();
-    if data.len() < needle.len() {
-        return false;
-    }
+/// Scan all graphics DLL names together, keeping complete filename boundaries and table order.
+fn graphics_dll_hints(data: &[u8]) -> Vec<(String, DetectionEvidence)> {
+    static MATCHER: OnceLock<AhoCorasick> = OnceLock::new();
+    let matcher = MATCHER.get_or_init(|| dll_matcher(GRAPHICS_DLLS.iter().map(|(dll, _, _)| *dll)));
     let filename_char =
         |byte: u8| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.');
-    let mut cursor = 0;
-    let last = data.len() - needle.len();
-    while cursor <= last {
-        let Some(offset) = memchr::memchr2(
-            needle[0].to_ascii_lowercase(),
-            needle[0].to_ascii_uppercase(),
-            &data[cursor..=last],
-        ) else {
-            break;
-        };
-        let index = cursor + offset;
-        if data[index..index + needle.len()].eq_ignore_ascii_case(needle)
-            && (index == 0 || !filename_char(data[index - 1]))
-            && (index + needle.len() == data.len() || !filename_char(data[index + needle.len()]))
+    let mut found = [false; GRAPHICS_DLLS.len()];
+    for hit in matcher.find_overlapping_iter(data) {
+        if (hit.start() == 0 || !filename_char(data[hit.start() - 1]))
+            && (hit.end() == data.len() || !filename_char(data[hit.end()]))
         {
-            return true;
+            found[hit.pattern().as_usize()] = true;
         }
-        cursor = index + 1;
     }
-    false
+    GRAPHICS_DLLS
+        .iter()
+        .zip(found)
+        .filter(|(_, found)| *found)
+        .map(|((dll, _, _), _)| ((*dll).to_string(), DetectionEvidence::DllNameHeuristic))
+        .collect()
 }
 
 pub fn inspect_pe_bytes(data: &[u8]) -> Result<GraphicsApiInfo, anyhow::Error> {
@@ -451,11 +429,7 @@ pub fn inspect_pe_bytes(data: &[u8]) -> Result<GraphicsApiInfo, anyhow::Error> {
 
     // Packed games and dynamically loaded renderers may have only non-graphics imports.
     // Report this evidence as a heuristic; it never overrides an explicit graphics import.
-    let hints = GRAPHICS_DLLS
-        .iter()
-        .filter(|(dll, _, _)| contains_dll_name(data, dll))
-        .map(|(dll, _, _)| ((*dll).to_string(), DetectionEvidence::DllNameHeuristic))
-        .collect::<Vec<_>>();
+    let hints = graphics_dll_hints(data);
     let heuristic = classify_libraries(&hints);
     if heuristic.api != GraphicsApi::Unknown {
         return Ok(heuristic);
@@ -601,9 +575,10 @@ pub fn image_uses_steamworks(data: &[u8]) -> bool {
         }
     }
 
-    STEAMWORKS_DLLS
-        .iter()
-        .any(|dll| bytes_contains_ascii_case_insensitive(data, dll.as_bytes()))
+    static MATCHER: OnceLock<AhoCorasick> = OnceLock::new();
+    MATCHER
+        .get_or_init(|| dll_matcher(STEAMWORKS_DLLS))
+        .is_match(data)
 }
 
 /// Whether the executable at `path` expects a running Steam client to complete its startup.
@@ -826,6 +801,55 @@ mod tests {
         let info = inspect_pe_bytes(&dynamic).unwrap();
         assert_eq!(info.api, GraphicsApi::DirectX11);
         assert_eq!(info.evidence, DetectionEvidence::DllNameHeuristic);
+    }
+
+    #[test]
+    fn graphics_matcher_handles_case_paths_binary_boundaries_and_later_valid_matches() {
+        for (dll, api, _) in GRAPHICS_DLLS {
+            let upper = dll.to_ascii_uppercase();
+            for bytes in [
+                upper.as_bytes().to_vec(),
+                format!("C:\\Windows\\System32\\{upper}\0").into_bytes(),
+                [vec![0xff], upper.as_bytes().to_vec(), vec![0xfe]].concat(),
+            ] {
+                let info = inspect_pe_bytes(&bytes).unwrap();
+                assert_eq!(&info.api, api);
+                assert_eq!(info.detected_dll.as_deref(), Some(*dll));
+                assert_eq!(info.evidence, DetectionEvidence::DllNameHeuristic);
+            }
+            for invalid in [
+                format!("not{dll}"),
+                format!("_{dll}"),
+                format!("-{dll}"),
+                format!("{dll}.backup"),
+                format!("{dll}x"),
+                format!("{dll}_"),
+            ] {
+                assert!(
+                    graphics_dll_hints(invalid.as_bytes()).is_empty(),
+                    "{invalid}"
+                );
+                let later = format!("{invalid}\0{upper}\0{dll}");
+                assert_eq!(
+                    graphics_dll_hints(later.as_bytes()),
+                    vec![((*dll).to_string(), DetectionEvidence::DllNameHeuristic)]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn graphics_matcher_keeps_api_priority_and_deduplicates_repeated_names() {
+        let data = b"opengl32.dll\0d3d9.dll\0dxgi.dll\0D3D12.DLL\0d3d12.dll";
+        let names = graphics_dll_hints(data)
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect::<Vec<_>>();
+        assert_eq!(names, ["d3d12.dll", "d3d9.dll", "opengl32.dll", "dxgi.dll"]);
+        assert_eq!(inspect_pe_bytes(data).unwrap().api, GraphicsApi::DirectX12);
+        // Steam detection intentionally remains generous for packed binaries.
+        assert!(image_uses_steamworks(b"_STEAM_API64.DLL.backup"));
+        assert!(!image_uses_steamworks(b"steam_api65.dll"));
     }
 
     #[test]

@@ -1229,6 +1229,7 @@ dependencies = [
 name = "nucleon-core"
 version = "0.2.0"
 dependencies = [
+ "aho-corasick",
  "anyhow",
  "core-foundation",
  "core-graphics",

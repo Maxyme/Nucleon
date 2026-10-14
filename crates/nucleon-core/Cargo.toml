@@ -16,6 +16,7 @@ tempfile = { workspace = true }
 walkdir = "2.5"
 object = { workspace = true }
 memchr = { workspace = true }
+aho-corasick = "1.1"
 plist = { workspace = true }
 keyvalues-parser = { workspace = true }
 steam-vdf-parser = "0.1"
