@@ -471,47 +471,42 @@ fn scan_directory_for_graphics_api(dir: &Path, depth: u32) -> Option<GraphicsApi
         return None;
     }
 
-    if let Ok(entries) = fs::read_dir(dir) {
-        let mut candidates = entries
-            .flatten()
-            .map(|entry| entry.path())
-            .collect::<Vec<_>>();
-        candidates.sort_by_key(|path| (path.is_dir(), path.clone()));
-        for p in candidates {
-            if p.is_file() {
-                if let Some(ext) = p.extension().and_then(|e| e.to_str())
-                    && ext.eq_ignore_ascii_case("exe")
-                {
-                    let name = p
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or("")
-                        .to_lowercase();
-                    if !name.contains("unins")
-                        && !name.contains("crash")
-                        && !name.contains("report")
-                        && let Ok(info) = inspect_pe_file(&p)
-                        && info.api != GraphicsApi::Unknown
-                    {
-                        return Some(info);
-                    }
+    walkdir::WalkDir::new(dir)
+        .follow_links(true)
+        .max_depth(depth as usize)
+        .sort_by_key(|entry| (entry.file_type().is_dir(), entry.file_name().to_os_string()))
+        .into_iter()
+        .filter_entry(|entry| {
+            entry.depth() == 0
+                || !entry.file_type().is_dir()
+                || ["binaries", "bin", "x64", "win64"]
+                    .iter()
+                    .any(|name| entry.file_name().eq_ignore_ascii_case(name))
+        })
+        .find_map(|entry| {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(error) => {
+                    log::warn!("Graphics discovery skipped an entry: {error}");
+                    return None;
                 }
-            } else if p.is_dir() {
-                let dname = p
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("")
-                    .to_lowercase();
-                if (dname == "binaries" || dname == "bin" || dname == "x64" || dname == "win64")
-                    && let Some(info) = scan_directory_for_graphics_api(&p, depth - 1)
-                {
-                    return Some(info);
-                }
+            };
+            if !entry.file_type().is_file()
+                || !entry
+                    .path()
+                    .extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("exe"))
+            {
+                return None;
             }
-        }
-    }
-
-    None
+            let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
+            if name.contains("unins") || name.contains("crash") || name.contains("report") {
+                return None;
+            }
+            inspect_pe_file(entry.path())
+                .ok()
+                .filter(|info| info.api != GraphicsApi::Unknown)
+        })
 }
 
 /// Inspects raw executable bytes to determine whether the binary is 64-bit (PE32+) or 32-bit (PE32).
@@ -860,6 +855,39 @@ mod tests {
         let detected = detect_target_engine(&wrapper);
         assert_eq!(detected.api, GraphicsApi::DirectX10);
         assert_eq!(detected.binary, Some(game.join("game.exe")));
+    }
+
+    #[test]
+    fn folder_discovery_preserves_root_priority_allowed_folders_and_depth() {
+        let dir = tempfile::tempdir().unwrap();
+        let nested = dir.path().join("Binaries/Win64/game.exe");
+        fs::create_dir_all(nested.parent().unwrap()).unwrap();
+        fs::write(&nested, pe_with_libraries(true, &["d3d12.dll"], &[])).unwrap();
+        let unrelated = dir.path().join("another-game/game.exe");
+        fs::create_dir_all(unrelated.parent().unwrap()).unwrap();
+        fs::write(unrelated, pe_with_libraries(true, &["d3d11.dll"], &[])).unwrap();
+        assert!(scan_directory_for_graphics_api(dir.path(), 2).is_none());
+        assert_eq!(
+            scan_directory_for_graphics_api(dir.path(), 3)
+                .unwrap()
+                .binary,
+            Some(nested.clone())
+        );
+        let root_game = dir.path().join("z-game.exe");
+        fs::write(&root_game, pe_with_libraries(true, &["d3d10.dll"], &[])).unwrap();
+        assert_eq!(
+            scan_directory_for_graphics_api(dir.path(), 3)
+                .unwrap()
+                .binary,
+            Some(root_game)
+        );
+        #[cfg(unix)]
+        {
+            fs::remove_file(dir.path().join("z-game.exe")).unwrap();
+            fs::remove_file(&nested).unwrap();
+            std::os::unix::fs::symlink("..", dir.path().join("Binaries/bin")).unwrap();
+            assert!(scan_directory_for_graphics_api(dir.path(), 3).is_none());
+        }
     }
 
     #[test]

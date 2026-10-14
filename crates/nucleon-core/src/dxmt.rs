@@ -90,12 +90,16 @@ fn check_file(dir: &Path, name: &str) -> Option<PathBuf> {
 
 /// Inspects a directory to check if it contains a valid DXMT installation.
 /// Supports standard DXMT release hierarchy (x86_64-windows / i386-windows / x86_64-unix),
-/// x64 / x32 layouts, flat directories, or immediate subdirectories.
+/// x64 / x32 layouts, flat directories, or nested release directories.
 pub fn inspect_candidate_dir(dir: &Path) -> Option<DxmtBundle> {
     if !dir.is_dir() {
         return None;
     }
+    crate::fs_util::directories(dir, usize::MAX)
+        .find_map(|candidate| inspect_bundle_layout(&candidate))
+}
 
+fn inspect_bundle_layout(dir: &Path) -> Option<DxmtBundle> {
     // 1. Check official DXMT layout: x86_64-windows, i386-windows, and x86_64-unix
     let x64_win = if dir.join("x86_64-windows").is_dir() {
         dir.join("x86_64-windows")
@@ -169,18 +173,6 @@ pub fn inspect_candidate_dir(dir: &Path) -> Option<DxmtBundle> {
             x86_winemetal: None,
             version: read_version_file(dir),
         });
-    }
-
-    // 3. Check immediate subdirectories (e.g. heroic/tools/dxmt/dxmt-v0.80-builtin)
-    if let Ok(entries) = fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let p = entry.path();
-            if p.is_dir()
-                && let Some(bundle) = inspect_candidate_dir(&p)
-            {
-                return Some(bundle);
-            }
-        }
     }
 
     None

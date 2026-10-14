@@ -36,42 +36,16 @@ pub fn find_file_in_tree(root: &Path, rel_source: &str) -> Option<PathBuf> {
         .and_then(|n| n.to_str())
         .unwrap_or(rel_source);
 
-    // 1. Exact relative candidate (e.g. "legacycompat/Steam.dll")
-    let direct = root.join(rel_source);
-    if direct.is_file() {
-        return Some(direct);
-    }
-    // 2. Just the filename directly at root
-    let direct_file = root.join(filename);
-    if direct_file.is_file() {
-        return Some(direct_file);
-    }
-    // 3. In root/legacycompat/<filename>
-    let in_legacy = root.join("legacycompat").join(filename);
-    if in_legacy.is_file() {
-        return Some(in_legacy);
-    }
-    // 4. One-level deep subdirectories (e.g. ubuntu12/, win64/, *.extract/)
-    if let Ok(entries) = fs::read_dir(root) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                let sub_candidate = path.join(rel_source);
-                if sub_candidate.is_file() {
-                    return Some(sub_candidate);
-                }
-                let sub_file = path.join(filename);
-                if sub_file.is_file() {
-                    return Some(sub_file);
-                }
-                let sub_legacy = path.join("legacycompat").join(filename);
-                if sub_legacy.is_file() {
-                    return Some(sub_legacy);
-                }
-            }
-        }
-    }
-    None
+    // Preserve exact relative path, flat filename, then legacycompat priority at each level.
+    crate::fs_util::directories(root, 1).find_map(|dir| {
+        [
+            dir.join(rel_source),
+            dir.join(filename),
+            dir.join("legacycompat").join(filename),
+        ]
+        .into_iter()
+        .find(|candidate| candidate.is_file())
+    })
 }
 
 /// Stages Valve bridge files into `bridge_dir` from an extracted directory using `bridge-manifest.json`.
@@ -249,6 +223,30 @@ pub fn fetch_and_stage_valve_packages(custom_path: Option<&Path>) -> Result<()> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bridge_search_preserves_path_priority_and_wrapper_depth() {
+        let dir = tempdir().unwrap();
+        let exact = dir.path().join("legacycompat/Steam.dll");
+        let flat = dir.path().join("Steam.dll");
+        let wrapped = dir.path().join("release/legacycompat/Steam.dll");
+        let too_deep = dir.path().join("release/nested/legacycompat/Steam.dll");
+        for file in [&exact, &flat, &wrapped, &too_deep] {
+            fs::create_dir_all(file.parent().unwrap()).unwrap();
+            fs::write(file, b"fixture").unwrap();
+        }
+        for expected in [&exact, &flat, &wrapped] {
+            assert_eq!(
+                find_file_in_tree(dir.path(), "legacycompat/Steam.dll").as_ref(),
+                Some(expected)
+            );
+            fs::remove_file(expected).unwrap();
+        }
+        assert_eq!(
+            find_file_in_tree(dir.path(), "legacycompat/Steam.dll"),
+            None
+        );
+    }
 
     #[test]
     fn test_bridge_alignment_restores_the_installed_clients_build() {

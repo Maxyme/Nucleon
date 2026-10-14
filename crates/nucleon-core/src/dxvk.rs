@@ -88,12 +88,16 @@ fn check_dll(dir: &Path, name: &str) -> Option<PathBuf> {
 
 /// Inspects a directory to check if it contains a valid DXVK installation.
 /// Accepts either the standard release hierarchy (x64/d3d11.dll, x32/d3d11.dll or x86/d3d11.dll),
-/// flat directory (d3d11.dll), or an immediate subdirectory.
+/// flat directory (d3d11.dll), or nested release directories.
 pub fn inspect_candidate_dir(dir: &Path) -> Option<DxvkBundle> {
     if !dir.is_dir() {
         return None;
     }
+    crate::fs_util::directories(dir, usize::MAX)
+        .find_map(|candidate| inspect_bundle_layout(&candidate))
+}
 
+fn inspect_bundle_layout(dir: &Path) -> Option<DxvkBundle> {
     // 1. Check standard release layout: <dir>/x64 and <dir>/x32 (or x86)
     let x64_dir = if dir.join("x86_64-windows").is_dir() {
         dir.join("x86_64-windows")
@@ -162,18 +166,6 @@ pub fn inspect_candidate_dir(dir: &Path) -> Option<DxvkBundle> {
             x86_dxgi: None,
             version: read_version_file(dir),
         });
-    }
-
-    // 3. Check immediate subdirectories (e.g. heroic/tools/dxvk-macOS/<version>/)
-    if let Ok(entries) = fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let p = entry.path();
-            if p.is_dir()
-                && let Some(bundle) = inspect_candidate_dir(&p)
-            {
-                return Some(bundle);
-            }
-        }
     }
 
     None

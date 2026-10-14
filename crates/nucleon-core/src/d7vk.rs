@@ -63,32 +63,17 @@ pub fn inspect_candidate_dir(dir: &Path) -> Option<D7vkBundle> {
         });
     }
 
-    // 4. Check immediate subdirectories (e.g. if extracted archive created <dir>/d7vk-v2.3/)
-    if let Ok(entries) = fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let p = entry.path();
-            if p.is_dir() {
-                let sub_x32 = p.join("x32/ddraw.dll");
-                if sub_x32.is_file() {
-                    return Some(D7vkBundle {
-                        root: p.clone(),
-                        x86_ddraw: sub_x32,
-                        version: read_version_file(&p).or_else(|| read_version_file(dir)),
-                    });
-                }
-                let sub_flat = p.join("ddraw.dll");
-                if sub_flat.is_file() {
-                    return Some(D7vkBundle {
-                        root: p.clone(),
-                        x86_ddraw: sub_flat,
-                        version: read_version_file(&p).or_else(|| read_version_file(dir)),
-                    });
-                }
-            }
-        }
-    }
-
-    None
+    // 4. Check immediate release subdirectories, retaining the parent's version fallback.
+    crate::fs_util::directories(dir, 1).skip(1).find_map(|p| {
+        [p.join("x32/ddraw.dll"), p.join("ddraw.dll")]
+            .into_iter()
+            .find(|file| file.is_file())
+            .map(|x86_ddraw| D7vkBundle {
+                version: read_version_file(&p).or_else(|| read_version_file(dir)),
+                root: p,
+                x86_ddraw,
+            })
+    })
 }
 
 pub fn custom_d7vk_path_file() -> PathBuf {

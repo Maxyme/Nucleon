@@ -13,6 +13,7 @@ sha2 = "0.10"
 rustix = { version = "1", features = ["fs", "process"] }
 log = { workspace = true }
 tempfile = { workspace = true }
+walkdir = "2.5"
 object = { workspace = true }
 memchr = { workspace = true }
 plist = { workspace = true }
