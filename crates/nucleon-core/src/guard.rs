@@ -368,7 +368,7 @@ pub fn is_launchagent_installed() -> bool {
 
 /// Checks if the LaunchAgent job is currently loaded in launchd.
 pub fn is_launchagent_loaded() -> bool {
-    let uid = nix::unistd::getuid();
+    let uid = rustix::process::getuid();
     let domain = format!("gui/{}", uid);
 
     if let Ok(out) = Command::new("launchctl")
@@ -432,7 +432,7 @@ pub fn install_launchagent(binary_path: Option<&Path>) -> Result<PathBuf> {
 
 /// Loads a LaunchAgent plist using launchctl.
 pub fn load_launchagent(plist_path: &Path) -> Result<()> {
-    let uid = nix::unistd::getuid();
+    let uid = rustix::process::getuid();
     let domain = format!("gui/{}", uid);
 
     // Ensure previous instance is stopped before reloading
@@ -475,7 +475,7 @@ pub fn load_launchagent(plist_path: &Path) -> Result<()> {
 pub fn uninstall_launchagent() -> Result<()> {
     let plist_path = paths::steam_guard_plist();
     if plist_path.exists() {
-        let uid = nix::unistd::getuid();
+        let uid = rustix::process::getuid();
         let domain = format!("gui/{}", uid);
 
         let _ = Command::new("launchctl")

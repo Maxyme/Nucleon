@@ -13,9 +13,7 @@ nucleon-core = { path = "../nucleon-core" }
 nucleon-runner = { path = "../nucleon-runner" }
 anyhow = { workspace = true }
 clap = { workspace = true }
-log = { workspace = true }
 env_logger = { workspace = true }
-serde = { workspace = true }
 serde_json = { workspace = true }
 ctrlc = "3.4"
 

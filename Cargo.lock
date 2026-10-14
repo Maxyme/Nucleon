@@ -437,7 +437,7 @@ version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "10d60334b3b2e7c9d91ef8150abfb6fa4c1c39ebbcf4a81c2e346aad939fee3e"
 dependencies = [
- "thiserror 2.0.21",
+ "thiserror",
 ]
 
 [[package]]
@@ -1208,10 +1208,8 @@ dependencies = [
  "clap",
  "ctrlc",
  "env_logger",
- "log",
  "nucleon-core",
  "nucleon-runner",
- "serde",
  "serde_json",
 ]
 
@@ -1226,7 +1224,6 @@ dependencies = [
  "keyvalues-parser",
  "log",
  "memchr",
- "nix",
  "object",
  "plist",
  "rustix",
@@ -1235,7 +1232,6 @@ dependencies = [
  "sha2",
  "tar",
  "tempfile",
- "thiserror 1.0.69",
  "toml",
  "ureq",
  "zip",
@@ -1249,18 +1245,12 @@ dependencies = [
  "anyhow",
  "chrono",
  "ctor",
- "env_logger",
  "frida-gum",
  "frida-gum-sys",
  "libc",
  "log",
  "mach2",
- "memchr",
  "nucleon-core",
- "object",
- "serde",
- "serde_json",
- "tempfile",
 ]
 
 [[package]]
@@ -1513,7 +1503,7 @@ dependencies = [
  "rustc-hash",
  "rustls",
  "socket2",
- "thiserror 2.0.21",
+ "thiserror",
  "tokio",
  "tracing",
  "web-time",
@@ -1535,7 +1525,7 @@ dependencies = [
  "rustls",
  "rustls-pki-types",
  "slab",
- "thiserror 2.0.21",
+ "thiserror",
  "tinyvec",
  "tracing",
  "web-time",
@@ -1981,31 +1971,11 @@ dependencies = [
 
 [[package]]
 name = "thiserror"
-version = "1.0.69"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b6aaf5339b578ea85b50e080feb250a3e8ae8cfcdff9a461c9ec2904bc923f52"
-dependencies = [
- "thiserror-impl 1.0.69",
-]
-
-[[package]]
-name = "thiserror"
 version = "2.0.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "09e52cb86a36cede5cb101bf8908837b3e4c6e5e59fe7fd85c23fb56200d189e"
 dependencies = [
- "thiserror-impl 2.0.21",
-]
-
-[[package]]
-name = "thiserror-impl"
-version = "1.0.69"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4fee6c4efc90059e10f81e6d42c60a18f76588c3d74cb83a0b242a2b6c7504c1"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.119",
+ "thiserror-impl",
 ]
 
 [[package]]
@@ -2743,7 +2713,7 @@ dependencies = [
  "flate2",
  "indexmap",
  "memchr",
- "thiserror 2.0.21",
+ "thiserror",
  "zopfli",
 ]
 

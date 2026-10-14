@@ -6,19 +6,17 @@ license.workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
-thiserror = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 toml = "0.8"
 sha2 = "0.10"
-rustix = { version = "1", features = ["fs"] }
+rustix = { version = "1", features = ["fs", "process"] }
 log = { workspace = true }
 tempfile = { workspace = true }
 object = { workspace = true }
 memchr = { workspace = true }
 plist = { workspace = true }
 keyvalues-parser = { workspace = true }
-nix = { version = "0.31", default-features = false, features = ["user"] }
 ureq = { workspace = true }
 zip = { workspace = true }
 tar = { workspace = true }
