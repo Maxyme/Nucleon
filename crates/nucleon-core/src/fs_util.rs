@@ -25,10 +25,20 @@ pub(crate) fn directories(root: &Path, max_depth: usize) -> impl Iterator<Item =
 ///
 /// Writes to a temporary file created in the same parent directory as `target_path`
 /// (ensuring same-filesystem semantics for atomic rename), and atomically replaces
-/// `target_path` on success using `persist`.
+/// `target_path` using `persist`, after syncing contents and permissions to disk.
+/// On Unix the parent directory is then synced to persist the replacement. If that
+/// final sync fails, the error states that the new file has already been published.
+/// Replaces destination symlinks themselves; their targets are never written to.
 pub fn atomic_write_file<P: AsRef<Path>, C: AsRef<[u8]>>(target_path: P, data: C) -> Result<()> {
     let target = target_path.as_ref();
-    let parent = target.parent().unwrap_or_else(|| Path::new("."));
+    let parent = target
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+
+    #[cfg(unix)]
+    let parent_directory = std::fs::File::open(parent)
+        .with_context(|| format!("Failed to open parent directory {}", parent.display()))?;
 
     let mut temp = tempfile::NamedTempFile::new_in(parent)
         .with_context(|| format!("Failed to create temporary file in {}", parent.display()))?;
@@ -39,28 +49,50 @@ pub fn atomic_write_file<P: AsRef<Path>, C: AsRef<[u8]>>(target_path: P, data: C
             target.display()
         )
     })?;
-    temp.flush()
-        .with_context(|| format!("Failed to flush temporary file for {}", target.display()))?;
-
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         // Inherit permissions of existing file if present, or set 0o644 default
-        let mode = if let Ok(meta) = std::fs::metadata(target) {
-            meta.permissions().mode()
-        } else {
-            0o644
+        let mode = match std::fs::metadata(target) {
+            Ok(meta) => meta.permissions().mode(),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => 0o644,
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!(
+                        "Failed to read existing permissions for {}",
+                        target.display()
+                    )
+                });
+            }
         };
-        let mut perms = temp.as_file().metadata()?.permissions();
-        perms.set_mode(mode);
-        let _ = temp.as_file().set_permissions(perms);
+        temp.as_file()
+            .set_permissions(std::fs::Permissions::from_mode(mode))
+            .with_context(|| {
+                format!(
+                    "Failed to set replacement permissions for {}",
+                    target.display()
+                )
+            })?;
     }
+
+    temp.as_file()
+        .sync_all()
+        .with_context(|| format!("Failed to sync replacement file for {}", target.display()))?;
 
     temp.persist(target).map_err(|e| {
         anyhow::anyhow!(
             "Failed to atomically persist to {}: {}",
             target.display(),
             e.error
+        )
+    })?;
+
+    #[cfg(unix)]
+    parent_directory.sync_all().with_context(|| {
+        format!(
+            "Replacement for {} was published, but syncing parent directory {} failed",
+            target.display(),
+            parent.display()
         )
     })?;
 
@@ -154,5 +186,64 @@ mod tests {
 
         atomic_write_file(&file, "updated content").unwrap();
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "updated content");
+    }
+
+    #[test]
+    fn failed_atomic_replacement_preserves_destination_and_cleans_temporary_file() {
+        let dir = tempdir().unwrap();
+        let target = dir.path().join("existing-directory");
+        std::fs::create_dir(&target).unwrap();
+        std::fs::write(target.join("original"), b"preserve").unwrap();
+        let error = atomic_write_file(&target, b"replacement").unwrap_err();
+        assert!(error.to_string().contains("Failed to atomically persist"));
+        assert_eq!(std::fs::read(target.join("original")).unwrap(), b"preserve");
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_replacement_preserves_private_permissions_and_does_not_write_through_links() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+        let dir = tempdir().unwrap();
+        let private = dir.path().join("private");
+        std::fs::write(&private, b"original").unwrap();
+        std::fs::set_permissions(&private, std::fs::Permissions::from_mode(0o600)).unwrap();
+        atomic_write_file(&private, b"updated").unwrap();
+        assert_eq!(
+            std::fs::metadata(&private).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        let link = dir.path().join("link");
+        symlink("private", &link).unwrap();
+        atomic_write_file(&link, b"separate").unwrap();
+        assert!(!std::fs::symlink_metadata(&link).unwrap().is_symlink());
+        assert_eq!(
+            std::fs::metadata(&link).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert_eq!(std::fs::read(&private).unwrap(), b"updated");
+        assert_eq!(std::fs::read(&link).unwrap(), b"separate");
+        let new_file = dir.path().join("new");
+        atomic_write_file(&new_file, b"new").unwrap();
+        assert_eq!(
+            std::fs::metadata(new_file).unwrap().permissions().mode() & 0o777,
+            0o644
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn permission_lookup_failure_preserves_destination_instead_of_using_default_mode() {
+        let dir = tempdir().unwrap();
+        let link = dir.path().join("cycle");
+        std::os::unix::fs::symlink("cycle", &link).unwrap();
+        let error = atomic_write_file(&link, b"replacement").unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("Failed to read existing permissions")
+        );
+        assert_eq!(std::fs::read_link(&link).unwrap(), Path::new("cycle"));
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
     }
 }
