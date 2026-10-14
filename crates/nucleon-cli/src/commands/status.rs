@@ -291,7 +291,10 @@ pub fn run() -> Result<()> {
     );
     ui::sub_kv(
         "Hook Dynamic Injection:",
-        if guard_status.plist_patched && guard_status.hook_dylib_present {
+        if guard_status.plist_patched
+            && guard_status.hook_dylib_present
+            && guard_status.hook_dylib_current
+        {
             "✓ Active"
         } else {
             "✗ Inactive"

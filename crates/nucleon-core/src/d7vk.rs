@@ -216,20 +216,14 @@ pub fn stage_d7vk_into_prefix(bundle: &D7vkBundle, prefix_dir: &Path) -> Result<
     // DirectDraw / D3D 1-7 games are 32-bit: stage to syswow64 on 64-bit Wine WoW64 prefixes
     if syswow64.is_dir() {
         let dst_wow64 = syswow64.join("ddraw.dll");
-        if dst_wow64.exists() || dst_wow64.is_symlink() {
-            let _ = fs::remove_file(&dst_wow64);
-        }
-        fs::copy(&bundle.x86_ddraw, &dst_wow64).with_context(|| {
+        crate::backend_files::copy(&bundle.x86_ddraw, &dst_wow64).with_context(|| {
             format!("Failed to stage D7VK ddraw.dll to {}", dst_wow64.display())
         })?;
         staged_count += 1;
     } else if sys32.is_dir() {
         // Fallback for pure 32-bit Wine prefixes
         let dst_sys32 = sys32.join("ddraw.dll");
-        if dst_sys32.exists() || dst_sys32.is_symlink() {
-            let _ = fs::remove_file(&dst_sys32);
-        }
-        fs::copy(&bundle.x86_ddraw, &dst_sys32).with_context(|| {
+        crate::backend_files::copy(&bundle.x86_ddraw, &dst_sys32).with_context(|| {
             format!("Failed to stage D7VK ddraw.dll to {}", dst_sys32.display())
         })?;
         staged_count += 1;
@@ -244,40 +238,12 @@ pub fn stage_d7vk_into_prefix(bundle: &D7vkBundle, prefix_dir: &Path) -> Result<
     Ok(staged_count)
 }
 
-fn restore_ddraw_in_dir(dst_dir: &Path, runner_dir: Option<&Path>, subdirs: &[&str]) -> usize {
-    let mut count = 0;
-    let dst_ddraw = dst_dir.join("ddraw.dll");
-    let builtin = runner_dir.and_then(|r| {
-        subdirs
-            .iter()
-            .map(|sub| r.join(sub).join("ddraw.dll"))
-            .find(|p| p.is_file())
-    });
-
-    if let Some(src) = builtin {
-        let need_copy = fs::metadata(&dst_ddraw)
-            .and_then(|d| {
-                fs::metadata(&src).map(|s| {
-                    if d.len() != s.len() {
-                        true
-                    } else {
-                        fs::read(&dst_ddraw).ok() != fs::read(&src).ok()
-                    }
-                })
-            })
-            .unwrap_or(true);
-        if need_copy {
-            let _ = fs::remove_file(&dst_ddraw);
-            if fs::copy(&src, &dst_ddraw).is_ok() {
-                count += 1;
-            }
-        }
-    } else if (dst_ddraw.exists() || dst_ddraw.is_symlink()) && fs::remove_file(&dst_ddraw).is_ok()
-    {
-        count += 1;
-    }
-
-    count
+fn restore_ddraw_in_dir(
+    dst_dir: &Path,
+    runner_dir: Option<&Path>,
+    subdirs: &[&str],
+) -> Result<usize> {
+    crate::backend_files::restore(dst_dir, "ddraw.dll", runner_dir, subdirs)
 }
 
 /// Unstages D7VK DLLs from a Wine prefix's syswow64 and system32 directories.
@@ -290,7 +256,7 @@ pub fn unstage_d7vk_from_prefix(prefix_dir: &Path, runner_dir: Option<&Path>) ->
         &pfx.join("syswow64"),
         runner_dir,
         &["lib/wine/i386-windows", "lib/wine/x86-windows"],
-    ) + restore_ddraw_in_dir(
+    )? + restore_ddraw_in_dir(
         &pfx.join("system32"),
         runner_dir,
         &[
@@ -299,7 +265,7 @@ pub fn unstage_d7vk_from_prefix(prefix_dir: &Path, runner_dir: Option<&Path>) ->
             "lib/wine/x86_64-windows",
             "lib64/wine/x86_64-windows",
         ],
-    );
+    )?;
 
     if count > 0 {
         log::info!(

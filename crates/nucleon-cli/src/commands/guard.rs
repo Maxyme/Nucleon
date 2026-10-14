@@ -60,6 +60,14 @@ pub fn run(action: GuardAction) -> Result<()> {
                 },
             );
             ui::kv(
+                "Hook Version:",
+                if status.hook_dylib_current {
+                    "✓ Current"
+                } else {
+                    "✗ Outdated / Invalid (run 'nucleon guard run')"
+                },
+            );
+            ui::kv(
                 "WebUI Chunk Patches:",
                 if status.webui_patched {
                     "✓ Patched"

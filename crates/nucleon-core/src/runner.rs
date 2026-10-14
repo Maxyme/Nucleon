@@ -737,11 +737,7 @@ fn runtime_unix_lib_dirs(runner_dir: &Path) -> Vec<PathBuf> {
     .collect()
 }
 
-/// Reports which D3DMetal-required exports `runner_dir`'s Wine cannot satisfy.
-///
-/// Export names live verbatim in a Mach-O symbol table, so scanning the runtime's own library images
-/// answers the question without spawning anything. A missing image is treated as satisfied: only a
-/// name that is absent from every present candidate counts as unsupported.
+/// Reports exports that could not be verified in the runtime's library images.
 pub fn missing_d3dmetal_exports(runner_dir: &Path) -> Vec<&'static str> {
     let candidates = ["gdi32.so", "win32u.so"];
     let mut images: Vec<Vec<u8>> = Vec::new();
@@ -753,18 +749,13 @@ pub fn missing_d3dmetal_exports(runner_dir: &Path) -> Vec<&'static str> {
             }
         }
     }
-    if images.is_empty() {
-        return Vec::new();
-    }
-
     D3DMETAL_REQUIRED_EXPORTS
         .into_iter()
         .filter(|(_, aliases)| {
             !aliases.iter().any(|alias| {
-                let needle = alias.as_bytes();
                 images
                     .iter()
-                    .any(|bytes| bytes.windows(needle.len()).any(|w| w == needle))
+                    .any(|bytes| crate::runtime_checks::has_export(bytes, &[*alias]))
             })
         })
         .map(|(name, _)| name)
@@ -2082,13 +2073,11 @@ mod tests {
         let runner = root.join("wine-runtime");
         let unix = runner.join("lib/wine/x86_64-unix");
         fs::create_dir_all(&unix).unwrap();
-        // A Mach-O export trie stores names verbatim, so a byte scan sees them; emulate that here.
-        let body: String = exports
-            .iter()
-            .map(|e| format!("__symbol_{e}_\0"))
-            .collect::<Vec<_>>()
-            .concat();
-        fs::write(unix.join("gdi32.so"), body).unwrap();
+        fs::write(
+            unix.join("gdi32.so"),
+            crate::runtime_checks::test_image(exports[0], 1),
+        )
+        .unwrap();
         fs::write(unix.join("win32u.so"), "unrelated-symbols").unwrap();
         runner
     }
@@ -2129,7 +2118,11 @@ mod tests {
         let runner = dir.path().join("wine-runtime");
         let unix = runner.join("lib/wine/x86_64-unix");
         fs::create_dir_all(&unix).unwrap();
-        fs::write(unix.join("win32u.so"), "__NtGdiDdDDIEnumAdapters2\0other").unwrap();
+        fs::write(
+            unix.join("win32u.so"),
+            crate::runtime_checks::test_image("NtGdiDdDDIEnumAdapters2", 1),
+        )
+        .unwrap();
 
         assert!(
             missing_d3dmetal_exports(&runner).is_empty(),
@@ -2150,11 +2143,9 @@ mod tests {
     }
 
     #[test]
-    fn test_d3dmetal_preflight_is_silent_about_unknown_runtimes() {
+    fn test_d3dmetal_preflight_rejects_unknown_runtimes() {
         let dir = tempdir().unwrap();
-        // No candidate images at all: nothing can be proven missing, so never block a launch.
-        require_engine_capabilities(dir.path(), TargetEngine::Gptk)
-            .expect("an uninspectable runtime must not be treated as incapable");
+        assert!(require_engine_capabilities(dir.path(), TargetEngine::Gptk).is_err());
     }
 
     #[test]

@@ -18,12 +18,67 @@ pub struct GuardStatus {
     pub adhoc_signed: bool,
     pub plist_patched: bool,
     pub hook_dylib_present: bool,
+    pub hook_dylib_current: bool,
     pub webui_patched: bool,
     pub launchagent_installed: bool,
     pub launchagent_loaded: bool,
     pub last_heal_timestamp: Option<u64>,
     pub contract_cached: bool,
     pub detected_steam_build: Option<u64>,
+}
+
+impl GuardStatus {
+    pub fn is_healthy(&self) -> bool {
+        self.steam_installed
+            && self.adhoc_signed
+            && self.plist_patched
+            && self.hook_dylib_present
+            && self.hook_dylib_current
+            && self.webui_patched
+            && self.contract_cached
+    }
+}
+
+fn hook_is_current(source: &Path, destination: &Path) -> bool {
+    let identity = |path| -> Result<_> { crate::runtime_checks::hook_identity(&fs::read(path)?) };
+    match (identity(source), identity(destination)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    }
+}
+
+/// Sign and verify a complete replacement before publishing it over the installed hook.
+fn deploy_hook(
+    source: &Path,
+    destination: &Path,
+    sign: impl FnOnce(&Path) -> Result<()>,
+) -> Result<bool> {
+    let bytes = fs::read(source)?;
+    let expected = crate::runtime_checks::hook_identity(&bytes)?;
+    if fs::read(destination)
+        .ok()
+        .and_then(|b| crate::runtime_checks::hook_identity(&b).ok())
+        .as_ref()
+        == Some(&expected)
+    {
+        return Ok(false);
+    }
+    let parent = destination
+        .parent()
+        .context("Hook destination has no parent")?;
+    let staged = tempfile::Builder::new()
+        .suffix(".dylib")
+        .tempfile_in(parent)?;
+    fs::write(staged.path(), bytes)?;
+    sign(staged.path())?;
+    if crate::runtime_checks::hook_identity(&fs::read(staged.path())?)? != expected {
+        bail!("Signing changed hook contents");
+    }
+    fs::set_permissions(staged.path(), fs::metadata(source)?.permissions())?;
+    staged
+        .persist(destination)
+        .map_err(|e| anyhow::anyhow!("Could not deploy hook: {}", e.error))?;
+    Ok(true)
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -66,11 +121,17 @@ pub fn save_guard_state(state: &GuardState) -> Result<()> {
 
 /// Checks current Steam codesigning, hook injection, WebUI patch, and LaunchAgent status.
 pub fn check_guard_status() -> GuardStatus {
+    check_guard_status_with_source(None)
+}
+
+fn check_guard_status_with_source(source: Option<&Path>) -> GuardStatus {
     let steam_installed = steam::is_steam_installed();
     let adhoc_signed = steam::is_adhoc_signed(&paths::steam_app())
         && steam::is_adhoc_signed(&paths::steam_executable());
     let hook_dest = paths::steam_app().join("Contents/MacOS/nucleon.dylib");
     let hook_dylib_present = hook_dest.is_file() && steam::is_adhoc_signed(&hook_dest);
+    let hook_dylib_current =
+        resolve_hook_source(source).is_some_and(|source| hook_is_current(&source, &hook_dest));
     let plist_patched = steam::is_steam_patched();
     let webui_patched = steam::are_steamui_chunks_patched();
     let launchagent_installed = is_launchagent_installed();
@@ -93,6 +154,7 @@ pub fn check_guard_status() -> GuardStatus {
         adhoc_signed,
         plist_patched,
         hook_dylib_present,
+        hook_dylib_current,
         webui_patched,
         launchagent_installed,
         launchagent_loaded,
@@ -102,11 +164,9 @@ pub fn check_guard_status() -> GuardStatus {
     }
 }
 
-/// Resolves a candidate hook dylib to stage into Steam if missing.
+/// Resolves the desired hook for deployment and freshness checks.
 pub fn resolve_hook_source(explicit: Option<&Path>) -> Option<PathBuf> {
-    if let Some(p) = explicit
-        && p.exists()
-    {
+    if let Some(p) = explicit {
         return Some(p.to_path_buf());
     }
     // Check bridge directory copy
@@ -145,21 +205,28 @@ pub fn heal_steam(hook_source: Option<&Path>) -> Result<HealResult> {
 
     // 1. Check hook dylib in Contents/MacOS/nucleon.dylib
     let hook_dest = paths::steam_app().join("Contents/MacOS/nucleon.dylib");
-    if !hook_dest.is_file()
-        && let Some(src_path) = resolve_hook_source(hook_source)
-    {
-        fs::copy(&src_path, &hook_dest).with_context(|| {
-            format!(
-                "Failed to deploy hook dylib from {} to {}",
-                src_path.display(),
-                hook_dest.display()
-            )
-        })?;
-        // Also preserve in bridge dir for future offline heals
+    if hook_source.is_some_and(|p| !p.is_file()) {
+        bail!("Requested hook source is unavailable");
+    }
+    if let Some(src_path) = resolve_hook_source(hook_source) {
+        result.hook_deployed = deploy_hook(&src_path, &hook_dest, |path| {
+            steam::sign_binary(path)?;
+            if !steam::is_adhoc_signed(path) {
+                bail!("Staged hook signature verification failed");
+            }
+            Ok(())
+        })
+        .with_context(|| format!("Failed to deploy hook from {}", src_path.display()))?;
+        if result.hook_deployed {
+            needs_resign = true;
+        }
         let bridge_dest = paths::bridge_dir().join("nucleon.dylib");
-        let _ = fs::copy(&src_path, bridge_dest);
-        result.hook_deployed = true;
-        needs_resign = true;
+        if !hook_is_current(&hook_dest, &bridge_dest) {
+            fs::create_dir_all(paths::bridge_dir())?;
+            crate::backend_files::copy(&hook_dest, &bridge_dest)?;
+        }
+    } else {
+        bail!("No hook library is available for Steam repair");
     }
 
     // 2. Check Info.plist DYLD_INSERT_LIBRARIES injection
@@ -178,7 +245,7 @@ pub fn heal_steam(hook_source: Option<&Path>) -> Result<HealResult> {
 
     if needs_resign || !app_signed || !exe_signed || !hook_signed {
         if hook_dest.exists() {
-            let _ = steam::sign_binary(&hook_dest);
+            steam::sign_binary(&hook_dest)?;
         }
         steam::sign_binary(&paths::steam_executable())?;
         steam::sign_binary(&paths::steam_app())?;
@@ -187,16 +254,13 @@ pub fn heal_steam(hook_source: Option<&Path>) -> Result<HealResult> {
     }
 
     // 4. Check WebUI chunk patches
-    if !steam::are_steamui_chunks_patched()
-        && let Ok(count) = steam::patch_steamui_chunks()
-    {
-        result.webui_patched_count = count;
+    if !steam::are_steamui_chunks_patched() {
+        result.webui_patched_count = steam::patch_steamui_chunks()?;
     }
 
     // 5. Clean native games and wildcard "0" from CompatToolMapping
-    if steam::migrate_compat_mappings().is_ok() {
-        result.mappings_cleaned = true;
-    }
+    steam::migrate_compat_mappings()?;
+    result.mappings_cleaned = true;
 
     // 6. Unknown clients must not be reported as a healthy repaired integration.
     match steam_contract::ensure_contract_for_installed_steam() {
@@ -211,9 +275,9 @@ pub fn heal_steam(hook_source: Option<&Path>) -> Result<HealResult> {
         .as_secs();
     let state = GuardState {
         last_heal_timestamp: now,
-        last_status_ok: result.contract_cached,
+        last_status_ok: check_guard_status_with_source(hook_source).is_healthy(),
     };
-    let _ = save_guard_state(&state);
+    save_guard_state(&state)?;
 
     if !result.resigned
         && !result.plist_fixed
@@ -237,12 +301,8 @@ pub fn run_guard_once(hook_source: Option<&Path>) -> Result<HealResult> {
             .unwrap_or_default()
             .as_secs();
         if now.saturating_sub(state.last_heal_timestamp) < 5 {
-            let status = check_guard_status();
-            if status.adhoc_signed
-                && status.plist_patched
-                && status.hook_dylib_present
-                && status.webui_patched
-            {
+            let status = check_guard_status_with_source(hook_source);
+            if state.last_status_ok && status.is_healthy() {
                 return Ok(HealResult {
                     no_action_needed: true,
                     ..Default::default()
@@ -439,15 +499,12 @@ pub fn run_guard_watcher(
     hook_source: Option<&Path>,
 ) -> Result<()> {
     while !stop_flag.load(Ordering::SeqCst) {
-        let status = check_guard_status();
+        let status = check_guard_status_with_source(hook_source);
         if status.steam_installed
-            && (!status.adhoc_signed
-                || !status.plist_patched
-                || !status.hook_dylib_present
-                || !status.webui_patched
-                || !status.contract_cached)
+            && !status.is_healthy()
+            && let Err(error) = heal_steam(hook_source)
         {
-            let _ = heal_steam(hook_source);
+            log::error!("Steam guard repair failed: {error:#}");
         }
         std::thread::sleep(poll_interval);
     }
@@ -457,6 +514,61 @@ pub fn run_guard_watcher(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hook_upgrade_preserves_old_hook_on_failure_and_ignores_signature_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source.dylib");
+        let dest = dir.path().join("installed.dylib");
+        let old = crate::runtime_checks::test_image("hook", 1);
+        let new = crate::runtime_checks::test_image("hook", 2);
+        fs::write(&source, &new).unwrap();
+        fs::write(&dest, &old).unwrap();
+        assert!(!hook_is_current(&source, &dest));
+        assert!(deploy_hook(&source, &dest, |_| bail!("signing failed")).is_err());
+        assert_eq!(fs::read(&dest).unwrap(), old);
+        assert!(deploy_hook(&source, &dest, |_| Ok(())).unwrap());
+        assert!(hook_is_current(&source, &dest));
+        let mut resigned = new.clone();
+        resigned.extend_from_slice(b"signature outside sections");
+        fs::write(&dest, resigned).unwrap();
+        assert!(
+            !deploy_hook(&source, &dest, |_| panic!(
+                "unchanged hook needs no signing"
+            ))
+            .unwrap()
+        );
+        fs::write(&source, b"corrupt").unwrap();
+        let previous = fs::read(&dest).unwrap();
+        assert!(deploy_hook(&source, &dest, |_| Ok(())).is_err());
+        assert_eq!(fs::read(&dest).unwrap(), previous);
+    }
+
+    #[test]
+    fn guard_health_requires_current_hook_and_complete_integration() {
+        let mut status = GuardStatus {
+            steam_installed: true,
+            adhoc_signed: true,
+            plist_patched: true,
+            hook_dylib_present: true,
+            hook_dylib_current: true,
+            webui_patched: true,
+            launchagent_installed: false,
+            launchagent_loaded: false,
+            last_heal_timestamp: None,
+            contract_cached: true,
+            detected_steam_build: None,
+        };
+        assert!(status.is_healthy());
+        status.hook_dylib_current = false;
+        assert!(!status.is_healthy());
+        status.hook_dylib_current = true;
+        status.contract_cached = false;
+        assert!(!status.is_healthy());
+        status.contract_cached = true;
+        status.webui_patched = false;
+        assert!(!status.is_healthy());
+    }
 
     #[test]
     fn test_generate_launchagent_plist() {

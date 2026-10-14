@@ -47,10 +47,26 @@ experiment's profiles, bridge files, and logs.
 Keep exact Wine/backend/driver recipes pinned. Import-table detection is a hint,
 not proof that a backend supports a game. Dynamic loads and feature requirements
 can differ. Automatic routing prefers GPTK for DX12 and DXMT for DX11, then uses installed
-Vulkan translation layers. Explicit engine/backend choices take precedence. A
+Vulkan translation layers. Candidates must contain readable PE DLLs for the game's
+architecture. DXMT builtins must match the selected Wine; its Metal module and the
+Vulkan ICD library must match the Wine host architecture. Vulkan manifests must
+advertise at least API 1.3. GPTK requires complete x86_64 components and verified
+D3DMetal exports from Wine. These file checks do not probe GPU features or guarantee
+that a driver can initialize. Explicit engine/backend choices take precedence. A
 per-game Wine selection keeps automatic routing on that runtime. Missing DX12
 backends produce an actionable error rather than an OpenGL fallback. These
 preferences do not predict performance or guarantee game compatibility.
+
+Backend switches are serialized per prefix. Nucleon snapshots all managed DLLs,
+publishes individual files atomically, and restores the previous contents and
+symlinks if any staging or restoration step fails. Rollback failures retain the
+backup and report its location.
+
+The update guard compares every hook architecture's UUID and section contents,
+ignoring code-signature blobs. It signs and verifies stale-hook replacements before
+publishing them. Guard health requires valid signatures, injection, current hook,
+WebUI patches, and the reviewed contract for the installed Steam client; cached
+contracts alone do not mark a repair healthy.
 
 GPTK assembly publishes complete generations with Wine/GPTK provenance stamps.
 Launches resolve an immutable generation. Unix-call ABI pairing comes from the

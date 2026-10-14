@@ -286,13 +286,8 @@ pub fn clear_custom_dxmt_path() -> Result<()> {
     Ok(())
 }
 
-/// Stages DXMT DLLs into a Wine prefix's system32 and syswow64 directories.
-/// The bundle is also added to the child DLL search path; staging never modifies the Wine source.
-pub fn stage_dxmt_into_prefix(
-    bundle: &DxmtBundle,
-    prefix_dir: &Path,
-    runner_dir: Option<&Path>,
-) -> Result<usize> {
+/// Builtin DXMT DLLs must match the selected Wine runtime.
+pub fn validate_runtime(bundle: &DxmtBundle, runner_dir: Option<&Path>) -> Result<()> {
     if bundle.uses_builtin_dlls()
         && let Some(runner) = runner_dir
     {
@@ -302,7 +297,10 @@ pub fn stage_dxmt_into_prefix(
         ] {
             if let Some(source) = source {
                 let builtin = runner.join("lib/wine").join(arch).join("d3d11.dll");
-                if fs::read(&builtin).ok() != fs::read(source).ok() {
+                if fs::read(&builtin)
+                    .with_context(|| format!("Missing DXMT builtin {}", builtin.display()))?
+                    != fs::read(source)?
+                {
                     anyhow::bail!(
                         "This DXMT package contains builtin DLLs, but {} does not contain matching DXMT builtins. Select a compatible DXMT runtime or use macOS DXVK. Nucleon does not replace the source Wine runtime's DLLs.",
                         runner.display()
@@ -311,6 +309,16 @@ pub fn stage_dxmt_into_prefix(
             }
         }
     }
+    Ok(())
+}
+
+/// Stages DXMT DLLs without changing the source Wine runtime.
+pub fn stage_dxmt_into_prefix(
+    bundle: &DxmtBundle,
+    prefix_dir: &Path,
+    runner_dir: Option<&Path>,
+) -> Result<usize> {
+    validate_runtime(bundle, runner_dir)?;
     let pfx = prefix_dir.join("drive_c/windows");
     let target_64 = pfx.join("system32");
     let target_32 = pfx.join("syswow64");
@@ -330,10 +338,7 @@ pub fn stage_dxmt_into_prefix(
     for (name, opt_path) in files_64 {
         if let Some(src) = opt_path {
             let dst = target_64.join(name);
-            if dst.exists() || dst.is_symlink() {
-                let _ = fs::remove_file(&dst);
-            }
-            fs::copy(src, &dst).with_context(|| {
+            crate::backend_files::copy(src, &dst).with_context(|| {
                 format!("Failed to stage 64-bit DXMT {name} to {}", dst.display())
             })?;
             staged_count += 1;
@@ -352,10 +357,7 @@ pub fn stage_dxmt_into_prefix(
             && target_32.is_dir()
         {
             let dst = target_32.join(name);
-            if dst.exists() || dst.is_symlink() {
-                let _ = fs::remove_file(&dst);
-            }
-            fs::copy(src, &dst).with_context(|| {
+            crate::backend_files::copy(src, &dst).with_context(|| {
                 format!("Failed to stage 32-bit DXMT {name} to {}", dst.display())
             })?;
             staged_count += 1;
@@ -370,45 +372,8 @@ fn restore_dll_in_dir(
     dll_name: &str,
     runner_dir: Option<&Path>,
     subdirs: &[&str],
-) -> usize {
-    let dst_file = dst_dir.join(dll_name);
-
-    let builtin = runner_dir.and_then(|r| {
-        subdirs
-            .iter()
-            .map(|sub| r.join(sub).join(dll_name))
-            .find(|p| p.is_file())
-    });
-
-    if let Some(src) = builtin {
-        if !dst_file.exists() && !dst_file.is_symlink() {
-            if fs::copy(&src, &dst_file).is_ok() {
-                return 1;
-            }
-        } else {
-            let need_copy = fs::metadata(&dst_file)
-                .and_then(|d| {
-                    fs::metadata(&src).map(|s| {
-                        if d.len() != s.len() {
-                            true
-                        } else {
-                            fs::read(&dst_file).ok() != fs::read(&src).ok()
-                        }
-                    })
-                })
-                .unwrap_or(true);
-            if need_copy {
-                let _ = fs::remove_file(&dst_file);
-                if fs::copy(&src, &dst_file).is_ok() {
-                    return 1;
-                }
-            }
-        }
-    } else if (dst_file.exists() || dst_file.is_symlink()) && fs::remove_file(&dst_file).is_ok() {
-        return 1;
-    }
-
-    0
+) -> Result<usize> {
+    crate::backend_files::restore(dst_dir, dll_name, runner_dir, subdirs)
 }
 
 /// Unstages DXMT DLLs from a Wine prefix's syswow64 and system32 directories.
@@ -423,7 +388,7 @@ pub fn unstage_dxmt_from_prefix(prefix_dir: &Path, runner_dir: Option<&Path>) ->
             name,
             runner_dir,
             &["lib/wine/i386-windows", "lib/wine/x86-windows"],
-        );
+        )?;
         count += restore_dll_in_dir(
             &pfx.join("system32"),
             name,
@@ -434,7 +399,7 @@ pub fn unstage_dxmt_from_prefix(prefix_dir: &Path, runner_dir: Option<&Path>) ->
                 "lib/wine/i386-windows",
                 "lib/wine/x86-windows",
             ],
-        );
+        )?;
     }
 
     if count > 0 {

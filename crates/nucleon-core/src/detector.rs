@@ -119,14 +119,80 @@ impl AutoBackends {
         let wine_root = wine::get_active_wine_runtime()
             .map(|runtime| runtime.root)
             .or_else(runner::find_gptk_runner);
+        wine_root
+            .map(|root| Self::discover_for(&root, &GraphicsApi::DirectX11, true, None, None))
+            .unwrap_or_default()
+    }
+
+    /// Validate packages against the runtime, executable architecture, and per-game overrides.
+    pub fn discover_for(
+        root: &Path,
+        api: &GraphicsApi,
+        is64: bool,
+        icd: Option<&Path>,
+        dxvk_path: Option<&Path>,
+    ) -> Self {
+        use crate::runtime_checks::pe;
+        let dxmt_ok =
+            dxmt::find_dxmt().is_some_and(|b| crate::runtime_checks::dxmt(&b, root, is64));
+        let dxvk = dxvk_path
+            .map(dxvk::inspect_candidate_dir)
+            .unwrap_or_else(dxvk::find_dxvk)
+            .is_some_and(|b| {
+                let (d9, d10, d11, dxgi) = if is64 {
+                    (
+                        b.x64_d3d9.as_deref(),
+                        b.x64_d3d10core.as_deref(),
+                        b.x64_d3d11.as_deref(),
+                        b.x64_dxgi.as_deref(),
+                    )
+                } else {
+                    (
+                        b.x86_d3d9.as_deref(),
+                        b.x86_d3d10core.as_deref(),
+                        b.x86_d3d11.as_deref(),
+                        b.x86_dxgi.as_deref(),
+                    )
+                };
+                match api {
+                    GraphicsApi::DirectX9OrOlder => pe(d9, is64),
+                    GraphicsApi::DirectX10 => pe(d10, is64) && pe(d11, is64) && pe(dxgi, is64),
+                    _ => pe(d11, is64) && pe(dxgi, is64),
+                }
+            });
+        let discovered_icd = runner::find_kosmickrisp_icd();
         Self {
-            gptk: runner::find_gptk_components(None).ok().flatten().is_some()
-                && wine_root.is_some_and(|root| runner::missing_d3dmetal_exports(&root).is_empty()),
-            dxmt: dxmt::is_dxmt_installed(),
-            dxvk: dxvk::is_dxvk_installed(),
-            vkd3d: vkd3d::is_vkd3d_proton_installed(),
-            vulkan: runner::is_kosmickrisp_installed(),
-            d7vk: d7vk::is_d7vk_installed(),
+            gptk: is64
+                && crate::runtime_checks::wine_arch(root) == Some(object::Architecture::X86_64)
+                && runner::find_gptk_components(None)
+                    .ok()
+                    .flatten()
+                    .is_some_and(|(framework, shared)| {
+                        let arch = object::Architecture::X86_64;
+                        crate::runtime_checks::native_arch(&framework.join("D3DMetal"), arch)
+                            && crate::runtime_checks::native_arch(&shared, arch)
+                            && runner::gptk_windows_binaries_dir(&framework, &shared).is_some_and(
+                                |dir| {
+                                    ["d3d11.dll", "dxgi.dll", "d3d12.dll"]
+                                        .iter()
+                                        .all(|name| pe(Some(&dir.join(name)), true))
+                                },
+                            )
+                    })
+                && runner::missing_d3dmetal_exports(root).is_empty(),
+            dxmt: dxmt_ok,
+            dxvk,
+            vkd3d: vkd3d::find_vkd3d_proton().is_some_and(|b| {
+                if is64 {
+                    pe(Some(&b.x64_d3d12), true) && pe(b.x64_d3d12core.as_deref(), true)
+                } else {
+                    pe(b.x86_d3d12.as_deref(), false) && pe(b.x86_d3d12core.as_deref(), false)
+                }
+            }),
+            vulkan: icd
+                .or(discovered_icd.as_deref())
+                .is_some_and(|p| crate::runtime_checks::vulkan(p, root)),
+            d7vk: !is64 && d7vk::find_d7vk().is_some_and(|b| pe(Some(&b.x86_ddraw), false)),
         }
     }
 

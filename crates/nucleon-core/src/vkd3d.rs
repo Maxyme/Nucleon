@@ -222,10 +222,7 @@ pub fn stage_vkd3d_proton_into_prefix(
 
     // Stage 64-bit d3d12.dll
     let dst_d3d12 = sys32.join("d3d12.dll");
-    if dst_d3d12.exists() || dst_d3d12.is_symlink() {
-        let _ = fs::remove_file(&dst_d3d12);
-    }
-    fs::copy(&bundle.x64_d3d12, &dst_d3d12).with_context(|| {
+    crate::backend_files::copy(&bundle.x64_d3d12, &dst_d3d12).with_context(|| {
         format!(
             "Failed to stage 64-bit d3d12.dll to {}",
             dst_d3d12.display()
@@ -236,10 +233,7 @@ pub fn stage_vkd3d_proton_into_prefix(
     // Stage 64-bit d3d12core.dll if present
     if let Some(ref core_src) = bundle.x64_d3d12core {
         let dst_core = sys32.join("d3d12core.dll");
-        if dst_core.exists() || dst_core.is_symlink() {
-            let _ = fs::remove_file(&dst_core);
-        }
-        fs::copy(core_src, &dst_core).with_context(|| {
+        crate::backend_files::copy(core_src, &dst_core).with_context(|| {
             format!(
                 "Failed to stage 64-bit d3d12core.dll to {}",
                 dst_core.display()
@@ -253,24 +247,16 @@ pub fn stage_vkd3d_proton_into_prefix(
         && syswow64.is_dir()
     {
         let dst_x86 = syswow64.join("d3d12.dll");
-        if dst_x86.exists() || dst_x86.is_symlink() {
-            let _ = fs::remove_file(&dst_x86);
-        }
-        if fs::copy(x86_src, &dst_x86).is_ok() {
-            staged_count += 1;
-        }
+        crate::backend_files::copy(x86_src, &dst_x86)?;
+        staged_count += 1;
     }
 
     if let Some(ref x86_core) = bundle.x86_d3d12core
         && syswow64.is_dir()
     {
         let dst_x86_core = syswow64.join("d3d12core.dll");
-        if dst_x86_core.exists() || dst_x86_core.is_symlink() {
-            let _ = fs::remove_file(&dst_x86_core);
-        }
-        if fs::copy(x86_core, &dst_x86_core).is_ok() {
-            staged_count += 1;
-        }
+        crate::backend_files::copy(x86_core, &dst_x86_core)?;
+        staged_count += 1;
     }
 
     log::info!(
@@ -282,35 +268,17 @@ pub fn stage_vkd3d_proton_into_prefix(
     Ok(staged_count)
 }
 
-fn restore_d3d12_in_dir(dst_dir: &Path, runner_dir: Option<&Path>, subdirs: &[&str]) -> usize {
-    let mut count = 0;
-
-    let dst_core = dst_dir.join("d3d12core.dll");
-    if (dst_core.exists() || dst_core.is_symlink()) && fs::remove_file(&dst_core).is_ok() {
-        count += 1;
+fn restore_d3d12_in_dir(
+    dst_dir: &Path,
+    runner_dir: Option<&Path>,
+    subdirs: &[&str],
+) -> Result<usize> {
+    if !dst_dir.is_dir() {
+        return Ok(0);
     }
-
-    let dst_d3d12 = dst_dir.join("d3d12.dll");
-    let builtin = runner_dir.and_then(|r| {
-        subdirs
-            .iter()
-            .map(|sub| r.join(sub).join("d3d12.dll"))
-            .find(|p| p.is_file())
-    });
-
-    if let Some(src) = builtin {
-        let need_copy = fs::metadata(&dst_d3d12)
-            .and_then(|d| fs::metadata(&src).map(|s| d.len() != s.len()))
-            .unwrap_or(true);
-        if need_copy {
-            let _ = fs::remove_file(&dst_d3d12);
-            if fs::copy(&src, &dst_d3d12).is_ok() {
-                count += 1;
-            }
-        }
-    }
-
-    count
+    let mut count = crate::backend_files::restore(dst_dir, "d3d12.dll", runner_dir, subdirs)?;
+    count += crate::backend_files::restore(dst_dir, "d3d12core.dll", runner_dir, subdirs)?;
+    Ok(count)
 }
 
 /// Unstages VKD3D-Proton DLLs from a Wine prefix's system32 and syswow64 directories.
@@ -326,11 +294,11 @@ pub fn unstage_vkd3d_proton_from_prefix(
         &pfx.join("system32"),
         runner_dir,
         &["lib/wine/x86_64-windows", "lib64/wine/x86_64-windows"],
-    ) + restore_d3d12_in_dir(
+    )? + restore_d3d12_in_dir(
         &pfx.join("syswow64"),
         runner_dir,
         &["lib/wine/i386-windows", "lib/wine/x86-windows"],
-    );
+    )?;
 
     if count > 0 {
         log::info!(

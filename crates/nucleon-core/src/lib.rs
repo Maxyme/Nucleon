@@ -1,4 +1,5 @@
 pub mod backend;
+pub mod backend_files;
 pub mod client_image;
 pub mod d7vk;
 pub mod detector;
@@ -20,3 +21,5 @@ pub mod vdf;
 pub mod vkd3d;
 pub mod wine;
 pub mod wine_build;
+
+pub(crate) mod runtime_checks;

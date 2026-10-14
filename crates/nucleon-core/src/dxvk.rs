@@ -314,10 +314,7 @@ pub fn stage_dxvk_into_prefix(bundle: &DxvkBundle, prefix_dir: &Path) -> Result<
             && target_64.is_dir()
         {
             let dst = target_64.join(name);
-            if dst.exists() || dst.is_symlink() {
-                let _ = fs::remove_file(&dst);
-            }
-            fs::copy(src, &dst).with_context(|| {
+            crate::backend_files::copy(src, &dst).with_context(|| {
                 format!("Failed to stage 64-bit DXVK {name} to {}", dst.display())
             })?;
             staged_count += 1;
@@ -336,10 +333,7 @@ pub fn stage_dxvk_into_prefix(bundle: &DxvkBundle, prefix_dir: &Path) -> Result<
             && target_32.is_dir()
         {
             let dst = target_32.join(name);
-            if dst.exists() || dst.is_symlink() {
-                let _ = fs::remove_file(&dst);
-            }
-            fs::copy(src, &dst).with_context(|| {
+            crate::backend_files::copy(src, &dst).with_context(|| {
                 format!("Failed to stage 32-bit DXVK {name} to {}", dst.display())
             })?;
             staged_count += 1;
@@ -354,45 +348,8 @@ fn restore_dll_in_dir(
     dll_name: &str,
     runner_dir: Option<&Path>,
     subdirs: &[&str],
-) -> usize {
-    let dst_file = dst_dir.join(dll_name);
-
-    let builtin = runner_dir.and_then(|r| {
-        subdirs
-            .iter()
-            .map(|sub| r.join(sub).join(dll_name))
-            .find(|p| p.is_file())
-    });
-
-    if let Some(src) = builtin {
-        if !dst_file.exists() && !dst_file.is_symlink() {
-            if fs::copy(&src, &dst_file).is_ok() {
-                return 1;
-            }
-        } else {
-            let need_copy = fs::metadata(&dst_file)
-                .and_then(|d| {
-                    fs::metadata(&src).map(|s| {
-                        if d.len() != s.len() {
-                            true
-                        } else {
-                            fs::read(&dst_file).ok() != fs::read(&src).ok()
-                        }
-                    })
-                })
-                .unwrap_or(true);
-            if need_copy {
-                let _ = fs::remove_file(&dst_file);
-                if fs::copy(&src, &dst_file).is_ok() {
-                    return 1;
-                }
-            }
-        }
-    } else if (dst_file.exists() || dst_file.is_symlink()) && fs::remove_file(&dst_file).is_ok() {
-        return 1;
-    }
-
-    0
+) -> Result<usize> {
+    crate::backend_files::restore(dst_dir, dll_name, runner_dir, subdirs)
 }
 
 /// Unstages DXVK DLLs from a Wine prefix's syswow64 and system32 directories.
@@ -410,7 +367,7 @@ pub fn unstage_dxvk_from_prefix(prefix_dir: &Path, runner_dir: Option<&Path>) ->
             name,
             runner_dir,
             &["lib/wine/i386-windows", "lib/wine/x86-windows"],
-        );
+        )?;
         count += restore_dll_in_dir(
             &pfx.join("system32"),
             name,
@@ -421,7 +378,7 @@ pub fn unstage_dxvk_from_prefix(prefix_dir: &Path, runner_dir: Option<&Path>) ->
                 "lib/wine/i386-windows",
                 "lib/wine/x86-windows",
             ],
-        );
+        )?;
     }
 
     if count > 0 {
@@ -552,7 +509,7 @@ impl Backend for DxvkBackend {
 
     fn enable(&self, prefix: &Path, runner_dir: Option<&Path>) -> Result<usize> {
         let bundle = find_dxvk().context("DXVK is not installed. Run 'nucleon backends dxvk fetch' or configure via 'nucleon backends dxvk set-path <DIR>'")?;
-        let _ = crate::dxmt::unstage_dxmt_from_prefix(prefix, runner_dir);
+        crate::dxmt::unstage_dxmt_from_prefix(prefix, runner_dir)?;
         stage_dxvk_into_prefix(&bundle, prefix)
     }
 

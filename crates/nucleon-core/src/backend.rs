@@ -369,22 +369,16 @@ impl Backend for KosmicKrispBackend {
     fn enable(&self, prefix: &Path, runner_dir: Option<&Path>) -> Result<usize> {
         let mut count = 0;
         // DXMT conflicts with DXVK, so unstage DXMT
-        let _ = crate::dxmt::unstage_dxmt_from_prefix(prefix, runner_dir);
+        crate::dxmt::unstage_dxmt_from_prefix(prefix, runner_dir)?;
 
-        if let Some(vkd3d) = crate::vkd3d::find_vkd3d_proton()
-            && let Ok(staged) = crate::vkd3d::stage_vkd3d_proton_into_prefix(&vkd3d, prefix)
-        {
-            count += staged;
+        if let Some(vkd3d) = crate::vkd3d::find_vkd3d_proton() {
+            count += crate::vkd3d::stage_vkd3d_proton_into_prefix(&vkd3d, prefix)?;
         }
-        if let Some(d7vk) = crate::d7vk::find_d7vk()
-            && let Ok(staged) = crate::d7vk::stage_d7vk_into_prefix(&d7vk, prefix)
-        {
-            count += staged;
+        if let Some(d7vk) = crate::d7vk::find_d7vk() {
+            count += crate::d7vk::stage_d7vk_into_prefix(&d7vk, prefix)?;
         }
-        if let Some(dxvk) = crate::dxvk::find_dxvk()
-            && let Ok(staged) = crate::dxvk::stage_dxvk_into_prefix(&dxvk, prefix)
-        {
-            count += staged;
+        if let Some(dxvk) = crate::dxvk::find_dxvk() {
+            count += crate::dxvk::stage_dxvk_into_prefix(&dxvk, prefix)?;
         }
         Ok(count)
     }
