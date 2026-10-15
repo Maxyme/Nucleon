@@ -13,6 +13,13 @@ terms, including the warranty disclaimer and source distribution requirements.
   modifies Wine's LGPL-2.1-or-later loader. Native Rust build orchestration is
   covered by Nucleon's GPL-3.0-only license. Built runtime copies retain the
   applied patches, Wine license, authors, source references, and build receipts.
+- The experimental ARM64 runtime uses the pinned MacRunner/HyperBridge and
+  Tolkara forks listed in `assets/wine/recipes/arm64-fex.toml`. FEX and
+  HyperBridge retain their MIT notices. The shared-data read decoder is copied
+  unchanged at build time from MacRunner's Wine fork, under Wine's LGPL terms;
+  Nucleon's downstream integration patch records that source and its checksum.
+  The optional DXMT test uses the reference archive's graphics components and
+  records their hashes; it does not build those components from source.
 - `lsteamclient` binaries require their exact source revision and applicable
   Steamworks SDK notices.
 - The `steam.exe` helper derived from Proton's steam-helper uses BSD-3-Clause,

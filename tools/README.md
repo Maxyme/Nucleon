@@ -1,0 +1,166 @@
+# ARM64 Wine/FEX experiment
+
+This builds a separate experimental runtime on Apple Silicon macOS. Python 3.12+,
+Xcode, CMake, Ninja, current Bison and Flex are required. It does not register a
+Steam compatibility tool, select a runtime in Nucleon, or launch Steam.
+
+Sources and the LLVM-MinGW compiler are pinned in
+[`arm64-fex.toml`](../assets/wine/recipes/arm64-fex.toml). The compiler archive is
+verified before extraction. Builds use `target/arm64-fex`; existing game prefixes
+and installed runtimes are not build inputs or destinations.
+
+## MacRunner / HyperBridge
+
+```sh
+python3 tools/arm64_fex.py fetch
+python3 tools/arm64_fex.py doctor
+python3 tools/arm64_fex.py build-fex
+python3 tools/arm64_fex.py build-wine
+python3 tools/arm64_fex.py probe
+```
+
+The Wine base is MacRunner's public fork of CrossOver 26.1.0/Wine 11.0 source.
+It does not require the installed CrossOver application. Wine and its retained
+HyperBridge dependency keep their LGPL/MIT licenses and upstream notices.
+The FEX build applies HyperBridge's ordered Darwin patches to the pinned FEX
+base. Only the x64 emulator is built on this route; it is not yet a complete
+32/64-bit game runtime.
+
+Local validation on 2026-10-15:
+
+- Wine and ARM64EC FEX compiled and installed into the work directory.
+- LLVM identifies the emulator as ARM64EC; its Mach-O companions are ARM64.
+  The raw PE machine field alone is insufficient to identify an ARM64EC image.
+- Building Wine with Vulkan disabled needed the included, small `vulkan.c`
+  patch: the fork otherwise referenced an undefined Vulkan library name.
+- `wine --version` works, but launching the owned Windows workload exits with
+  `macrunner-signed32: reserve PAGEZERO: Cannot allocate memory`.
+- A native host probe confirms 16 KiB host pages and denies the low mapping.
+  The selected Wine loader needs appropriate cross-architecture provisioning.
+
+Compilation is not recorded as successful Windows execution. This source-built
+runtime is not ready for game use.
+
+## Entitlement-free alternative
+
+```sh
+python3 tools/arm64_fex.py fetch --variant tolkara
+python3 tools/arm64_fex.py build-fex --variant tolkara
+python3 tools/arm64_fex.py build-wine --variant tolkara
+python3 tools/arm64_fex.py probe --variant tolkara --window
+```
+
+This uses the separately pinned Tolkara Wine/FEX branches and stores products
+under `target/arm64-fex/tolkara`. Its two emulator modules use the matching Wine
+fork's relocated guest-address and thread-local-state conventions. They are
+not replacements to copy into the MacRunner-based runtime. This route does not
+build a native FEX Unix companion; unsupported optional UnixLib facilities use
+the fork's fallback behavior.
+
+On the test Mac this variant passes memory operations, thread atomics,
+exception handling, self-modifying x64 code, child processes and a bounded GDI
+window test. It uses software x86 memory ordering and requires neither Rosetta
+nor Apple cross-architecture provisioning for these tests. The x86 emulator was
+used during prefix initialization; broader 32-bit gameplay is not established.
+
+Two downstream Wine patches supply the missing ARM64EC `___chkstk_ms` export
+using Wine's existing stack-probe implementation, and emulate bounded scalar
+reads of the relocated Windows shared-data page. The latter copies the original
+read decoder from the pinned MacRunner Wine source, checks its checksum, and
+reads Wine's live shared mapping. Stores, out-of-page accesses, unsupported
+instructions and alignment failures retain the ordinary exception path. It is
+enabled by `NUCLEON_EMULATE_KUSD=1` in the prototype environment. The CPU test
+checks both valid reads and preserved write/bounds protection. Its negative
+control disables the handler and must fail at the shared-data read.
+
+Read `probes/result.json` inside the selected work directory for actual
+execution status. Build completion alone does not establish successful execution.
+
+## Offscreen Direct3D 11 / Metal
+
+```sh
+python3 tools/arm64_fex.py fetch --variant tolkara --reference
+python3 tools/arm64_fex.py probe-dxmt --variant tolkara
+```
+
+This optional test uses graphics components from the checksum-pinned MacRunner
+archive, rather than rebuilding DXMT. It verifies the archived component hashes,
+stages private copies and ad-hoc signs the unprivileged ARM64 Metal companion.
+The original reference bundle and privileged loader are not modified. The DXMT
+PE frontend is x64 code translated by FEX; its Unix companion is ARM64. This is
+not yet an ARM64EC-native DXMT frontend build.
+
+The test initializes a dedicated prefix before staging the matching native DLLs,
+creates a feature-level 11_0 device, checks a GPU texture copy and compiles vertex
+and pixel shaders. It draws an offscreen triangle, validates green center/black
+corner pixels and saves `probes/triangle.ppm`. A second run disables drawing and
+must fail the center-pixel check. Results and component hashes are recorded in
+`probes/d3d11-result.json` under `target/arm64-fex/tolkara`.
+
+The offscreen tests alone do not validate swap-chain presentation, game workloads,
+performance, media playback or Steamworks. Wine needs local IPC sockets and
+window/GPU access, which the development sandbox may restrict; an IPC permission
+error is distinct from a Wine/FEX compatibility failure.
+
+## DiRT Rally 2.0 launch
+
+On 2026-10-15, DiRT Rally 2.0 reached its title screen/menu with this Tolkara
+runtime, FEX and the reference DXMT components; the user confirmed the visible
+result. The game connected to the signed-in native macOS Steam client through
+Nucleon's locally installed ARM64 Unix `lsteamclient` companion and translated
+x64 PE bridge. No Windows Steam installation was needed. Racing, performance,
+controllers and complete game compatibility have not been validated.
+
+The downstream `wine-tolkara-dxmt-window.patch` provides the reference DXMT's
+legacy window-function table and adapts its window-data layout. Before an
+OpenGL/Vulkan client surface exists, it attaches Metal to the real toplevel
+window's content view. The launch log confirms `attached_to_hwnd=1`; no orphan
+window fallback is enabled. This private adapter targets the pinned DXMT ABI,
+not arbitrary third-party window integrations.
+
+After the preceding build and DXMT staging steps, start native Steam and run:
+
+```sh
+python3 tools/launch_dirt_fex.py
+```
+
+This helper requires Nucleon's existing local bridge, including
+`aarch64-unix/lsteamclient.so`, and uses the separate `dirt-690790` prefix.
+`--game-dir`, `--bridge` and `--work` override local locations. It binds and signs
+only private bridge copies against this Wine's ARM64 ntdll; Nucleon's production
+profile remains unchanged. Logs and per-launch component hashes go into the
+variant's `logs/` directory. Steam cloud/user saves still use the real Steam
+user-data directory. Close an existing prototype game before relaunching.
+
+The bridge is a local prerequisite, not a new pinned build product; this helper
+does not claim to reproduce its build from the prototype recipe.
+
+## Owned workload and evidence
+
+The probe compiles `runtime-probes/windows.c` as an x64 executable and tests
+memory operations, four-thread atomic increments, Windows exception handling,
+self-modifying x64 code, and a child process with a known exit code. `--window`
+also creates, paints and closes an owned test window after one second. It uses a
+prefix under the experiment directory, a bounded run and prefix-scoped server
+cleanup. It never starts Steam or a game. The native host probe runs separately;
+its permissions describe that probe, not a separately provisioned Wine loader.
+
+Logs are in `logs/`, compiler/runtime receipts are `build.json`, and probe
+results are in `probes/`. MacRunner and Tolkara products have distinct log and
+prefix directories. Preserve failed logs when investigating. Wine/FEX binaries,
+their matching source trees and archives stay under the ignored build directory.
+
+For the separately downloaded MacRunner 1.0.9 reference archive, the published
+SHA256 is in the recipe. `check-reference` verifies that archive and the extracted
+launcher signature; it does not execute the launcher. On this Mac, the archive
+checksum matched but `codesign --verify --strict` rejected the Wine loader and
+`codesign -d --entitlements` reported an invalid entitlements blob. Its extracted
+loader bytes matched those in the archive. It was not used to run Windows code.
+
+```sh
+python3 tools/arm64_fex.py check-reference
+```
+
+This optional check expects the archive in the work directory and its extracted
+bundle under `reference/`. A full dependency rebuild, graphics integration,
+portable signing and Nucleon's native Steam bridge are later milestones.
