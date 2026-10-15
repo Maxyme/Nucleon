@@ -1,0 +1,29 @@
+--- a/dlls/ntdll/loader.c
++++ b/dlls/ntdll/loader.c
+@@ -3982,6 +3982,26 @@
+  */
+ void WINAPI RtlExitUserProcess( DWORD status )
+ {
++    UNICODE_STRING name = RTL_CONSTANT_STRING( L"NUCLEON_TRACE_PROCESS_EXIT" );
++    WCHAR enabled[2];
++    UNICODE_STRING value = { 0, sizeof(enabled), enabled };
++
++    if (!RtlQueryEnvironmentVariable_U( NULL, &name, &value ) &&
++        value.Length == sizeof(WCHAR) && enabled[0] == '1')
++    {
++        void *frames[24];
++        ULONG count = RtlCaptureStackBackTrace( 0, ARRAY_SIZE(frames), frames, NULL ), i;
++        WARN_(loaddll)( "Nucleon process exit status=%08lx frames=%lu\n", status, count );
++        for (i = 0; i < count; ++i)
++        {
++            LDR_DATA_TABLE_ENTRY *entry;
++            if (!LdrFindEntryForAddress( frames[i], &entry ))
++                WARN_(loaddll)( "Nucleon exit frame %lu: %s+%Ix (%p)\n", i,
++                                debugstr_w(entry->BaseDllName.Buffer),
++                                (char *)frames[i] - (char *)entry->DllBase, frames[i] );
++            else WARN_(loaddll)( "Nucleon exit frame %lu: %p\n", i, frames[i] );
++        }
++    }
+     RtlEnterCriticalSection( &loader_section );
+     RtlAcquirePebLock();
+     NtTerminateProcess( 0, status );

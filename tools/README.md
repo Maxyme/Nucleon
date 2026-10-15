@@ -164,3 +164,109 @@ python3 tools/arm64_fex.py check-reference
 This optional check expects the archive in the work directory and its extracted
 bundle under `reference/`. A full dependency rebuild, graphics integration,
 portable signing and Nucleon's native Steam bridge are later milestones.
+
+## Experimental Direct3D 12 / DMC5
+
+The DX12 work has a separate recipe, source checkout, Wine build, driver, caches
+and prefixes under `target/arm64-fex/dx12`. It reuses the pinned Tolkara FEX
+modules from the CPU prototype. It does not select an installed Nucleon runtime.
+
+Additional build dependencies are the Vulkan macOS SDK (tested: 1.4.363.0),
+Homebrew LLVM and matching SPIR-V LLVM translator, glslang, SPIR-V tools and Ninja.
+The driver builder creates its own Python environment with pinned packages.
+Build the base Tolkara/FEX experiment first, then:
+
+```sh
+python3 tools/arm64_fex_dx12.py fetch
+python3 tools/arm64_fex_dx12.py build-driver
+python3 tools/arm64_fex_dx12.py build-wine
+python3 tools/arm64_fex_dx12.py probe-driver
+python3 tools/arm64_fex_dx12.py probe-vulkan
+python3 tools/arm64_fex_dx12.py probe-d3d12
+```
+
+`--sdk`, `--work` and `--jobs` override local paths and parallelism. `fetch` checks
+pinned sources and graphics archive hashes. The Wine build enables the Khronos
+Vulkan loader; the driver build applies Steamac's pinned KosmicKrisp patch set to
+its exact Mesa base. It preserves changed source trees instead of resetting them.
+The private driver directory precedes the SDK in `DYLD_LIBRARY_PATH`: otherwise
+macOS can substitute the SDK's same-named, unpatched driver even when the ICD
+manifest names the private path.
+
+Actual checks on 2026-10-15:
+
+- Patched ARM64 KosmicKrisp: capability, geometry, robustness, GPU device-address,
+  single-texel alignment and query GPU checks passed. The sparse suite reports
+  **two D32 sparse depth rendering failures**, in one and two render passes.
+  `probe-driver` deliberately exits nonzero and records them. It is not a fully
+  passing driver; geometry-strip transform-feedback limitations also remain
+  documented upstream. Ordinary sparse buffer/image checks passed.
+- x64 Windows Vulkan through FEX: native device creation, required feature-chain
+  queries and a Win32 surface passed. The log identifies the patched Mesa driver.
+- DX12: compute dispatch and exact readback, command fences, triangle readback,
+  60 window presents and resizing passed. Disabling drawing produced the expected
+  black center pixel and failure, verifying the positive readback check.
+
+The DX12 shader probe needs a licensed x64 Microsoft `d3dcompiler_47.dll` because
+this Wine's builtin compiler does not implement its SM5 compute shader. By default
+it stages a private copy from the installed DiRT Rally 2.0 directory; set
+`NUCLEON_PROBE_D3DCOMPILER=/absolute/path/d3dcompiler_47.dll` to use another licensed
+copy. The receipt records its hash. This DLL is neither downloaded nor included
+in Nucleon's source or distributions.
+
+For the real native Steam connection, start Steam and sign in before:
+
+```sh
+python3 tools/arm64_fex_dx12.py probe-steam
+python3 tools/launch_dmc5_fex.py
+```
+
+The launcher requires Nucleon's existing `bridge/aarch64-unix/lsteamclient.so`,
+`bridge/x86_64-windows/lsteamclient.dll` and the original
+`bridge/steamclient64.dll.valve`, plus the existing `bridge/steam.exe` helper. `--bridge` and `--game-dir` override local paths;
+`NUCLEON_STEAM_BRIDGE` overrides the bridge location for `probe-steam`. The loader
+probe validates a real Steam pipe/user and the installed game SDK's
+`SteamAPI_IsSteamRunning`/`SteamAPI_Init`, verifies the exported function still
+belongs to the original Valve image and checks its unchanged on-disk hash. Its
+negative control disables the redirect and must fail to load that Windows client
+without its Windows-only dependencies. A second negative control sets the
+Windows Steam PID to zero and requires the SDK to report Steam unavailable.
+`NUCLEON_STEAM_API` can select another installed, licensed game SDK DLL for this
+probe; the default is DMC5's `steam_api64.dll`. It is not redistributed.
+
+The Wine redirect is opt-in, preserves Valve's DLL on disk and forwards only
+AMD64 images without ARM64EC metadata to the x64 bridge. Its load flags are
+adapted to this older Wine fork. The bridge's Unix half stays native ARM64 and
+is bound to the selected runtime's own ntdll, using signed private copies.
+
+`launch_dmc5_fex.py` launches through the existing Steam helper using a Windows
+game path and forces DX12 in a backed-up INI,
+with API fallback disabled. It restores the original bytes on normal exit,
+errors, interruption or SIGTERM. The per-run INI backup and JSON receipt remain
+under `logs/` for recovery after an uncatchable termination. Close the game before
+stopping the launcher; settings changed in-game during this experiment are
+replaced by the original INI on exit. Steam user saves remain real. Concurrent
+prototype launches are rejected with a lock. `--timeout SECONDS` makes a bounded
+diagnostic run; `--api dx11` selects the separate DXMT control prefix. `--debug`
+adds timestamped dialog/exception/process logging and opt-in Wine process-exit
+and quit-message stack traces. Receipts record duration and leave gameplay explicitly unconfirmed
+regardless of the process exit code.
+
+The user confirmed DMC5's title screen/menu on 2026-10-15 through the ARM64/FEX
+DX12 path, with VKD3D-Proton 3.0.1 and a 1920×1080, three-buffer swapchain.
+The initial direct launch created its swapchain but showed a black window and
+exited zero: the SDK's Windows Steam-presence check failed. The existing helper
+supplies its live Windows PID while the bridge continues to use real native
+Steam. The regression probe checks this distinction using the actual game SDK.
+
+The user confirmed that the menu run closed unexpectedly, with a Wine heap
+fault during teardown (child status
+`c0000005`, helper exit 5). The game posted its quit message before that fault.
+A repeat DX12 run stayed open for its full 125-second limit without a recorded
+quit or unhandled exception; the timeout cleanup restored the original INI.
+The DX11 control also took the same scripted quit path, exiting zero at about
+100 seconds. The earlier exit remains unresolved. This is menu confirmation,
+not a claim of stable gameplay or video playback.
+The native driver's two sparse-depth failures also remain. Production Nucleon
+integration stays gated on those broader checks. `dmc5-validation.json` records
+visual confirmation separately from process exit and smoke-test results.

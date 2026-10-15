@@ -49,6 +49,19 @@ def write_json(path, value):
         temporary.unlink(missing_ok=True)
 
 
+def atomic_copy(source, destination):
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(dir=destination.parent, delete=False) as stream:
+        temporary = Path(stream.name)
+    try:
+        shutil.copy2(source, temporary)
+        with temporary.open('rb') as stream:
+            os.fsync(stream.fileno())
+        temporary.replace(destination)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 def environment(toolchain):
     env = {k: v for k, v in os.environ.items()
            if not k.startswith(("WINE", "DYLD_", "FEX_", "MACRUNNER_"))
@@ -73,10 +86,21 @@ def run(argv, *, cwd=None, env=None, log=None, timeout=None, expected=0):
         except BaseException:
             try:
                 os.killpg(process.pid, signal.SIGTERM)
-                time.sleep(0.5)
+            except ProcessLookupError:
+                pass
+            try:
+                process.wait(timeout=0.5)
+            except subprocess.TimeoutExpired:
+                pass
+            try:
                 os.killpg(process.pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
+            except PermissionError:
+                # An exited group can become unsignalable on macOS. Keep the
+                # original failure if the owned leader has already exited.
+                if process.poll() is None:
+                    raise
             process.wait()
             raise
         if code != expected:
@@ -406,8 +430,10 @@ class Experiment:
             WINEDLLOVERRIDES="winedbg.exe=d;winemenubuilder.exe=d;mscoree=d;mshtml=d", WINEDEBUG="+loaddll")
         if self.variant == "tolkara":
             for directory, name in [("arm64ec", "libarm64ecfex.dll"), ("wow64", "libwow64fex.dll")]:
-                shutil.copy2(self.work / "fex" / directory / "Bin" / name,
-                             runtime / "lib/wine/aarch64-windows" / name)
+                source = self.work / "fex" / directory / "Bin" / name
+                target = runtime / "lib/wine/aarch64-windows" / name
+                if not target.exists() or sha(source) != sha(target):
+                    atomic_copy(source, target)
             env = {k: v for k, v in env.items() if not k.startswith("MACRUNNER_")}
             env["WINEDLLPATH"] = str(runtime / "lib/wine/aarch64-windows")
             env["NUCLEON_EMULATE_KUSD"] = "1"

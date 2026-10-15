@@ -198,3 +198,45 @@ work from DMC5's Steam/CPU behavior. ARM64EC graphics optimization and Nucleon U
 integration can follow. No reliable completion estimate follows from the current
 evidence: the build integration is bounded, while shader/driver and game-specific
 compatibility remain open-ended.
+
+
+## Implementation follow-up — 2026-10-15
+
+Implemented in `tools/arm64_fex_dx12.py`, `tools/launch_dmc5_fex.py` and the
+separate `arm64-fex-dx12.toml` recipe. The pinned patched driver builds with
+system-only native dependencies. Windows Vulkan device/feature chains/surface,
+DX12 compute readback, fences, triangle readback, presentation and resizing pass.
+The no-draw negative control correctly fails pixel validation.
+
+The user confirmed DMC5's title screen/menu through ARM64 Wine/FEX, VKD3D-Proton
+3.0.1 and the native KosmicKrisp driver. The first direct launches created a DX12
+swapchain but showed black and exited zero. Opt-in Wine quit-message stacks
+identified the game calling `SteamAPI_IsSteamRunning`, requesting Steam restart
+and posting message `0x8020` when the presence check failed. A bounded LLVM
+inspection of the game's delay-import table and its SDK corroborated the call:
+this SDK reads Windows Steam's active PID and opens that process. The original
+pipe/user-only probe did not cover that check.
+
+The final launcher reuses Nucleon's existing Steam helper with a Windows game
+path. The helper supplies the live Windows process while the ARM64 bridge
+connects to real native Steam. The final probe validates the installed SDK's
+real `SteamAPI_IsSteamRunning` and `SteamAPI_Init`, original Valve export owner
+and unchanged DLL bytes. Negative controls require Steam-unavailable without
+helper presence and Valve-client load failure with redirect disabled.
+
+The user confirmed that the menu run closed unexpectedly. It posted its quit
+message and faulted in Wine's heap
+free-list insertion (`insert_free_block`, child `c0000005`, helper exit 5).
+This remains an experimental stability limitation; mission, video, controller,
+save/relaunch and performance remain unvalidated. Two native sparse D32
+rendering cases also still fail. A repeat DX12 run stayed open for 125 seconds without a quit marker or unhandled
+exception, then completed its bounded cleanup. The DX11 control also took the
+same scripted quit path, exiting zero around 100 seconds. The earlier unexpected
+exit is unresolved. Every launcher exit restores the original INI.
+Visual, process and smoke-test results are recorded separately.
+
+The REA/Hopper attempt timed out during broad analysis; its demo edition could
+not save the incomplete document. No completed REA function analysis was
+obtained. The focused LLVM observations above are ordinary tool evidence, not
+REA evidence. Runtime stacks, disassembly, `dmc5-validation.json` and game/probe
+logs remain under the ignored DX12 work directory.

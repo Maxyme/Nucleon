@@ -27,3 +27,10 @@ terms, including the warranty disclaimer and source distribution requirements.
 - Valve client libraries, Apple GPTK/D3DMetal, and graphics translation runtimes
   retain their own terms. Nucleon's license does not grant redistribution rights
   to those components.
+- The DX12 prototype builds Mesa KosmicKrisp with a pinned Steamac patch series.
+  Mesa retains its file-specific licenses and notices; Steamac is Apache-2.0,
+  and imported upstream patches retain their own notices. Source pins, patch
+  hashes and native build receipts are kept with the private driver. Official
+  VKD3D-Proton and DXVK Windows releases retain their LGPL terms. The shader
+  probe can use a separately licensed Microsoft compiler from a local game;
+  that proprietary DLL is not redistributed by this repository.

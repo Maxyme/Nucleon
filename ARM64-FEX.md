@@ -2,8 +2,8 @@
 
 Investigation and prototype date: 2026-10-15. This is an isolated experimental
 runtime. DiRT Rally 2.0 reached its title screen/menu through native Steam,
-confirmed by the user; gameplay and performance remain unverified. DMC5 has not
-been tested on this runtime.
+confirmed by the user; gameplay and performance remain unverified. DMC5 has now been tested through the separate DX12 runtime: Steam and a DX12
+swapchain initialize, with visible menu/gameplay still unconfirmed.
 
 The executable prototype and its pinned recipe are documented in
 [tools/README.md](tools/README.md). Both Wine/FEX variants were built from
@@ -182,3 +182,18 @@ Metal to the actual game window (`attached_to_hwnd=1`). This establishes a first
 presented game workload, not racing/performance or broad compatibility. The
 production DiRT profile was not changed. See `tools/README.md` and
 `tools/launch_dirt_fex.py` for the separate-prefix launch and local prerequisites.
+
+
+### Direct3D 12 implementation (2026-10-15)
+
+The separate DX12 recipe and build/launch tools now build Vulkan-enabled native
+Wine and a pinned patched ARM64 KosmicKrisp driver. Windows Vulkan device/surface
+and DX12 compute/readback/fence/triangle/presentation/resize probes pass through
+FEX, including a no-draw negative control. The adapted Steam export redirect
+passes a real native Steam pipe/user test with an unchanged Valve DLL on disk.
+The user confirmed DMC5's title screen/menu with a 1920×1080 DX12 swapchain.
+The existing Steam helper supplies the live Windows client presence required
+by the game SDK, while the ARM64 bridge connects to real native Steam. The first menu run later faulted in Wine heap cleanup; a repeat DX12 run stayed
+open for its 125-second test limit. Gameplay/video/stability remain unvalidated.
+The driver still fails two D32 sparse-depth cases. Reproduction and limitations
+are in [tools/README.md](tools/README.md#experimental-direct3d-12--dmc5).
