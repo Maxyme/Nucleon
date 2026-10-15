@@ -9,7 +9,9 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import tomllib
+import zipfile
 
 from arm64_fex import (Experiment, REPO, apply_wine_patches, atomic_copy, checkout, output,
                        run, sha, source_diff, write_json)
@@ -38,6 +40,107 @@ class DX12:
         self.wine = self.sources / 'wine'
         self.probes = self.work / 'probes'
         self.probes.mkdir(exist_ok=True)
+
+    def prepare_runtime(self):
+        """Assemble a local descriptor-backed generation for the normal Rust runner.
+
+        This is a developer build artifact, not a managed installation or download.
+        Sources, production prefixes and global Wine selection remain untouched.
+        """
+        source = self.work / 'runtime'
+        if not (source / 'bin/wine').is_file():
+            source = self.base.work / 'runtime'
+        receipt = json.loads((source / 'build.json').read_text())
+        for name, expected in receipt['host_files'].items():
+            if sha(source / name) != expected:
+                raise ValueError('Built Wine boundary changed: ' + name)
+        dxmt = self.base.work / 'dxmt'
+        pieces = {str(p.relative_to(dxmt)): sha(p) for p in sorted(dxmt.rglob('*')) if p.is_file()}
+        if not pieces:
+            raise ValueError('Stage the validated ARM64 DXMT components first')
+        vulkan = (source / 'lib/wine/aarch64-unix/winevulkan.so').is_file()
+        driver = self.work / 'driver'
+        loader = self.sdk / 'lib/libvulkan.1.dylib'
+        graphics = self.graphics() if vulkan else None
+        inputs = dict(wine=receipt,dxmt=pieces,recipe_sha256=sha(RECIPE),
+                      contract=2,vulkan=vulkan,reference_sha256=self.base.recipe['reference']['sha256'])
+        sdk_notice = self.sdk.parent / 'Licenses/LICENSE.txt'
+        if vulkan and sdk_notice.is_file(): inputs['sdk_notice_sha256'] = sha(sdk_notice)
+        if vulkan:
+            inputs.update(driver=json.loads((driver / 'build.json').read_text()),loader_sha256=sha(loader))
+            if sha(driver / 'libvulkan_kosmickrisp.dylib') != inputs['driver']['driver_sha256']:
+                raise ValueError('Driver does not match its build receipt')
+            inputs['graphics'] = json.loads((graphics / 'build.json').read_text())
+        import hashlib
+        generation = hashlib.sha256(json.dumps(inputs,sort_keys=True).encode()).hexdigest()[:20]
+        parent = self.base.workspace / 'integrated'
+        parent.mkdir(exist_ok=True)
+        target = parent / generation
+        if (target / 'nucleon-runtime.toml').is_file():
+            print(target,flush=True)
+            return target
+        with tempfile.TemporaryDirectory(prefix='.prepare-',dir=parent) as temporary:
+            stage = Path(temporary) / 'runtime'
+            run(['/bin/cp','-cR',source,stage],log=self.logs / 'integration-copy.log')
+            shared = stage / 'share/nucleon'
+            shared.mkdir(exist_ok=True,parents=True)
+            shutil.copytree(dxmt,shared / 'dxmt')
+            # The original build workflow stages these during CPU tests. Ensure
+            # the complete emulator pair is present in this independent copy.
+            for directory,name in [('arm64ec','libarm64ecfex.dll'),('wow64','libwow64fex.dll')]:
+                atomic_copy(self.base.work / 'fex' / directory / 'Bin' / name,
+                            stage / 'lib/wine/aarch64-windows' / name)
+            settings = [
+                'schema = 1', 'mode = "arm64-fex"', 'guests = ["x64", "x86"]',
+                'loader = "bin/wine"', 'server = "bin/wineserver"',
+                'unix_dir = "lib/wine/aarch64-unix"',
+                'windows_dirs = ["lib/wine/aarch64-windows", "lib/wine/i386-windows"]',
+                'backends = ["auto", "dxmt"' + (', "dxvk", "kosmickrisp"]' if vulkan else ']'),
+                'steam_helper = true',
+                'steam_protocol = "' + ('valve-redirect' if vulkan else 'bridge') + '"',
+                '[prefix]', 'family = ' + json.dumps(self.pin['integration']['prefix_family']),
+                'abi = ' + str(self.pin['integration']['prefix_abi']),
+                '[[emulators]]', 'guest = "x64"', 'path = "lib/wine/aarch64-windows/libarm64ecfex.dll"',
+                '[[emulators]]', 'guest = "x86"', 'path = "lib/wine/aarch64-windows/libwow64fex.dll"',
+                '[environment]', 'FEX_TSOENABLED = "1"', 'NUCLEON_EMULATE_KUSD = "1"',
+                '[graphics]', 'dxmt = "share/nucleon/dxmt"',
+            ]
+            if vulkan:
+                shutil.copytree(driver,stage / 'lib/vulkan')
+                atomic_copy(loader,stage / 'lib/vulkan/libvulkan.1.dylib')
+                shutil.copytree(graphics,shared / 'graphics')
+                settings += ['dxvk = "share/nucleon/graphics"','vkd3d = "share/nucleon/graphics"',
+                             'vulkan_icd = "lib/vulkan/kosmickrisp_icd.json"',
+                             'vulkan_loader = "lib/vulkan/libvulkan.1.dylib"']
+                sdk_license = self.sdk / 'share/vulkan/LICENSE.txt'
+                if sdk_license.is_file(): atomic_copy(sdk_license,shared / 'VULKAN-LOADER-LICENSE')
+            reference = self.base.workspace / self.base.recipe['reference']['archive']
+            if sha(reference) != self.base.recipe['reference']['sha256']:
+                raise ValueError('Reference archive checksum mismatch for DXMT notices')
+            licenses = stage / 'share/licenses/dxmt'
+            licenses.mkdir(parents=True,exist_ok=True)
+            with zipfile.ZipFile(reference) as package:
+                for name in ['dxmt-LICENSE','dxmt-COPYING.LIB']:
+                    data = package.read('MacRunner.app/Contents/Resources/engine/licenses/' + name)
+                    (licenses / name).write_bytes(data)
+                (licenses / 'ENGINE.json').write_bytes(package.read('MacRunner.app/Contents/Resources/engine/ENGINE.json'))
+            sdk_notice = self.sdk.parent / 'Licenses/LICENSE.txt'
+            if vulkan and sdk_notice.is_file():
+                atomic_copy(sdk_notice,shared / 'LUNARG-SDK-LICENSES.txt')
+            shutil.copy2(RECIPE,shared / RECIPE.name)
+            write_json(shared / 'local-import-provenance.json',dict(
+                usage='LOCAL_IMPORT_NOT_A_REDISTRIBUTION_PACKAGE',
+                dxmt_reference=self.base.recipe['reference'],vulkan_sdk=str(self.sdk),
+                vulkan_loader_license='SDK overview preserved; component notices must be supplied before redistribution',
+                driver='Mesa and Steamac notices in lib/vulkan',
+                wine_fex='Sources and notices in share/licenses and share/nucleon-build'))
+            write_json(shared / 'integration-inputs.json',inputs)
+            # Publish readiness last, after all files exist. A failed copy leaves
+            # no visible generation and does not replace any existing runtime.
+            (stage / 'nucleon-runtime.toml').write_text('\n'.join(settings) + '\n')
+            stage.rename(target)
+        print(target,flush=True)
+        return target
 
     def fetch(self):
         self.sources.mkdir(exist_ok=True)
@@ -431,7 +534,7 @@ class DX12:
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('action', choices=['fetch','build-wine','build-driver','probe-driver','probe-vulkan','probe-d3d12','probe-steam'])
+    p.add_argument('action', choices=['fetch','build-wine','build-driver','prepare-runtime','probe-driver','probe-vulkan','probe-d3d12','probe-steam'])
     p.add_argument('--work', type=Path, default=REPO / 'target/arm64-fex')
     p.add_argument('--sdk', type=Path, default=Path.home() / 'VulkanSDK/1.4.363.0/macOS')
     p.add_argument('--jobs', type=int, default=6)

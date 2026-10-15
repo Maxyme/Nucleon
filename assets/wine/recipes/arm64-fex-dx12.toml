@@ -1,5 +1,9 @@
 schema = 1
 
+[integration]
+prefix_family = "tolkara-fex"
+prefix_abi = 1
+
 [steamac]
 url = "https://github.com/fxgl/steamac.git"
 revision = "6ef3992d869e41291bb2841bef2e71ae318d2a02"

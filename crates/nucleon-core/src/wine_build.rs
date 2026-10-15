@@ -208,20 +208,7 @@ fn output_location(output: &Path) -> Result<PathBuf> {
 }
 
 fn publish(staged: &Path, output: &Path) -> Result<()> {
-    // A single same-filesystem rename publishes the complete tree. NOREPLACE
-    // also prevents clobbering an output created after the initial check.
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
-    rustix::fs::renameat_with(
-        rustix::fs::CWD,
-        staged,
-        rustix::fs::CWD,
-        output,
-        rustix::fs::RenameFlags::NOREPLACE,
-    )
-    .with_context(|| format!("Publish runtime without replacing {}", output.display()))?;
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-    bail!("Atomic runtime publication is unavailable on this platform");
-    Ok(())
+    crate::downloads::publish_new(staged, output)
 }
 
 fn find_root(directory: &Path, depth: usize) -> Result<PathBuf> {

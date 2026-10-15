@@ -1,9 +1,16 @@
 # Native ARM64 Wine + FEX on macOS
 
 Investigation and prototype date: 2026-10-15. This is an isolated experimental
-runtime. DiRT Rally 2.0 reached its title screen/menu through native Steam,
-confirmed by the user; gameplay and performance remain unverified. DMC5 has now been tested through the separate DX12 runtime: Steam and a DX12
-swapchain initialize, with visible menu/gameplay still unconfirmed.
+runtime. DiRT Rally 2.0 and DMC5 reached their title screen/menu through native
+Steam, confirmed by the user. Gameplay and performance remain unverified;
+DMC5 had an unexpected later exit. The separate DX12 runtime passes its GPU
+probes, with the driver limitations recorded below.
+
+Runtime capability descriptions and architecture-aware launch/prefix preparation
+are now implemented in Nucleon core. See [the runtime contract](RUNTIME-DESCRIPTORS.md)
+for descriptor layout, checks and remaining integration work. The research notes
+below include the earlier feasibility checklist and should be read with the
+implementation results at the end of this document.
 
 The executable prototype and its pinned recipe are documented in
 [tools/README.md](tools/README.md). Both Wine/FEX variants were built from

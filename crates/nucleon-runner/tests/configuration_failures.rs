@@ -86,3 +86,33 @@ fn valid_per_game_paths_override_stale_global_paths() {
         "{log}"
     );
 }
+
+#[test]
+fn explicit_diagnostic_profile_is_loaded_and_does_not_consume_global_override() {
+    let dir = tempfile::tempdir().unwrap();
+    let profile = dir.path().join("diagnostic.json");
+    let global = dir.path().join("launch_override_123.json");
+    fs::write(&global, "malformed and must remain untouched").unwrap();
+    for contents in [None, Some(r#"{"engine":"dxmtt"}"#)] {
+        if let Some(text) = contents {
+            fs::write(&profile, text).unwrap();
+        }
+        let output = Command::new(env!("CARGO_BIN_EXE_nucleon-runner"))
+            .env_clear()
+            .env("NUCLEON_SUPPORT_DIR", dir.path())
+            .env("STEAM_COMPAT_APP_ID", "123")
+            .env("NUCLEON_GAME_PROFILE", &profile)
+            .args(["run", "/does-not-exist/game.exe"])
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        let log = fs::read_to_string(dir.path().join("nucleon-runner.log")).unwrap();
+        assert!(log.contains(&profile.display().to_string()), "{log}");
+        assert!(!log.contains("malformed and must"), "{log}");
+        assert_eq!(
+            fs::read_to_string(&global).unwrap(),
+            "malformed and must remain untouched"
+        );
+        assert!(!dir.path().join("default_prefix/pfx").exists());
+    }
+}

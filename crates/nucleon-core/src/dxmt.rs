@@ -122,6 +122,8 @@ fn inspect_bundle_layout(dir: &Path) -> Option<DxmtBundle> {
 
     let x64_unix = if dir.join("x86_64-unix").is_dir() {
         dir.join("x86_64-unix")
+    } else if dir.join("aarch64-unix").is_dir() {
+        dir.join("aarch64-unix")
     } else {
         dir.to_path_buf()
     };
@@ -283,6 +285,28 @@ pub fn clear_custom_dxmt_path() -> Result<()> {
 
 /// Builtin DXMT DLLs must match the selected Wine runtime.
 pub fn validate_runtime(bundle: &DxmtBundle, runner_dir: Option<&Path>) -> Result<()> {
+    if let Some(runner) = runner_dir
+        && runner.join(crate::runtime::DESCRIPTOR).is_file()
+    {
+        let runtime = crate::runtime::ResolvedRuntime::inspect(runner)?;
+        if runtime.mode == crate::runtime::ExecutionMode::Arm64Fex {
+            anyhow::ensure!(
+                runtime.backends.contains(&GraphicsBackend::Dxmt)
+                    && runtime.graphics.dxmt.as_deref().is_some_and(|p| bundle
+                        .root
+                        .canonicalize()
+                        .ok()
+                        .as_deref()
+                        == Some(p))
+                    && bundle
+                        .x64_winemetal_so
+                        .as_deref()
+                        .is_some_and(|p| crate::runtime_checks::native_arch(p, runtime.arch())),
+                "DXMT requires the explicitly paired ARM64 runtime bundle and Unix companion"
+            );
+            return Ok(());
+        }
+    }
     if bundle.uses_builtin_dlls()
         && let Some(runner) = runner_dir
     {

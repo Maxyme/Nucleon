@@ -9,10 +9,17 @@ pub mod dxvk;
 pub mod fs_util;
 pub mod gptk_abi;
 pub mod guard;
+pub mod launch;
+pub mod managed_runtime;
 pub mod manifest;
 pub mod paths;
 pub mod prefix;
+pub mod prefix_session;
+pub mod process;
+pub mod profile;
 pub mod runner;
+pub mod runtime;
+pub(crate) mod staging;
 pub mod steam;
 pub mod steam_contract;
 #[cfg(target_os = "macos")]

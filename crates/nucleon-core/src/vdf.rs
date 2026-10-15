@@ -35,6 +35,10 @@ pub fn generate_run_script() -> String {
     generate_run_script_for_engine(None)
 }
 
+pub fn generate_fex_run_script() -> &'static str {
+    "#!/bin/sh\nDIR=\"$(cd \"$(dirname \"$0\")\" && pwd)\"\nexport NUCLEON_FEX_SELECTION=\"$DIR/fex-runtime.json\"\nexec \"$DIR/nucleon-runner\" \"$@\"\n"
+}
+
 pub fn generate_run_script_for_engine(engine: Option<&str>) -> String {
     generate_run_script_full(engine, None)
 }

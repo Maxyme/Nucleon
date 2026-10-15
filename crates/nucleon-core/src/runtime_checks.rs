@@ -36,7 +36,13 @@ pub(crate) fn native_arch(path: &Path, arch: Architecture) -> bool {
         .unwrap_or(false)
 }
 
+#[cfg(test)]
 pub(crate) fn wine_arch(root: &Path) -> Option<Architecture> {
+    if root.join(crate::runtime::DESCRIPTOR).exists() {
+        return crate::runtime::ResolvedRuntime::inspect(root)
+            .ok()
+            .map(|r| r.arch());
+    }
     // Prefer the host ntdll over launch scripts or universal executable wrappers.
     for (dir, arch) in [
         ("x86_64-unix", Architecture::X86_64),
@@ -59,6 +65,7 @@ pub(crate) fn wine_arch(root: &Path) -> Option<Architecture> {
     None
 }
 
+#[cfg(test)]
 pub(crate) fn dxmt(bundle: &crate::dxmt::DxmtBundle, root: &Path, is64: bool) -> bool {
     let files = if is64 {
         [
@@ -85,22 +92,72 @@ pub(crate) fn dxmt(bundle: &crate::dxmt::DxmtBundle, root: &Path, is64: bool) ->
 
 pub(crate) fn pe(path: Option<&Path>, is64: bool) -> bool {
     path.and_then(|p| fs::read(p).ok()).is_some_and(|data| {
-        object::File::parse(data.as_slice()).is_ok_and(|f| {
-            f.format() == BinaryFormat::Pe
-                && f.architecture()
-                    == if is64 {
-                        Architecture::X86_64
-                    } else {
-                        Architecture::I386
-                    }
-        })
+        pe_abi(&data).is_ok_and(|abi| abi == if is64 { PeAbi::X64 } else { PeAbi::X86 })
     })
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PeAbi {
+    X86,
+    X64,
+    Arm64,
+    Arm64Ec,
+    Arm64X,
+}
+
+/// Do not mistake AMD64 hybrid headers or ordinary ARM64 code for an x64 frontend.
+pub(crate) fn pe_abi(data: &[u8]) -> Result<PeAbi> {
+    use object::{endian::LittleEndian as LE, read::pe::ImageNtHeaders};
+    let image = object::File::parse(data)?;
+    if let object::File::Pe32(pe) = &image {
+        anyhow::ensure!(
+            pe.nt_headers().file_header().machine.get(LE) == object::pe::IMAGE_FILE_MACHINE_I386,
+            "Unsupported 32-bit PE machine"
+        );
+        return Ok(PeAbi::X86);
+    }
+    let object::File::Pe64(pe) = &image else {
+        bail!("Expected a Windows PE image");
+    };
+    let chpe =
+        if let Some(directory) = pe.data_directory(object::pe::IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG) {
+            if directory.virtual_address.get(LE) == 0 {
+                false
+            } else {
+                let config = directory.data(data, &pe.section_table())?;
+                let size = config
+                    .get(..4)
+                    .map(|b| u32::from_le_bytes(b.try_into().unwrap()) as usize)
+                    .unwrap_or(0);
+                anyhow::ensure!(size <= config.len(), "Truncated PE load configuration");
+                size >= 208
+                    && config
+                        .get(200..208)
+                        .is_some_and(|b| b.iter().any(|v| *v != 0))
+            }
+        } else {
+            false
+        };
+    Ok(match pe.nt_headers().file_header().machine.get(LE) {
+        object::pe::IMAGE_FILE_MACHINE_AMD64 if chpe => PeAbi::Arm64Ec,
+        object::pe::IMAGE_FILE_MACHINE_AMD64 => PeAbi::X64,
+        object::pe::IMAGE_FILE_MACHINE_ARM64EC => PeAbi::Arm64Ec,
+        object::pe::IMAGE_FILE_MACHINE_ARM64X => PeAbi::Arm64X,
+        object::pe::IMAGE_FILE_MACHINE_ARM64 if chpe => PeAbi::Arm64X,
+        object::pe::IMAGE_FILE_MACHINE_ARM64 => PeAbi::Arm64,
+        _ => bail!("Unsupported 64-bit PE machine"),
+    })
+}
+
+#[cfg(test)]
 pub(crate) fn vulkan(icd: &Path, root: &Path) -> bool {
     let Some(arch) = wine_arch(root) else {
         return false;
     };
+    vulkan_arch(icd, arch)
+}
+
+pub(crate) fn vulkan_arch(icd: &Path, arch: Architecture) -> bool {
     let Some(json) = fs::read(icd)
         .ok()
         .and_then(|data| serde_json::from_slice::<serde_json::Value>(&data).ok())
@@ -222,8 +279,44 @@ pub(crate) fn test_image(symbol: &str, text: u8) -> Vec<u8> {
 }
 
 #[cfg(test)]
+pub(crate) fn test_pe_image(machine: u16) -> Vec<u8> {
+    let is64 = machine != 0x14c;
+    let mut b = vec![0u8; 512];
+    b[..2].copy_from_slice(b"MZ");
+    b[60..64].copy_from_slice(&128u32.to_le_bytes());
+    b[128..132].copy_from_slice(b"PE\0\0");
+    b[132..134].copy_from_slice(&machine.to_le_bytes());
+    b[148..150].copy_from_slice(&(if is64 { 240u16 } else { 224u16 }).to_le_bytes());
+    b[152..154].copy_from_slice(&(if is64 { 0x20bu16 } else { 0x10bu16 }).to_le_bytes());
+    b
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hybrid_metadata_is_not_a_plain_amd64_frontend() {
+        let mut data = test_pe_image(0x8664);
+        data.resize(768, 0);
+        data[134..136].copy_from_slice(&1u16.to_le_bytes());
+        data[260..264].copy_from_slice(&16u32.to_le_bytes());
+        data[344..348].copy_from_slice(&0x1000u32.to_le_bytes());
+        data[348..352].copy_from_slice(&208u32.to_le_bytes());
+        data[400..404].copy_from_slice(&256u32.to_le_bytes());
+        data[404..408].copy_from_slice(&0x1000u32.to_le_bytes());
+        data[408..412].copy_from_slice(&256u32.to_le_bytes());
+        data[412..416].copy_from_slice(&512u32.to_le_bytes());
+        data[512..516].copy_from_slice(&208u32.to_le_bytes());
+        assert_eq!(pe_abi(&data).unwrap(), PeAbi::X64);
+        data[712..720].copy_from_slice(&0x140001100u64.to_le_bytes());
+        assert_eq!(pe_abi(&data).unwrap(), PeAbi::Arm64Ec);
+        data[132..134].copy_from_slice(&0xaa64u16.to_le_bytes());
+        assert_eq!(pe_abi(&data).unwrap(), PeAbi::Arm64X);
+        assert_eq!(pe_abi(&test_pe_image(0xaa64)).unwrap(), PeAbi::Arm64);
+        data[512..516].copy_from_slice(&209u32.to_le_bytes());
+        assert!(pe_abi(&data).is_err());
+    }
 
     fn pe_image(is64: bool) -> Vec<u8> {
         let mut b = vec![0u8; 512];

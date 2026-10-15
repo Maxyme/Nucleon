@@ -14,6 +14,7 @@ rustix = { workspace = true, features = ["fs"] }
 log = { workspace = true }
 tempfile = { workspace = true }
 walkdir = "2.5"
+sysinfo = { version = "0.33", default-features = false, features = ["system"] }
 object = { workspace = true }
 memchr = { workspace = true }
 aho-corasick = "1.1"

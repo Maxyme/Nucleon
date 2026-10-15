@@ -36,8 +36,24 @@ pub fn restore(dir: &Path, name: &str, runner: Option<&Path>, subdirs: &[&str]) 
     let destination = dir.join(name);
     let mut source = None;
     if let Some(root) = runner {
-        for sub in subdirs {
-            let candidate = root.join(sub).join(name);
+        let directories = if root.join(crate::runtime::DESCRIPTOR).is_file() {
+            let runtime = crate::runtime::ResolvedRuntime::inspect(root)?;
+            let is32 = dir.file_name().is_some_and(|s| s == "syswow64");
+            runtime
+                .windows_dirs
+                .into_iter()
+                .filter(|p| {
+                    let x86 = p
+                        .file_name()
+                        .is_some_and(|s| s == "i386-windows" || s == "x86-windows");
+                    x86 == is32
+                })
+                .collect::<Vec<_>>()
+        } else {
+            subdirs.iter().map(|s| root.join(s)).collect()
+        };
+        for directory in directories {
+            let candidate = directory.join(name);
             match fs::metadata(&candidate) {
                 Ok(meta) if meta.is_file() => {
                     source = Some(candidate);
@@ -65,7 +81,7 @@ pub fn restore(dir: &Path, name: &str, runner: Option<&Path>, subdirs: &[&str]) 
     }
 }
 
-const DLLS: &[&str] = &[
+pub(crate) const DLLS: &[&str] = &[
     "d3d9.dll",
     "d3d10core.dll",
     "d3d11.dll",

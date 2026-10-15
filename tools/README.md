@@ -124,12 +124,18 @@ After the preceding build and DXMT staging steps, start native Steam and run:
 python3 tools/launch_dirt_fex.py
 ```
 
-This helper requires Nucleon's existing local bridge, including
-`aarch64-unix/lsteamclient.so`, and uses the separate `dirt-690790` prefix.
-`--game-dir`, `--bridge` and `--work` override local locations. It binds and signs
-only private bridge copies against this Wine's ARM64 ntdll; Nucleon's production
-profile remains unchanged. Logs and per-launch component hashes go into the
-variant's `logs/` directory. Steam cloud/user saves still use the real Steam
+The helper prefers the registered managed runtime and calls the normal Rust
+runner. If none is installed, it can assemble an existing developer build. Build it first with
+`cargo build -p nucleon-runner`. It requires Nucleon's local ARM64 bridge,
+including `aarch64-unix/lsteamclient.so`. Its isolated compatdata root is
+`target/arm64-fex/integrated-compatdata/690790`; the runner adds
+`nucleon/arm64-fex/<family>/pfx`. `--runtime` uses an existing complete descriptor
+runtime; `--game-dir`, `--bridge`, `--sdk` and `--work` override local locations.
+Rust owns prefix initialization, private bridge binding/signing, graphics staging
+and process cleanup. The private diagnostic profile leaves the production profile
+and one-shot overrides intact. Runner output, a separate Wine log and a JSON
+receipt go into `dx12/logs/`. `--timeout SECONDS` starts counting after the game
+launcher is spawned; preparation is excluded. `--debug` enables verbose traces. Steam cloud/user saves still use the real Steam
 user-data directory. Close an existing prototype game before relaunching.
 
 The bridge is a local prerequisite, not a new pinned build product; this helper
@@ -239,15 +245,22 @@ AMD64 images without ARM64EC metadata to the x64 bridge. Its load flags are
 adapted to this older Wine fork. The bridge's Unix half stays native ARM64 and
 is bound to the selected runtime's own ntdll, using signed private copies.
 
-`launch_dmc5_fex.py` launches through the existing Steam helper using a Windows
-game path and forces DX12 in a backed-up INI,
+`launch_dmc5_fex.py` uses the same normal Rust runner and descriptor-backed
+runtime as the DiRT helper (`cargo build -p nucleon-runner` first). DMC5 requires
+the redirect-capable DX12 Wine build, even for the DX11 diagnostic control.
+It launches through the existing Steam helper using a Windows game path and
+forces DX12 in a backed-up INI,
 with API fallback disabled. It restores the original bytes on normal exit,
 errors, interruption or SIGTERM. The per-run INI backup and JSON receipt remain
 under `logs/` for recovery after an uncatchable termination. Close the game before
 stopping the launcher; settings changed in-game during this experiment are
 replaced by the original INI on exit. Steam user saves remain real. Concurrent
-prototype launches are rejected with a lock. `--timeout SECONDS` makes a bounded
-diagnostic run; `--api dx11` selects the separate DXMT control prefix. `--debug`
+configuration changes are rejected with a lock keyed by the actual INI path.
+The runner also locks its isolated prefix through cleanup. `--timeout SECONDS` makes a bounded
+diagnostic run measured after launcher spawn, excluding prefix preparation.
+Both APIs reuse compatible native state under
+`target/arm64-fex/integrated-compatdata/601150/nucleon/arm64-fex/<family>/pfx`;
+`--api dx11` selects DXMT and stages the corresponding graphics set. `--debug`
 adds timestamped dialog/exception/process logging and opt-in Wine process-exit
 and quit-message stack traces. Receipts record duration and leave gameplay explicitly unconfirmed
 regardless of the process exit code.
@@ -270,3 +283,31 @@ not a claim of stable gameplay or video playback.
 The native driver's two sparse-depth failures also remain. Production Nucleon
 integration stays gated on those broader checks. `dmc5-validation.json` records
 visual confirmation separately from process exit and smoke-test results.
+
+## Experimental Steam integration
+
+The game launchers no longer own Wine setup or cleanup. To expose their runtime
+through Steam's normal compatibility UI without launching Steam:
+
+```sh
+cargo build -p nucleon-cli -p nucleon-runner
+python3 tools/arm64_fex_dx12.py prepare-runtime
+./target/debug/nucleon wine fex install /absolute/path/printed/by/prepare-runtime --register
+```
+
+See [runtime descriptors and profiles](../RUNTIME-DESCRIPTORS.md) for the native
+option, opt-in game selection, separate prefix namespace and compatibility rules.
+The managed copy lives under Nucleon's Application Support directory and survives
+cleaning `target/`. Its native dependency audit rejects external library paths;
+normal Steam launches need no compiler or Vulkan SDK. Old generations are retained,
+and prefixes stage only changed graphics/bridge outputs. Use
+`nucleon wine fex verify` for a full integrity check. These checks do not validate
+gameplay. Diagnostic helpers record executable metadata by default; `--debug`
+also records its SHA256. See the runtime contract for archive imports and the
+remaining distribution-notice requirements.
+
+Diagnostic wiring tests use a fake runner and do not execute Wine or games:
+
+```sh
+python3 -m unittest discover -s tools -p test_nucleon_fex.py
+```

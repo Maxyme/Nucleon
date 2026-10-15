@@ -24,6 +24,12 @@ pub struct WineRuntime {
     pub version: Option<String>,
 }
 
+impl WineRuntime {
+    pub fn capabilities(&self) -> Result<crate::runtime::ResolvedRuntime> {
+        crate::runtime::ResolvedRuntime::inspect(&self.root)
+    }
+}
+
 fn query_wine_version(wine_bin: &Path) -> Option<String> {
     let mut command = Command::new(wine_bin);
     command
