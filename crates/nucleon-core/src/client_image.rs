@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 
 use crate::paths;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::fs;
 
 /// Parses the Steam build number from the text content of a Steam package manifest.
@@ -50,48 +50,11 @@ pub fn detect_installed_steam_build() -> Option<u64> {
 
 /// Extracts the ARM64 slice from a Mach-O binary (supporting Fat/Universal and single-arch binaries).
 pub fn extract_arm64_slice(dylib_bytes: &[u8]) -> Result<&[u8]> {
-    use object::Architecture;
-    use object::macho;
-    use object::read::macho::{FatArch, MachHeader, MachOFatFile32, MachOFatFile64};
-
-    if dylib_bytes.len() < 8 {
-        anyhow::bail!("File too small to be a valid Mach-O binary");
-    }
-
-    // 1. Try parsing as a 32-bit Universal (Fat) binary (0xcafebabe)
-    if let Ok(fat) = MachOFatFile32::parse(dylib_bytes) {
-        for arch in fat.arches() {
-            if arch.architecture() == Architecture::Aarch64 {
-                return arch
-                    .data(dylib_bytes)
-                    .map_err(|e| anyhow::anyhow!("Corrupt arm64 slice in universal binary: {e}"));
-            }
-        }
-        anyhow::bail!("arm64 slice not found in Mach-O universal binary");
-    }
-
-    // 2. Try parsing as a 64-bit Universal (Fat) binary (0xcafebabf)
-    if let Ok(fat) = MachOFatFile64::parse(dylib_bytes) {
-        for arch in fat.arches() {
-            if arch.architecture() == Architecture::Aarch64 {
-                return arch.data(dylib_bytes).map_err(|e| {
-                    anyhow::anyhow!("Corrupt arm64 slice in 64-bit universal binary: {e}")
-                });
-            }
-        }
-        anyhow::bail!("arm64 slice not found in Mach-O 64-bit universal binary");
-    }
-
-    // 3. Check if it's already a single-arch 64-bit ARM64 Mach-O binary
-    if let Ok(header) = macho::MachHeader64::<object::Endianness>::parse(dylib_bytes, 0) {
-        let is_arm64 = header.cputype(object::Endianness::Little) == macho::CPU_TYPE_ARM64
-            || header.cputype(object::Endianness::Big) == macho::CPU_TYPE_ARM64;
-        if is_arm64 {
-            return Ok(dylib_bytes);
-        }
-    }
-
-    anyhow::bail!("Unsupported or non-arm64 Mach-O binary");
+    crate::binary_image::slices(dylib_bytes, Some(object::macho::CPU_TYPE_ARM64))
+        .context("Cannot extract arm64 Mach-O slice")?
+        .into_iter()
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("arm64 slice not found in Mach-O binary"))
 }
 
 /// Finds the first byte pattern match using memchr acceleration.

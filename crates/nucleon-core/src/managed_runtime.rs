@@ -147,7 +147,7 @@ fn audit(
             continue;
         }
         let bytes = fs::read(&path)?;
-        for slice in crate::runtime_checks::slices(&bytes)? {
+        for slice in crate::binary_image::slices(&bytes, None)? {
             let image = object::File::parse(slice)?;
             if image.architecture() != runtime.arch() {
                 continue;

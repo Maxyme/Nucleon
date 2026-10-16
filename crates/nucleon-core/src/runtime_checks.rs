@@ -1,31 +1,14 @@
 //! File-level compatibility checks used before Automatic chooses a graphics path.
 use anyhow::{Result, bail};
-use object::read::macho::{FatArch, MachOFatFile32, MachOFatFile64};
 use object::{Architecture, BinaryFormat, Object, ObjectSection, ObjectSymbol};
 use sha2::{Digest, Sha256};
 use std::{fs, path::Path};
-
-pub(crate) fn slices(data: &[u8]) -> Result<Vec<&[u8]>> {
-    Ok(match object::FileKind::parse(data)? {
-        object::FileKind::MachOFat32 => MachOFatFile32::parse(data)?
-            .arches()
-            .iter()
-            .map(|a| a.data(data))
-            .collect::<std::result::Result<Vec<_>, _>>()?,
-        object::FileKind::MachOFat64 => MachOFatFile64::parse(data)?
-            .arches()
-            .iter()
-            .map(|a| a.data(data))
-            .collect::<std::result::Result<Vec<_>, _>>()?,
-        _ => vec![data],
-    })
-}
 
 pub(crate) fn native_arch(path: &Path, arch: Architecture) -> bool {
     fs::read(path)
         .ok()
         .and_then(|data| {
-            slices(&data).ok().map(|images| {
+            crate::binary_image::slices(&data, None).ok().map(|images| {
                 images.iter().any(|image| {
                     object::File::parse(*image).is_ok_and(|f| {
                         f.format() == BinaryFormat::MachO && f.architecture() == arch
@@ -182,7 +165,7 @@ pub(crate) fn vulkan_arch(icd: &Path, arch: Architecture) -> bool {
 }
 
 pub(crate) fn has_export(data: &[u8], aliases: &[&str]) -> bool {
-    slices(data).is_ok_and(|images| {
+    crate::binary_image::slices(data, None).is_ok_and(|images| {
         images.iter().any(|image| {
             object::File::parse(*image).is_ok_and(|f| {
                 f.symbols().chain(f.dynamic_symbols()).any(|s| {
@@ -204,7 +187,7 @@ pub(crate) fn has_export(data: &[u8], aliases: &[&str]) -> bool {
 /// Compare loadable code/data, architecture, and UUID, excluding code-signature blobs.
 pub(crate) fn hook_identity(data: &[u8]) -> Result<Vec<[u8; 32]>> {
     let mut hashes = Vec::new();
-    for image in slices(data)? {
+    for image in crate::binary_image::slices(data, None)? {
         let f = object::File::parse(image)?;
         if f.format() != BinaryFormat::MachO || f.kind() != object::ObjectKind::Dynamic {
             bail!("Hook must be a Mach-O dynamic library");

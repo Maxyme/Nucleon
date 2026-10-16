@@ -1,5 +1,6 @@
 pub mod backend;
 pub mod backend_files;
+mod binary_image;
 pub mod client_image;
 pub mod d7vk;
 pub mod detector;
