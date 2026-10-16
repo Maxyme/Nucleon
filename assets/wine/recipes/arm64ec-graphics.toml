@@ -1,0 +1,26 @@
+# Isolated frontend experiments; not a production runtime selection.
+schema = 1
+
+[dxmt]
+native_llvm_version = "15.0.7"
+patches = ["assets/patches/dxmt-initialize-device-before-command-helpers.patch"]
+
+[darwin]
+# Must match the paired Wine/FEX build; never use this on a Windows/Linux host.
+teb_tsd_offset = "0x17f8"
+
+[sources.mingw]
+url = "https://github.com/mingw-w64/mingw-w64.git"
+revision = "fe2763863a9bc40da24f2668ab5bdceb29c0201d" # llvm-mingw 20260505
+
+[sources.dxvk]
+url = "https://github.com/doitsujin/dxvk.git"
+revision = "70d7508c01201ed3d4bfb33da42ba834eafe3857" # v3.1
+
+[sources.vkd3d]
+url = "https://github.com/HansKristian-Work/vkd3d-proton.git"
+revision = "3b10bd7a7ec6a7347e616cf8bea59333afec2255" # v3.0.1
+
+[sources.dxmt]
+url = "https://github.com/t0b1kent/dxmt.git"
+revision = "7b81c3a24d0f132196406c17f235ef18419ce8c5"

@@ -316,3 +316,74 @@ Diagnostic wiring tests use a fake runner and do not execute Wine or games:
 ```sh
 python3 -m unittest discover -s tools -p test_nucleon_fex.py
 ```
+
+## ARM64EC graphics experiments
+
+`arm64ec_graphics.py` builds separate source-pinned VKD3D 3.0.1 and DXVK 3.1
+frontends, plus AMD64 controls, against the existing ARM64 Wine/FEX/Vulkan stack.
+It never registers a tool, changes a game or replaces an installed runtime.
+Only `fetch` accesses the network. It requires the earlier DX12 developer build,
+its Meson environment, the pinned llvm-mingw toolchain and Vulkan SDK.
+
+```sh
+python3 tools/arm64ec_graphics.py fetch
+python3 tools/arm64ec_graphics.py build --component vkd3d
+python3 tools/arm64ec_graphics.py build --component dxvk
+python3 tools/arm64ec_graphics.py probe-tls
+python3 tools/arm64ec_graphics.py probe --api dx12
+python3 tools/arm64ec_graphics.py probe --api dx11-vulkan
+```
+
+Use `--architecture x64` on the two build and GPU probe actions for source-built
+AMD64 controls. GPU probes need a licensed AMD64 `d3dcompiler_47.dll`; set
+`NUCLEON_PROBE_D3DCOMPILER` to its path or use the default installed DiRT copy.
+No game or Steam process is launched. Each GPU probe has an expected pixel-failure
+negative control, checks the actual loaded module ABIs and stops its own prefix.
+`--debug` enables detailed traces. The experiment lock prevents simultaneous
+build/probe changes to the same workspace.
+
+Native DLLs need Darwin-aware MinGW startup and emulated compiler TLS; the
+ordinary Windows `x18` convention is incompatible with this Wine/FEX build.
+The private startup object and TLS support are local to this experiment. The
+TLS probe checks 32 threads, 320,000 calls, initialization, 64-byte alignment and
+complete worker-thread allocation cleanup. The ABI offset is checked against
+both Wine and FEX build configurations before compiling.
+
+Products and input hashes are under `target/arm64-fex/arm64ec/`. Unique GPU-run
+directories preserve setup/phase logs and receipts; `frontend-<arch>-<api>.json`
+points to the latest outcome. These are local developer artifacts, not an
+installed graphics package. Build/probe failures do not publish a validated set.
+
+For DXMT, install the two developer prerequisites and check them before building:
+
+```sh
+xcodebuild -downloadComponent MetalToolchain
+brew install llvm@15
+python3 tools/arm64ec_graphics.py doctor
+python3 tools/arm64ec_graphics.py build --component dxmt
+python3 tools/arm64ec_graphics.py probe --api dx11
+```
+
+`--native-llvm` selects a native LLVM 15.0.7 build prefix; the default preserves
+Homebrew's `opt/llvm@15` alias so upstream links its static zstd/unwind dependencies.
+The installed newer LLVM remains the default. The build produces the ARM64 Unix
+companion together with the ARM64EC DLLs. DXMT's pinned source overlay initializes
+the Metal device before helpers construct compute pipelines; Wine heap checking
+exposed the original uninitialized access. Unrecorded source changes are rejected.
+
+DXMT graphics DLLs use native overrides, with the builtin `winemetal` bridge and
+its exact Unix companion staged together. Loaded-image identity checks reject
+fallback to Wine's own D3D11. The Metal probe uses its paired Wine libraries;
+Vulkan SDK lookup paths are unnecessary for its rendering path.
+`probe --api dx11` passed copy/readback, shader compilation, triangle pixels and
+both no-draw and deliberately wrong-component controls. An x64 DXMT Unix build is
+rejected because it cannot serve as the ARM64 runtime's control. Use the existing
+paired DXMT probe for its AMD64 baseline. These are standalone graphics results;
+DXMT gameplay validation remains separate.
+
+See [validation results and remaining work](arm64ec-graphics-validation.md).
+Policy tests require no Wine, compiler or GPU:
+
+```sh
+python3 -m unittest discover -s tools -p 'test_*.py'
+```

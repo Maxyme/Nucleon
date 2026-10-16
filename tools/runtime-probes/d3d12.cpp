@@ -7,6 +7,7 @@
 #include <cstring>
 #include <stdexcept>
 #include <string>
+#include "graphics-abi.h"
 
 template<class T> struct Owned {
     T *p = nullptr;
@@ -53,6 +54,8 @@ int main(int argc, char **argv) {
         Owned<ID3D12Device> device;
         check(D3D12CreateDevice(adapter.p, D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(device.address())), "device");
         std::puts("NUCLEON_D3D12_PASS device");
+        if (!graphics_module_abi("d3d12.dll") || !graphics_module_abi("d3d12core.dll") ||
+            !graphics_module_abi("dxgi.dll")) throw std::runtime_error("frontend ABI");
         D3D12_COMMAND_QUEUE_DESC qd = {};
         Owned<ID3D12CommandQueue> queue;
         check(device->CreateCommandQueue(&qd, IID_PPV_ARGS(queue.address())), "queue");

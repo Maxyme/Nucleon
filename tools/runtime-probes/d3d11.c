@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <wchar.h>
+#include "graphics-abi.h"
 
 static HRESULT compile_shader(const char *source, const char *target, ID3DBlob **blob)
 {
@@ -124,6 +125,8 @@ int wmain(int argc, wchar_t **argv)
         return 1;
     }
     printf("NUCLEON_D3D11_DEVICE feature_level=%04x\n", selected);
+    if (!graphics_module_abi("d3d11.dll") || !graphics_module_abi("dxgi.dll")) return 6;
+    if (getenv("NUCLEON_EXPECT_METAL") && !graphics_module_abi("winemetal.dll")) return 6;
     uint32_t pixels[16];
     for (unsigned i = 0; i < 16; ++i) pixels[i] = 0xff000000u | (i * 0x0005070bu);
     D3D11_TEXTURE2D_DESC desc = {0};

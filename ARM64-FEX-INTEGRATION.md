@@ -167,6 +167,12 @@ an FPS improvement. Scope: small to medium; do before performance comparisons.
 
 ### 6. Experiment with ARM64EC graphics frontends
 
+Implemented as an isolated build/probe workflow. See
+[ARM64EC frontend results](tools/arm64ec-graphics-validation.md) for the tested
+native DX11/DX12 pairs, the required Darwin CRT/TLS adaptations and remaining
+DXMT prerequisites. The normal runner's hybrid-frontend gate remains in place;
+these smoke results do not promote a runtime or establish game performance.
+
 Wine's Unix modules and the Vulkan driver are already native ARM64. The current
 VKD3D and DXGI Windows DLLs are AMD64 and therefore translated by FEX. Building
 matched ARM64EC VKD3D + DXGI is a plausible way to reduce CPU translation work
