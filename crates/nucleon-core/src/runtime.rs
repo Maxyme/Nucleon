@@ -321,17 +321,12 @@ impl ResolvedRuntime {
             );
         }
         if let Some(icd) = &graphics.vulkan_icd {
-            let manifest: serde_json::Value = serde_json::from_slice(&fs::read(icd)?)?;
-            let library = Path::new(
-                manifest["ICD"]["library_path"]
-                    .as_str()
-                    .context("Bundled Vulkan ICD has no library_path")?,
-            );
+            let manifest = crate::configuration::resolve_vulkan_icd(icd)?;
             ensure!(
-                !library.is_absolute(),
+                !manifest.declared_library.is_absolute(),
                 "Bundled Vulkan ICD must use a relative library path"
             );
-            let library = icd.parent().unwrap().join(library).canonicalize()?;
+            let library = manifest.library;
             ensure!(
                 library.starts_with(root) && runtime_checks::native_arch(&library, arch),
                 "Bundled Vulkan ICD library must stay inside the runtime and match its native ABI"
@@ -509,6 +504,50 @@ pub(crate) fn fixture(mode: ExecutionMode) -> (tempfile::TempDir, ResolvedRuntim
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bundled_vulkan_resolution_preserves_relative_path_and_containment_policy() {
+        let (temp, runtime) = fixture(ExecutionMode::Arm64Fex);
+        let descriptor = temp.path().join(DESCRIPTOR);
+        let original = fs::read_to_string(&descriptor).unwrap();
+        fs::write(
+            &descriptor,
+            format!("{original}\n[graphics]\nvulkan_icd='icd.json'\n"),
+        )
+        .unwrap();
+        let native = fs::read(runtime.unix_dir.join("ntdll.so")).unwrap();
+        let driver = temp.path().join("driver.dylib");
+        fs::write(&driver, &native).unwrap();
+        let outside = tempfile::NamedTempFile::new_in(temp.path().parent().unwrap()).unwrap();
+        fs::write(outside.path(), &native).unwrap();
+        std::os::unix::fs::symlink(outside.path(), temp.path().join("escape.dylib")).unwrap();
+        let manifest = temp.path().join("icd.json");
+        let write_library = |library: &Path| {
+            fs::write(
+                &manifest,
+                serde_json::json!({"ICD":{"library_path":library}}).to_string(),
+            )
+            .unwrap();
+        };
+        write_library(Path::new("driver.dylib"));
+        ResolvedRuntime::inspect(temp.path()).unwrap();
+        write_library(&driver);
+        let error = format!("{:#}", ResolvedRuntime::inspect(temp.path()).unwrap_err());
+        assert!(
+            error.contains("must use a relative library path"),
+            "{error}"
+        );
+        let traversal = Path::new("..").join(outside.path().file_name().unwrap());
+        for library in [Path::new("escape.dylib"), traversal.as_path()] {
+            write_library(library);
+            let error = format!("{:#}", ResolvedRuntime::inspect(temp.path()).unwrap_err());
+            assert!(error.contains("must stay inside the runtime"), "{error}");
+        }
+        fs::write(&driver, runtime_checks::test_image("driver", 1)).unwrap();
+        write_library(Path::new("driver.dylib"));
+        let error = format!("{:#}", ResolvedRuntime::inspect(temp.path()).unwrap_err());
+        assert!(error.contains("match its native ABI"), "{error}");
+    }
 
     #[test]
     fn native_emulators_require_declared_native_unix_companions_and_exports() {

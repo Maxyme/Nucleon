@@ -70,13 +70,7 @@ impl GraphicsComponents {
                 let manifest = path
                     .canonicalize()
                     .with_context(|| format!("Resolve Vulkan ICD {}", path.display()))?;
-                let json: serde_json::Value = serde_json::from_slice(&fs::read(&manifest)?)?;
-                let library = Path::new(
-                    json["ICD"]["library_path"]
-                        .as_str()
-                        .context("Vulkan ICD has no library_path")?,
-                );
-                let library = manifest.parent().unwrap().join(library).canonicalize()?;
+                let library = crate::configuration::resolve_vulkan_icd(&manifest)?.library;
                 Ok(VulkanDriver { manifest, library })
             })
             .collect::<Result<Vec<_>>>()?;

@@ -141,27 +141,16 @@ pub(crate) fn vulkan(icd: &Path, root: &Path) -> bool {
 }
 
 pub(crate) fn vulkan_arch(icd: &Path, arch: Architecture) -> bool {
-    let Some(json) = fs::read(icd)
-        .ok()
-        .and_then(|data| serde_json::from_slice::<serde_json::Value>(&data).ok())
-    else {
+    let Ok(manifest) = crate::configuration::resolve_vulkan_icd(icd) else {
         return false;
     };
-    let Some(library) = json["ICD"]["library_path"].as_str() else {
-        return false;
-    };
-    let version = json["ICD"]["api_version"].as_str().unwrap_or("");
-    let mut parts = version.split('.').filter_map(|v| v.parse::<u32>().ok());
-    if (parts.next().unwrap_or(0), parts.next().unwrap_or(0)) < (1, 3) {
+    if !manifest
+        .api_version()
+        .is_some_and(|version| version >= (1, 3, 0))
+    {
         return false;
     }
-    let library = Path::new(library);
-    let library = if library.is_absolute() {
-        library.to_path_buf()
-    } else {
-        icd.parent().unwrap_or(Path::new(".")).join(library)
-    };
-    native_arch(&library, arch)
+    native_arch(&manifest.library, arch)
 }
 
 pub(crate) fn has_export(data: &[u8], aliases: &[&str]) -> bool {
@@ -348,7 +337,27 @@ mod tests {
         assert!(!vulkan(&icd, &root));
         fs::write(&library, test_image("driver", 1)).unwrap();
         assert!(vulkan(&icd, &root));
-        write_icd("1.2.0");
+        for version in ["1.3.0", "1.4.0", "2.0.0"] {
+            write_icd(version);
+            assert!(vulkan(&icd, &root), "{version}");
+        }
+        for version in [
+            "1.2.999",
+            "",
+            "garbage.1.3",
+            "1.garbage.3",
+            "1.3.bad",
+            "1.3",
+            "1.3.0.0",
+            "+1.3.0",
+            "4294967296.3.0",
+        ] {
+            write_icd(version);
+            assert!(!vulkan(&icd, &root), "{version}");
+        }
+        fs::write(&icd, r#"{"ICD":{"library_path":"driver.dylib"}}"#).unwrap();
+        // Readable driver configuration alone does not establish Vulkan 1.3.
+        crate::configuration::vulkan_manifest("test", &icd).unwrap();
         assert!(!vulkan(&icd, &root));
     }
 

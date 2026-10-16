@@ -238,16 +238,7 @@ fn check_runtime(root: &Path, files: &BTreeMap<PathBuf, Entry>) -> Result<Resolv
         );
     }
     if let Some(manifest) = &runtime.graphics.vulkan_icd {
-        let json: serde_json::Value = serde_json::from_slice(&fs::read(manifest)?)?;
-        let library = manifest
-            .parent()
-            .unwrap()
-            .join(
-                json["ICD"]["library_path"]
-                    .as_str()
-                    .context("Invalid bundled ICD")?,
-            )
-            .canonicalize()?;
+        let library = crate::configuration::resolve_vulkan_icd(manifest)?.library;
         components.vulkan.push(crate::launch::VulkanDriver {
             manifest: manifest.clone(),
             library,

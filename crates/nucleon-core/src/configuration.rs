@@ -1,6 +1,9 @@
 //! Actionable errors for explicit launch configuration.
 use anyhow::{Context, Result, bail};
-use std::{fs, path::Path};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 pub fn environment(name: &str) -> Result<Option<String>> {
     match std::env::var(name) {
@@ -86,6 +89,77 @@ fn parse_error<E: std::error::Error + Send + Sync + 'static>(
     ))
 }
 
+#[derive(serde::Deserialize)]
+struct VulkanManifest {
+    #[serde(rename = "ICD")]
+    icd: VulkanIcd,
+}
+
+#[derive(serde::Deserialize)]
+struct VulkanIcd {
+    library_path: String,
+    api_version: Option<String>,
+}
+
+pub(crate) struct ResolvedVulkanIcd {
+    /// Retained so bundled runtimes can forbid absolute declarations.
+    pub declared_library: PathBuf,
+    pub library: PathBuf,
+    api_version: Option<String>,
+}
+
+impl ResolvedVulkanIcd {
+    /// Invalid or absent versions do not establish Vulkan compatibility.
+    pub fn api_version(&self) -> Option<(u32, u32, u32)> {
+        let mut parts = self.api_version.as_deref()?.split('.');
+        let mut number = || {
+            let part = parts.next()?;
+            (!part.is_empty() && part.bytes().all(|b| b.is_ascii_digit()))
+                .then(|| part.parse::<u32>().ok())?
+        };
+        let version = (number()?, number()?, number()?);
+        parts.next().is_none().then_some(version)
+    }
+}
+
+/// Resolve a driver beside its manifest; package containment is the caller's policy.
+pub(crate) fn resolve_vulkan_icd(path: &Path) -> Result<ResolvedVulkanIcd> {
+    let text = fs::read_to_string(path)
+        .with_context(|| format!("Read Vulkan ICD manifest {}", path.display()))?;
+    let manifest: VulkanManifest = json(&text, path)?;
+    anyhow::ensure!(
+        !manifest.icd.library_path.is_empty(),
+        "Vulkan ICD manifest {}: empty ICD.library_path",
+        path.display()
+    );
+    let declared_library = PathBuf::from(manifest.icd.library_path);
+    let library = if declared_library.is_absolute() {
+        declared_library.clone()
+    } else {
+        path.parent()
+            .unwrap_or(Path::new("."))
+            .join(&declared_library)
+    };
+    let library = library.canonicalize().with_context(|| {
+        format!(
+            "Vulkan ICD manifest {}: cannot resolve driver library {}",
+            path.display(),
+            library.display()
+        )
+    })?;
+    anyhow::ensure!(
+        library.is_file(),
+        "Vulkan ICD manifest {}: driver library {} is not a regular file",
+        path.display(),
+        library.display()
+    );
+    Ok(ResolvedVulkanIcd {
+        declared_library,
+        library,
+        api_version: manifest.icd.api_version,
+    })
+}
+
 pub fn vulkan_manifest(source: &str, path: &Path) -> Result<()> {
     let context = || {
         format!(
@@ -93,40 +167,12 @@ pub fn vulkan_manifest(source: &str, path: &Path) -> Result<()> {
             path.display()
         )
     };
-    #[derive(serde::Deserialize)]
-    struct Manifest {
-        #[serde(rename = "ICD")]
-        icd: Icd,
-    }
-    #[derive(serde::Deserialize)]
-    struct Icd {
-        library_path: String,
-    }
-    let text = fs::read_to_string(path).with_context(context)?;
-    let manifest: Manifest = json(&text, path).with_context(context)?;
-    anyhow::ensure!(
-        !manifest.icd.library_path.is_empty(),
-        "{}: missing ICD.library_path",
-        context()
-    );
-    let library = Path::new(&manifest.icd.library_path);
-    let library = if library.is_absolute() {
-        library.to_path_buf()
-    } else {
-        path.parent().unwrap_or(Path::new(".")).join(library)
-    };
-    if !library.is_file() {
-        bail!(
-            "{}: driver library {} is missing or is not a regular file",
-            context(),
-            library.display()
-        );
-    }
-    fs::File::open(&library).with_context(|| {
+    let icd = resolve_vulkan_icd(path).with_context(context)?;
+    fs::File::open(&icd.library).with_context(|| {
         format!(
             "{}: driver library {} is missing or unreadable",
             context(),
-            library.display()
+            icd.library.display()
         )
     })?;
     Ok(())
@@ -248,6 +294,75 @@ mod tests {
         fs::write(temp.path().join("driver.dylib"), b"fixture").unwrap();
         fs::write(&path, r#"{"file_format_version":"1.0.0","ICD":{"library_path":"driver.dylib","api_version":"1.4.0"}}"#).unwrap();
         vulkan_manifest("VK_DRIVER_FILES", &path).unwrap();
+    }
+
+    #[test]
+    fn vulkan_resolution_handles_absolute_relative_and_bare_manifest_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let driver = dir.path().join("driver.dylib");
+        fs::write(&driver, b"fixture").unwrap();
+        let path = dir.path().join("icd.json");
+        for library in [Path::new("driver.dylib"), driver.as_path()] {
+            fs::write(
+                &path,
+                serde_json::json!({"ICD":{"library_path":library}}).to_string(),
+            )
+            .unwrap();
+            let resolved = resolve_vulkan_icd(&path).unwrap();
+            assert_eq!(resolved.declared_library, library);
+            assert_eq!(resolved.library, driver.canonicalize().unwrap());
+            assert_eq!(resolved.api_version(), None);
+        }
+
+        // Use unique files in the current directory without changing global cwd.
+        let driver = tempfile::NamedTempFile::new_in(".").unwrap();
+        let manifest = tempfile::NamedTempFile::new_in(".").unwrap();
+        fs::write(
+            manifest.path(),
+            serde_json::json!({"ICD":{"library_path":driver.path().file_name().unwrap().to_str().unwrap()}})
+                .to_string(),
+        )
+        .unwrap();
+        let bare = Path::new(manifest.path().file_name().unwrap());
+        assert_eq!(
+            resolve_vulkan_icd(bare).unwrap().library,
+            driver.path().canonicalize().unwrap()
+        );
+    }
+
+    #[test]
+    fn vulkan_resolution_rejects_invalid_documents_and_nonfile_libraries() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("icd.json");
+        fs::write(dir.path().join("driver.dylib"), b"fixture").unwrap();
+        for (document, expected) in [
+            (r#"{}"#, "ICD"),
+            (r#"{"ICD":{}}"#, "library_path"),
+            (r#"{"ICD":{"library_path":""}}"#, "ICD.library_path"),
+            (r#"{"ICD":{"library_path":42}}"#, "ICD.library_path"),
+            (
+                r#"{"ICD":{"library_path":"driver.dylib","api_version":42}}"#,
+                "ICD.api_version",
+            ),
+            (
+                r#"{"ICD":{"library_path":"driver.dylib"}} {}"#,
+                "after the document",
+            ),
+            (
+                r#"{"ICD":{"library_path":"missing.dylib"}}"#,
+                "missing.dylib",
+            ),
+            (r#"{"ICD":{"library_path":"."}}"#, "not a regular file"),
+        ] {
+            fs::write(&path, document).unwrap();
+            let error = resolve_vulkan_icd(&path).err().unwrap();
+            let report = format!("{error:#}");
+            assert!(report.contains(expected), "{report}");
+            assert!(report.contains(&path.display().to_string()), "{report}");
+        }
+        fs::remove_file(&path).unwrap();
+        let report = format!("{:#}", resolve_vulkan_icd(&path).err().unwrap());
+        assert!(report.contains("Read Vulkan ICD manifest"), "{report}");
     }
 
     #[test]
