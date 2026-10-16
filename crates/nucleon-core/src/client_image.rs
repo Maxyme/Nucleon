@@ -94,7 +94,9 @@ pub fn extract_arm64_slice(dylib_bytes: &[u8]) -> Result<&[u8]> {
     anyhow::bail!("Unsupported or non-arm64 Mach-O binary");
 }
 
-/// Matches an Array of Bytes (AOB) with ?? wildcards against memory slice using memchr acceleration.
+/// Finds the first byte pattern match using memchr acceleration.
+/// Whitespace separates hexadecimal bytes; `?` and `??` each match any one byte.
+/// Empty, invalid, and longer-than-input patterns return `None`.
 pub fn aob_scan_slice(data: &[u8], pattern: &str) -> Option<usize> {
     let tokens: Vec<&str> = pattern.split_whitespace().collect();
     if tokens.is_empty() || data.len() < tokens.len() {
@@ -167,6 +169,39 @@ mod tests {
         assert_eq!(aob_scan_slice(&data, "DE ?? BE EF"), Some(2));
         assert_eq!(aob_scan_slice(&data, "BE EF ??"), Some(4));
         assert_eq!(aob_scan_slice(&data, "AA BB CC"), None);
+    }
+
+    #[test]
+    fn wildcard_scanner_preserves_boundaries_and_pattern_syntax() {
+        let cases: &[(&[u8], &str, Option<usize>)] = &[
+            (&[], "", None),
+            (&[], "?", None),
+            (&[0xab], "  ", None),
+            (&[0xab], "aB", Some(0)),
+            (&[0xab], "?", Some(0)),
+            (&[0xab], "??", Some(0)),
+            (&[0xab], "AB ??", None),
+            (&[0xab, 0xcd], "? ??", Some(0)),
+            (&[0, 0xab, 0xcd], "AB CD", Some(1)),
+            (&[0, 0xab, 0xcd], "? AB CD", Some(0)),
+            (&[0, 0, 0xab], "?? AB", Some(1)),
+            (&[0, 0xab, 0xcd], "AB ?", Some(1)),
+            (&[0xab, 0xab, 0xcd], "AB CD", Some(1)),
+            (&[0xab, 0xab, 0xcd], "AB AB", Some(0)),
+            (&[0xab, 0xab, 0xcd], "AB CE", None),
+            (&[0xab, 0xcd], " \tAB\ncd  ", Some(0)),
+            (&[0xab], "GG", None),
+            (&[0xab], "100", None),
+            (&[0xab], "???", None),
+            (&[0xab, 0xcd], "? GG", None),
+        ];
+        for &(data, pattern, expected) in cases {
+            assert_eq!(
+                aob_scan_slice(data, pattern),
+                expected,
+                "{data:?}: {pattern:?}"
+            );
+        }
     }
 
     #[test]
