@@ -37,6 +37,7 @@ revision = "ddf094e49915edf19d414d20bccd8404bcdb99f8"
 [alternatives.tolkara.fex]
 url = "https://github.com/tolkara/FEX.git"
 revision = "f39dfe320f4917351f555fed2de50abe28cd6fe4"
+unix_patches = ["assets/patches/fex-tolkara-darwin-unixlib.patch"]
 
 [wine]
 patches = ["assets/patches/wine-macrunner-without-vulkan.patch"]

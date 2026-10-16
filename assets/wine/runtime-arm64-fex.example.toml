@@ -18,10 +18,12 @@ abi = 1
 [[emulators]]
 guest = "x64"
 path = "lib/wine/aarch64-windows/libarm64ecfex.dll"
+unix_library = "lib/wine/aarch64-unix/libarm64ecfex.so"
 
 [[emulators]]
 guest = "x86"
 path = "lib/wine/aarch64-windows/libwow64fex.dll"
+unix_library = "lib/wine/aarch64-unix/libwow64fex.so"
 
 [environment]
 FEX_TSOENABLED = "1"

@@ -17,6 +17,7 @@ fn actual_fex_images_and_signed_steam_bridge_validate_together() {
         "lib/wine/aarch64-unix/ntdll.so",
         "lib/wine/aarch64-windows/ntdll.dll",
         "lib/wine/aarch64-windows/libarm64ecfex.dll",
+        "lib/wine/aarch64-unix/libarm64ecfex.so",
     ] {
         let target = root.join(name);
         fs::create_dir_all(target.parent().unwrap()).unwrap();
@@ -38,6 +39,7 @@ steam_helper=true
 [[emulators]]
 guest='x64'
 path='lib/wine/aarch64-windows/libarm64ecfex.dll'
+unix_library='lib/wine/aarch64-unix/libarm64ecfex.so'
 [prefix]
 family='tolkara-fex'
 abi=1

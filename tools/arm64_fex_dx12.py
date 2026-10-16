@@ -51,6 +51,7 @@ class DX12:
         source = self.work / 'runtime'
         if not (source / 'bin/wine').is_file():
             source = self.base.work / 'runtime'
+        unix = self.base.build_tolkara_unixlib()
         receipt = json.loads((source / 'build.json').read_text())
         for name, expected in receipt['host_files'].items():
             if sha(source / name) != expected:
@@ -63,7 +64,10 @@ class DX12:
         driver = self.work / 'driver'
         loader = self.sdk / 'lib/libvulkan.1.dylib'
         graphics = self.graphics() if vulkan else None
+        emulators = {name:sha(self.base.work / 'fex' / directory / 'Bin' / name)
+                     for directory,name in [('arm64ec','libarm64ecfex.dll'),('wow64','libwow64fex.dll')]}
         inputs = dict(wine=receipt,dxmt=pieces,recipe_sha256=sha(RECIPE),
+                      emulators=emulators,unixlib=json.loads((unix / 'build.json').read_text()),
                       contract=2,vulkan=vulkan,reference_sha256=self.base.recipe['reference']['sha256'])
         sdk_notice = self.sdk.parent / 'Licenses/LICENSE.txt'
         if vulkan and sdk_notice.is_file(): inputs['sdk_notice_sha256'] = sha(sdk_notice)
@@ -91,6 +95,8 @@ class DX12:
             for directory,name in [('arm64ec','libarm64ecfex.dll'),('wow64','libwow64fex.dll')]:
                 atomic_copy(self.base.work / 'fex' / directory / 'Bin' / name,
                             stage / 'lib/wine/aarch64-windows' / name)
+            for name in ['libarm64ecfex.so', 'libwow64fex.so']:
+                atomic_copy(unix / name, stage / 'lib/wine/aarch64-unix' / name)
             settings = [
                 'schema = 1', 'mode = "arm64-fex"', 'guests = ["x64", "x86"]',
                 'loader = "bin/wine"', 'server = "bin/wineserver"',
@@ -102,7 +108,9 @@ class DX12:
                 '[prefix]', 'family = ' + json.dumps(self.pin['integration']['prefix_family']),
                 'abi = ' + str(self.pin['integration']['prefix_abi']),
                 '[[emulators]]', 'guest = "x64"', 'path = "lib/wine/aarch64-windows/libarm64ecfex.dll"',
+                'unix_library = "lib/wine/aarch64-unix/libarm64ecfex.so"',
                 '[[emulators]]', 'guest = "x86"', 'path = "lib/wine/aarch64-windows/libwow64fex.dll"',
+                'unix_library = "lib/wine/aarch64-unix/libwow64fex.so"',
                 '[environment]', 'FEX_TSOENABLED = "1"', 'NUCLEON_EMULATE_KUSD = "1"',
                 '[graphics]', 'dxmt = "share/nucleon/dxmt"',
             ]

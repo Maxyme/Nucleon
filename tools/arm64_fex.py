@@ -349,6 +349,34 @@ class Experiment:
                 env=self.env, log=self.logs / f"fex-{directory}-configure.log")
             run(["cmake", "--build", build, "--target", target, "--parallel", self.jobs],
                 env=self.env, log=self.logs / f"fex-{directory}-build.log")
+        self.build_tolkara_unixlib()
+
+    def build_tolkara_unixlib(self):
+        pin = self.recipe['alternatives']['tolkara']['fex']
+        checkout(self.fex, pin)
+        apply_wine_patches(self.fex, pin['unix_patches'])
+        source = self.fex / 'Source/Windows/UnixLib'
+        build = self.work / 'fex/unixlib'
+        build.mkdir(parents=True, exist_ok=True)
+        identity = dict(revision=pin['revision'], source=sha(source / 'FEXUnixLib.cpp'),
+                        header=sha(source / 'FEXUnixLib.h'),
+                        compiler=output(['/usr/bin/clang++', '--version']),
+                        patches={name:sha(REPO / name) for name in pin['unix_patches']})
+        receipt = build / 'build.json'
+        previous = json.loads(receipt.read_text()) if receipt.is_file() else {}
+        names = ['libarm64ecfex.so', 'libwow64fex.so']
+        if previous.get('inputs') == identity and all((build / name).is_file()
+                and sha(build / name) == previous.get('files', {}).get(name) for name in names):
+            return build
+        for name in names:
+            run(['/usr/bin/clang++', '-std=c++17', '-O2', '-arch', 'arm64', '-dynamiclib',
+                 '-Wall', '-Wextra', '-Werror', '-Wno-unused-parameter',
+                 '-Wl,-install_name,@rpath/' + name, source / 'FEXUnixLib.cpp', '-o', build / name],
+                log=self.logs / 'fex-unix-build.log')
+            run(['/usr/bin/codesign', '--force', '--sign', '-', build / name],
+                log=self.logs / 'fex-unix-build.log')
+        write_json(receipt, dict(inputs=identity,files={name:sha(build / name) for name in names}))
+        return build
 
     def build_tolkara_wine(self):
         settings = self.recipe["wine"]["tolkara"]
@@ -429,6 +457,9 @@ class Experiment:
             MACRUNNER_HB_X64_LOADER="0", MACRUNNER_HB_MAPSCAN_SKIP="1",
             WINEDLLOVERRIDES="winedbg.exe=d;winemenubuilder.exe=d;mscoree=d;mshtml=d", WINEDEBUG="+loaddll")
         if self.variant == "tolkara":
+            unix = self.build_tolkara_unixlib()
+            for name in ['libarm64ecfex.so', 'libwow64fex.so']:
+                atomic_copy(unix / name, runtime / 'lib/wine/aarch64-unix' / name)
             for directory, name in [("arm64ec", "libarm64ecfex.dll"), ("wow64", "libwow64fex.dll")]:
                 source = self.work / "fex" / directory / "Bin" / name
                 target = runtime / "lib/wine/aarch64-windows" / name

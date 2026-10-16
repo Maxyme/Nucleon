@@ -48,6 +48,8 @@ pub struct GraphicsPaths {
 struct Emulator {
     guest: GuestAbi,
     path: PathBuf,
+    #[serde(default)]
+    unix_library: Option<PathBuf>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -241,6 +243,22 @@ impl ResolvedRuntime {
                     .iter()
                     .find(|e| e.guest == *guest)
                     .context("FEX runtime requires an emulator for every declared guest ABI")?;
+                let companion = module.unix_library.as_ref().context(
+                    "FEX emulator requires unix_library declaring its matching native companion; rebuild and reinstall a complete runtime"
+                )?;
+                let companion = resolve(companion).context(
+                    "Missing FEX Unix companion; rebuild and reinstall a complete runtime",
+                )?;
+                ensure!(
+                    companion.parent() == Some(unix_dir.as_path())
+                        && runtime_checks::native_arch(&companion, arch)
+                        && runtime_checks::has_export(
+                            &fs::read(&companion)?,
+                            &["wine_unix_call_funcs"]
+                        ),
+                    "Invalid FEX Unix companion {}: expected a native library in unix_dir exporting __wine_unix_call_funcs",
+                    companion.display()
+                );
                 let module = resolve(&module.path)?;
                 let abi = runtime_checks::pe_abi(&fs::read(&module)?)?;
                 let expected = match guest {
@@ -439,10 +457,20 @@ pub(crate) fn fixture(mode: ExecutionMode) -> (tempfile::TempDir, ResolvedRuntim
         "bin/wine".to_string(),
         "bin/wineserver".into(),
         format!("lib/wine/{unix}/ntdll.so"),
+        format!("lib/wine/{unix}/libarm64ecfex.so"),
     ] {
+        let is_companion = path.ends_with("libarm64ecfex.so");
         let path = root.join(path);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(path, &native).unwrap();
+        let mut image = if is_companion {
+            runtime_checks::test_image("__wine_unix_call_funcs", 1)
+        } else {
+            native.clone()
+        };
+        if mode == ExecutionMode::Arm64Fex {
+            image[4..8].copy_from_slice(&0x0100000cu32.to_le_bytes());
+        }
+        fs::write(path, &image).unwrap();
     }
     fs::create_dir_all(root.join("lib/wine/aarch64-windows")).unwrap();
     fs::write(
@@ -460,7 +488,7 @@ pub(crate) fn fixture(mode: ExecutionMode) -> (tempfile::TempDir, ResolvedRuntim
     )
     .unwrap();
     let emulators = if mode == ExecutionMode::Arm64Fex {
-        "[[emulators]]\nguest='x64'\npath='lib/wine/aarch64-windows/libarm64ecfex.dll'"
+        "[[emulators]]\nguest='x64'\npath='lib/wine/aarch64-windows/libarm64ecfex.dll'\nunix_library='lib/wine/aarch64-unix/libarm64ecfex.so'"
     } else {
         ""
     };
@@ -481,6 +509,39 @@ pub(crate) fn fixture(mode: ExecutionMode) -> (tempfile::TempDir, ResolvedRuntim
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_emulators_require_declared_native_unix_companions_and_exports() {
+        let (temp, runtime) = fixture(ExecutionMode::Arm64Fex);
+        let descriptor = temp.path().join(DESCRIPTOR);
+        let text = fs::read_to_string(&descriptor).unwrap();
+        fs::write(
+            &descriptor,
+            text.replace("unix_library='lib/wine/aarch64-unix/libarm64ecfex.so'", ""),
+        )
+        .unwrap();
+        assert!(
+            format!("{:#}", ResolvedRuntime::inspect(temp.path()).unwrap_err())
+                .contains("unix_library")
+        );
+        fs::write(&descriptor, text).unwrap();
+        let companion = runtime.unix_dir.join("libarm64ecfex.so");
+        fs::remove_file(&companion).unwrap();
+        assert!(
+            format!("{:#}", ResolvedRuntime::inspect(temp.path()).unwrap_err())
+                .contains("Missing FEX Unix companion")
+        );
+        fs::write(
+            &companion,
+            runtime_checks::test_image("__wine_unix_call_funcs", 1),
+        )
+        .unwrap();
+        assert!(ResolvedRuntime::inspect(temp.path()).is_err()); // Intel companion
+        let mut image = runtime_checks::test_image("wrong_export", 1);
+        image[4..8].copy_from_slice(&0x0100000cu32.to_le_bytes());
+        fs::write(&companion, &image).unwrap();
+        assert!(ResolvedRuntime::inspect(temp.path()).is_err());
+    }
 
     #[test]
     fn explicit_mode_wins_in_a_dual_architecture_tree() {

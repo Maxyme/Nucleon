@@ -387,3 +387,20 @@ Policy tests require no Wine, compiler or GPU:
 ```sh
 python3 -m unittest discover -s tools -p 'test_*.py'
 ```
+
+### Matching FEX native companions
+
+Tolkara FEX requires both Windows emulator DLLs and their matching ARM64 Unix
+companions (`libarm64ecfex.so` and `libwow64fex.so`). `prepare-runtime` now builds
+these from the pinned Tolkara source with the Darwin portability patch, includes
+all four hashes in the generation identity, and declares each `unix_library` in
+the runtime descriptor. Linux-only kernel controls return unsupported on Darwin;
+software TSO remains enabled. MacRunner's differently ordered Unix function table
+cannot substitute for these libraries.
+
+After updating an older incomplete installation, rebuild the normal runner and
+CLI, run `arm64_fex_dx12.py prepare-runtime`, and install/register the printed
+runtime path as above. Existing installed generations are retained. Descriptor
+preflight now rejects missing, incorrect-architecture, or non-exporting native
+companions before prefix initialization. The existing CPU and Steam routing
+probes validate the repaired path before launching a game.
