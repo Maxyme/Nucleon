@@ -48,6 +48,10 @@ In Steam, open a game's **Properties → Compatibility**, enable the tool overri
 and select a Nucleon tool. Existing native macOS games should keep their native
 configuration. Use **Play** normally after configuration.
 
+Prebuilt ARM64 Wine/FEX core runtime prereleases are built separately from the
+Nucleon CLI. See [runtime releases](RUNTIME-RELEASES.md) for publisher automation,
+source/license contents, installation commands and the current graphics limits.
+
 ## Development
 
 ```sh

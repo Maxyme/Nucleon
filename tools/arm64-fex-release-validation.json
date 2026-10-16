@@ -1,0 +1,55 @@
+{
+  "date": "2026-10-16",
+  "status": "PUBLICATION_BLOCKED_BY_X86_CHILD_PROCESS_FAILURE",
+  "release_published": false,
+  "github_workflow_executed": false,
+  "publisher_regression_tests": {
+    "passed": 13,
+    "failed": 0
+  },
+  "workflow_yaml": "PARSED",
+  "real_runtime": {
+    "managed_archive_import": "PASSED",
+    "integrity_and_native_dependencies": "PASSED",
+    "native_loader": "PASSED_WITH_MACHO_LAYOUT_PRESERVED",
+    "x64": {
+      "status": "PASSED",
+      "checks": [
+        "memory",
+        "threads",
+        "exception",
+        "self-modifying-code",
+        "child-process"
+      ]
+    },
+    "x86": {
+      "status": "FAILED",
+      "passed_checks": [
+        "memory",
+        "threads",
+        "exception"
+      ],
+      "failed_check": "CreateProcessW",
+      "win32_error": 998
+    },
+    "cleanup": "PASSED"
+  },
+  "controls": {
+    "unstripped_runtime": {
+      "wineboot_exit": 0,
+      "x86_exit": 1,
+      "failed_check": "CreateProcessW",
+      "win32_error": 998
+    },
+    "without_exception_test": {
+      "x86_exit": 1,
+      "failed_check": "CreateProcessW",
+      "win32_error": 998
+    }
+  },
+  "logs": {
+    "final": "target/arm64-fex/tolkara/release-validation/0.1.0-rc.1-77y2io1y",
+    "unstripped": "target/runtime-release-raw-control/x86.log",
+    "without_exception": "target/runtime-release-raw-control/no-exception.log"
+  }
+}

@@ -956,17 +956,39 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_config_vdf_fixture() {
+        let content = include_str!("../../tests/fixtures/steam_config.vdf");
+        let parsed = keyvalues_parser::parse(content);
+        assert!(
+            parsed.is_ok(),
+            "Failed to parse config.vdf fixture: {:?}",
+            parsed.err()
+        );
+        assert_eq!(
+            compat_tool_for_appid(content, 601150).as_deref(),
+            Some("nucleon")
+        );
+        assert_eq!(compat_tool_for_appid(content, 26800), None);
+        assert_eq!(compat_tool_for_appid(content, 999999), None);
+    }
+
+    #[test]
+    #[ignore = "requires an accessible local Steam config.vdf; run explicitly with --ignored"]
     fn test_parse_real_config_vdf() {
         let path = paths::home_dir().join("Library/Application Support/Steam/config/config.vdf");
-        if path.exists() {
-            let content = fs::read_to_string(&path).unwrap();
-            let parsed = keyvalues_parser::parse(&content);
-            assert!(
-                parsed.is_ok(),
-                "Failed to parse real config.vdf: {:?}",
-                parsed.err()
-            );
-        }
+        let content = fs::read_to_string(&path).unwrap_or_else(|error| {
+            panic!(
+                "Cannot read local Steam config.vdf {}: {error}",
+                path.display()
+            )
+        });
+        let parsed = keyvalues_parser::parse(&content);
+        assert!(
+            parsed.is_ok(),
+            "Failed to parse local Steam config.vdf {}: {:?}",
+            path.display(),
+            parsed.err()
+        );
     }
 
     #[test]

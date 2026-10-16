@@ -1,0 +1,61 @@
+# Experimental CPU-only build. This does not register a Nucleon runtime or
+# claim game compatibility. Upstream copyright and licenses remain applicable.
+schema = 1
+
+[sources.hyperbridge]
+url = "https://github.com/t0b1kent/hyperbridge.git"
+revision = "9fb3dbf98a5d1809d7b01d59e7c977fe97c9b1e7"
+
+[sources.macrunner-app]
+url = "https://github.com/t0b1kent/macrunner-app.git"
+revision = "cc674e8d18248d053095657e9dd5855bf11ade0e"
+
+[sources.wine]
+url = "https://github.com/t0b1kent/macrunner-wine.git"
+revision = "ce9f9ed6177d57a43f6fd1e9c8d9be87224eb08a"
+
+[fex]
+url = "https://github.com/FEX-Emu/FEX.git"
+revision = "fd141ed6d721d03062619e4702bca1a0c93b6dd9"
+patch_order = "fex/PATCH-ORDER.txt"
+
+[toolchain]
+url = "https://github.com/mstorsjo/llvm-mingw/releases/download/20260505/llvm-mingw-20260505-ucrt-macos-universal.tar.xz"
+archive = "llvm-mingw-20260505-ucrt-macos-universal.tar.xz"
+directory = "llvm-mingw-20260505-ucrt-macos-universal"
+sha256 = "050379de888f0c843787819dadf183df3693330a5724643919e9121f16355295"
+
+[reference]
+url = "https://github.com/t0b1kent/macrunner-app/releases/download/v1.0.9/MacRunner-1.0.9-arm64.zip"
+archive = "MacRunner-1.0.9-arm64.zip"
+sha256 = "04f1ad4c6ee39538ce67b7137e47c20ae4a7eb72b261b86be5e9fd6f241e95b7"
+
+[alternatives.tolkara.wine]
+url = "https://github.com/tolkara/wine.git"
+revision = "ddf094e49915edf19d414d20bccd8404bcdb99f8"
+
+[alternatives.tolkara.fex]
+url = "https://github.com/tolkara/FEX.git"
+revision = "f39dfe320f4917351f555fed2de50abe28cd6fe4"
+unix_patches = ["assets/patches/fex-tolkara-darwin-unixlib.patch"]
+
+[wine]
+patches = ["assets/patches/wine-macrunner-without-vulkan.patch"]
+architectures = ["aarch64", "arm64ec", "x86_64", "i386"]
+configure = [
+    "--disable-tests", "--without-x", "--without-alsa", "--without-capi",
+    "--without-oss", "--without-pulse", "--with-coreaudio",
+    "--without-gstreamer", "--without-gnutls", "--without-sdl", "--without-usb",
+    "--without-vulkan", "--without-fontconfig", "--without-freetype",
+    "--without-ffmpeg", "--without-cups", "--without-pcap",
+]
+
+[wine.tolkara]
+patches = [
+    "assets/patches/wine-tolkara-arm64ec-chkstk-alias.patch",
+    "assets/patches/wine-tolkara-kusd-loads.patch",
+    "assets/patches/wine-tolkara-dxmt-window.patch",
+    "assets/patches/wine-tolkara-cursor-registry.patch",
+]
+shared_data_helper = "dlls/ntdll/unix/macrunner_fex_kusd.h"
+shared_data_helper_sha256 = "8e7d75d18572a01b37bfdbe6322e375f07d7920a460b76176f07cd4cdcca36a1"

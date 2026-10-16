@@ -2,11 +2,13 @@
 
 use anyhow::{Context, Result, bail};
 use nucleon_core::configuration as config;
-use nucleon_core::{paths, prefix, runner};
-use serde::Deserialize;
+use nucleon_core::launch::{GraphicsComponents, LaunchPlan};
+use nucleon_core::prefix_session::PrefixSession;
+use nucleon_core::profile::GameProfile as LaunchOverride;
+use nucleon_core::runtime::ResolvedRuntime;
+use nucleon_core::{paths, runner};
 use std::env;
-use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
@@ -16,19 +18,9 @@ use std::time::Duration;
 use sysinfo::{ProcessesToUpdate, System};
 
 mod process;
+mod session;
 use process::{OwnedChild, TERMINATION_GRACE};
-
-#[derive(Debug, Deserialize, Default)]
-#[serde(deny_unknown_fields)]
-struct LaunchOverride {
-    hud: Option<bool>,
-    engine: Option<String>,
-    use_steam_shim: Option<bool>,
-    dxvk_path: Option<PathBuf>,
-    vulkan_icd: Option<PathBuf>,
-    overlay: Option<bool>,
-    wine: Option<String>,
-}
+use session::{RunSession, trace as trace_runner};
 
 /// Resolve once so compatibility checks and execution use the same Wine.
 fn resolve_wine_override(
@@ -51,7 +43,7 @@ fn resolve_wine_override(
         let runtime = (!value.trim().is_empty()).then(|| nucleon_core::wine::resolve_wine_runtime_by_query(&value)).flatten()
             .ok_or_else(|| config::invalid(&source, &value, "Wine runtime was not found",
                 "Run 'nucleon wine list' and choose an installed name or path, or remove this override."))?;
-        log_runner(&format!(
+        trace_runner(&format!(
             "Wine selection from {source}: '{}' -> {}",
             runtime.name,
             runtime.root.display()
@@ -83,8 +75,7 @@ fn resolve_wine_override(
 }
 
 fn load_launch_settings(path: &Path) -> Result<Option<LaunchOverride>> {
-    config::optional_file(path)?.map(|data| serde_json::from_str(&data).with_context(|| format!(
-        "Invalid launch configuration {}. Correct its JSON field names/types or remove the file to reset it", path.display()))).transpose()
+    LaunchOverride::load(path)
 }
 
 fn requested_engine(
@@ -246,16 +237,7 @@ pub fn determine_wine_args(
 }
 
 fn log_runner(msg: &str) {
-    let ts = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
-    let line = format!("{ts} [nucleon-runner] {msg}\n");
-    print!("{line}");
-    let log_path = paths::support_dir().join("nucleon-runner.log");
-    if let Some(p) = log_path.parent() {
-        let _ = fs::create_dir_all(p);
-    }
-    if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(&log_path) {
-        let _ = f.write_all(line.as_bytes());
-    }
+    session::log(msg);
 }
 
 fn activate_frontmost_window() {
@@ -269,7 +251,9 @@ fn activate_frontmost_window() {
 
 fn set_runner_lib_env(cmd: &mut Command, runner_dir: &Path) {
     let lib_dir = runner_dir.join("lib");
-    let lib_unix = runner_dir.join("lib/wine/x86_64-unix");
+    let lib_unix = ResolvedRuntime::inspect(runner_dir)
+        .map(|r| r.unix_dir)
+        .unwrap_or_else(|_| runner_dir.join("lib/wine/x86_64-unix"));
     if lib_dir.is_dir() || lib_unix.is_dir() {
         cmd.env(
             "DYLD_FALLBACK_LIBRARY_PATH",
@@ -313,13 +297,21 @@ fn run_wineserver_helper(
     prefix: &Path,
     argument: &str,
     timeout: Duration,
+    runtime: Option<&ResolvedRuntime>,
 ) -> Result<()> {
     if !wineserver.is_file() {
         return Ok(());
     }
-    let mut command = Command::new(wineserver);
+    let mut command = runtime
+        .map(|r| r.command(wineserver))
+        .unwrap_or_else(|| Command::new(wineserver));
+    nucleon_core::launch::clean_command(&mut command);
     command.arg(argument).env("WINEPREFIX", prefix);
-    if let Some(runner) = wineserver.parent().and_then(Path::parent) {
+    if let Some(runtime) = runtime {
+        command
+            .env("DYLD_LIBRARY_PATH", &runtime.unix_dir)
+            .env("DYLD_FALLBACK_LIBRARY_PATH", runtime.root.join("lib"));
+    } else if let Some(runner) = wineserver.parent().and_then(Path::parent) {
         set_runner_lib_env(&mut command, runner);
     }
     let mut child = OwnedChild::spawn(&mut command).with_context(|| {
@@ -337,10 +329,14 @@ fn run_wineserver_helper(
     Ok(())
 }
 
-fn wait_wineserver(wineserver: &Path, prefix: &Path, timeout_ms: u64) {
-    if let Err(error) =
-        run_wineserver_helper(wineserver, prefix, "-w", Duration::from_millis(timeout_ms))
-    {
+fn wait_wineserver(runtime: &ResolvedRuntime, prefix: &Path, timeout_ms: u64) {
+    if let Err(error) = run_wineserver_helper(
+        &runtime.server,
+        prefix,
+        "-w",
+        Duration::from_millis(timeout_ms),
+        Some(runtime),
+    ) {
         log_runner(&format!("Wineserver wait failed: {error:#}"));
     }
 }
@@ -353,19 +349,62 @@ fn termination_flag() -> Result<Arc<AtomicBool>> {
     Ok(flag)
 }
 
-fn terminate_wine_prefix(runner_dir: &Path, pfx_dir: &Path, child: &mut OwnedChild) {
+fn terminate_wine_prefix(runtime: &ResolvedRuntime, pfx_dir: &Path, child: &mut OwnedChild) {
     // wineserver is scoped by WINEPREFIX. A shared Wine path or executable name is not
     // evidence of ownership: other games can be using that same runtime.
-    let wineserver_bin = runner_dir.join("bin/wineserver");
-    if let Err(error) =
-        run_wineserver_helper(&wineserver_bin, pfx_dir, "-k", Duration::from_millis(1500))
-    {
+    let wineserver_bin = &runtime.server;
+    if let Err(error) = run_wineserver_helper(
+        wineserver_bin,
+        pfx_dir,
+        "-k",
+        Duration::from_millis(1500),
+        Some(runtime),
+    ) {
         log_runner(&format!("Wineserver shutdown failed: {error:#}"));
     }
     if let Err(error) = child.terminate(TERMINATION_GRACE) {
         log_runner(&format!("Launcher group shutdown failed: {error:#}"));
     }
-    wait_wineserver(&wineserver_bin, pfx_dir, 1000);
+    wait_wineserver(runtime, pfx_dir, 1000);
+}
+
+fn stop_game(
+    session: &RunSession,
+    runtime: &ResolvedRuntime,
+    prefix: &Path,
+    child: &mut OwnedChild,
+    cleanup: &mut PrefixCleanup,
+) {
+    session.clock.begin_cleanup();
+    terminate_wine_prefix(runtime, prefix, child);
+    cleanup.armed = false;
+}
+
+/// Declared after the prefix lease, so failed preparation stops this prefix's
+/// server before ownership is released. Normal game shutdown already does this.
+struct PrefixCleanup {
+    runtime: ResolvedRuntime,
+    prefix: PathBuf,
+    clock: session::Clock,
+    armed: bool,
+}
+impl Drop for PrefixCleanup {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        self.clock.begin_cleanup();
+        if let Err(error) = run_wineserver_helper(
+            &self.runtime.server,
+            &self.prefix,
+            "-k",
+            Duration::from_secs(2),
+            Some(&self.runtime),
+        ) {
+            log_runner(&format!("Prefix preparation cleanup failed: {error:#}"));
+        }
+        wait_wineserver(&self.runtime, &self.prefix, 1000);
+    }
 }
 
 pub fn is_wine_game_process_line(
@@ -486,51 +525,65 @@ pub fn is_wine_game_process_running(runner_dir: &Path, target_exe: &Path, prefix
     })
 }
 
-pub fn run_with_args(args: &[String]) -> Result<()> {
-    let result = run_with_args_inner(args);
-    if let Err(error) = &result {
-        log_runner(&format!("Launch failed: {error:#}"));
-    }
-    result
+struct RunOutcome {
+    code: i32,
+    status: &'static str,
 }
 
-fn run_with_args_inner(args: &[String]) -> Result<()> {
+pub fn run_with_args(args: &[String]) -> Result<()> {
+    if args
+        .get(1)
+        .is_some_and(|verb| verb == "check-app-compatibility")
+    {
+        return Ok(());
+    }
+    let mut session = RunSession::create(args)?;
+    log_runner(&format!("Launch logs: {}", session.directory.display()));
+    let result = session
+        .configure()
+        .and_then(|()| run_with_args_inner(args, &mut session));
+    match result {
+        Ok(outcome) => {
+            session.finish(outcome.status, Some(outcome.code), None)?;
+            log_runner(&format!(
+                "Launch finished: {} (exit {})",
+                outcome.status, outcome.code
+            ));
+            if outcome.code != 0 {
+                std::process::exit(outcome.code);
+            }
+            Ok(())
+        }
+        Err(error) => {
+            log_runner(&format!("Launch failed: {error:#}"));
+            if let Err(report_error) = session.finish("failed", None, Some(format!("{error:#}"))) {
+                eprintln!("Cannot finalize launch receipt: {report_error:#}");
+            }
+            Err(error)
+        }
+    }
+}
+
+fn run_with_args_inner(args: &[String], session: &mut RunSession) -> Result<RunOutcome> {
     if args.len() < 2 {
-        eprintln!("Usage: nucleon-runner <verb> [args...]");
-        std::process::exit(1);
+        bail!("Usage: nucleon-runner <verb> [args...]");
     }
-
     let verb = &args[1];
-
-    if verb == "check-app-compatibility" {
-        std::process::exit(0);
-    }
-
-    // Bypass iscriptevaluator.exe immediately
     for arg in args {
         if arg.contains("iscriptevaluator.exe") {
             log_runner("Intercepted iscriptevaluator.exe, exiting cleanly");
-            std::process::exit(0);
+            return Ok(RunOutcome {
+                code: 0,
+                status: "skipped",
+            });
         }
     }
 
     // Parse Steam compatibility environment
-    let compat_appid = env::var("STEAM_COMPAT_APP_ID")
-        .ok()
-        .or_else(|| env::var("SteamAppId").ok())
-        .or_else(|| {
-            env::var_os("STEAM_COMPAT_DATA_PATH").and_then(|p| {
-                let path = PathBuf::from(p);
-                path.file_name()
-                    .and_then(|n| n.to_str())
-                    .filter(|s| s.chars().all(|c| c.is_ascii_digit()))
-                    .map(|s| s.to_string())
-            })
-        });
+    let compat_appid = session.appid.clone();
     let compat_data_path = env::var_os("STEAM_COMPAT_DATA_PATH")
         .map(PathBuf::from)
         .unwrap_or_else(|| paths::support_dir().join("default_prefix"));
-    let pfx_dir = compat_data_path.join("pfx");
     // WINEPREFIX is deliberately not exported into this process' environment: every Wine and
     // wineserver invocation receives it explicitly in its own environment map, which keeps the
     // value from leaking to unrelated children (and mutating env while other threads read it).
@@ -545,7 +598,10 @@ fn run_with_args_inner(args: &[String]) -> Result<()> {
 
     if game_args.is_empty() {
         log_runner("No game executable specified to run, exiting.");
-        std::process::exit(0);
+        return Ok(RunOutcome {
+            code: 0,
+            status: "skipped",
+        });
     }
 
     let target_exe = PathBuf::from(&game_args[0]);
@@ -557,21 +613,35 @@ fn run_with_args_inner(args: &[String]) -> Result<()> {
     // that dialog with no input pump, presenting as an engine-independent hang before Direct3D is
     // ever touched. It also silently mutates a Steam-managed game directory.
 
-    let profile_path = compat_appid.as_ref().map(|id| {
-        paths::support_dir()
-            .join("game_profiles")
-            .join(format!("{id}.json"))
+    let fex_selection = config::environment(nucleon_core::steam::fex::SELECTION_ENV)?
+        .map(|path| nucleon_core::steam::fex::load_selection(Path::new(&path)))
+        .transpose()?;
+    let explicit_profile = config::environment("NUCLEON_GAME_PROFILE")?.map(PathBuf::from);
+    let profile_path = explicit_profile.clone().or_else(|| {
+        compat_appid
+            .as_ref()
+            .map(|id| paths::game_profiles_dir(fex_selection.is_some()).join(format!("{id}.json")))
     });
     let profile_source = profile_path
         .as_ref()
         .map(|p| p.display().to_string())
         .unwrap_or_else(|| "game profile".into());
-    let game_profile = profile_path
+    let loaded_profile = profile_path
         .as_deref()
         .map(load_launch_settings)
         .transpose()?
-        .flatten()
-        .unwrap_or_default();
+        .flatten();
+    if explicit_profile.is_some() && loaded_profile.is_none() {
+        bail!("Explicit game profile was not found: {profile_source}");
+    }
+    let game_profile =
+        loaded_profile
+            .unwrap_or_default()
+            .with_defaults(if fex_selection.is_some() {
+                LaunchOverride::fex_default(compat_appid.as_deref().unwrap_or(""))
+            } else {
+                LaunchOverride::default()
+            });
     let override_path = compat_appid
         .as_ref()
         .map(|id| paths::support_dir().join(format!("launch_override_{id}.json")));
@@ -579,11 +649,15 @@ fn run_with_args_inner(args: &[String]) -> Result<()> {
         .as_ref()
         .map(|p| p.display().to_string())
         .unwrap_or_else(|| "launch override".into());
-    let launch_override = override_path
-        .as_deref()
-        .map(load_launch_settings)
-        .transpose()?
-        .flatten();
+    let launch_override = if explicit_profile.is_some() {
+        None
+    } else {
+        override_path
+            .as_deref()
+            .map(load_launch_settings)
+            .transpose()?
+            .flatten()
+    };
     let engine_env = if launch_override
         .as_ref()
         .and_then(|o| o.engine.as_ref())
@@ -604,11 +678,37 @@ fn run_with_args_inner(args: &[String]) -> Result<()> {
         requested_engine,
         None | Some(nucleon_core::detector::TargetEngine::Auto)
     ) {
-        nucleon_core::backend::resolve_active_backend_with_origin()?.0
+        if fex_selection.is_some()
+            && env::var_os("NUCLEON_BACKEND").is_none()
+            && env::var_os("NUCLEON_GRAPHICS_BACKEND").is_none()
+        {
+            nucleon_core::backend::GraphicsBackend::Auto
+        } else {
+            nucleon_core::backend::resolve_active_backend_with_origin()?.0
+        }
     } else {
         nucleon_core::backend::GraphicsBackend::Auto
     };
-    let wine_override_root = resolve_wine_override(&game_profile, &profile_source)?;
+    let wine_override_root = if let Some(pinned) = &fex_selection {
+        if let Some(selected) = launch_override
+            .as_ref()
+            .and_then(|p| p.wine.as_ref())
+            .or(game_profile.wine.as_ref())
+        {
+            let actual = nucleon_core::wine::resolve_wine_runtime_by_query(selected)
+                .context("Profile Wine runtime was not found")?;
+            if actual.root.canonicalize()? != pinned.root {
+                bail!(
+                    "ARM64/FEX Steam tool pins {}. Remove the conflicting wine field from {} or register the intended native runtime",
+                    pinned.root.display(),
+                    profile_source
+                );
+            }
+        }
+        Some(pinned.root.clone())
+    } else {
+        resolve_wine_override(&game_profile, &profile_source)?
+    };
     validate_graphics_paths(&game_profile, &profile_source)?;
     let enable_hud = match launch_override
         .as_ref()
@@ -630,15 +730,27 @@ fn run_with_args_inner(args: &[String]) -> Result<()> {
         None => environment_boolean("NUCLEON_STEAM_SHIM")?.or(game_profile.use_steam_shim),
     };
 
+    let mut resolved_graphics = None;
+    let mut resolved_runtime = fex_selection.clone();
+    let detection = nucleon_core::detector::detect_target_engine(&target_exe);
+    let mut effective_profile = game_profile.clone();
+    effective_profile.graphics_api = launch_override
+        .as_ref()
+        .and_then(|p| p.graphics_api)
+        .or(game_profile.graphics_api);
+    effective_profile.steam_protocol = launch_override
+        .as_ref()
+        .and_then(|p| p.steam_protocol)
+        .or(game_profile.steam_protocol);
+    let graphics_api = effective_profile.graphics_api(&target_exe, &detection.api)?;
     let (engine, api_desc) = match requested_engine {
         Some(nucleon_core::detector::TargetEngine::Auto) | None => {
-            let detection = nucleon_core::detector::detect_target_engine(&target_exe);
             let custom_wine = game_profile.wine.is_some()
                 || ["NUCLEON_WINE", "NUCLEON_WINE_PATH", "WINE_PATH"]
                     .iter()
                     .any(|key| env::var_os(key).is_some());
             let wine_engine = select_automatic_engine(
-                &detection.api,
+                &graphics_api,
                 {
                     let root = wine_override_root
                         .clone()
@@ -656,24 +768,32 @@ fn run_with_args_inner(args: &[String]) -> Result<()> {
                     } else {
                         None
                     };
-                    root.map(|root| {
-                        nucleon_core::detector::AutoBackends::discover_for(
-                            &root,
-                            &detection.api,
+                    root.map(|root| -> Result<_> {
+                        let runtime = match &fex_selection {
+                            Some(pinned) => pinned.clone(),
+                            None => ResolvedRuntime::inspect(&root)?,
+                        };
+                        let components = GraphicsComponents::discover(&runtime, icd, dxvk)?;
+                        let available = components.available(
+                            &runtime,
+                            &graphics_api,
                             nucleon_core::detector::is_pe_file_64_bit(
                                 detection.binary.as_deref().unwrap_or(&target_exe),
                             ),
-                            icd,
-                            dxvk,
-                        )
+                        );
+                        resolved_graphics = Some(components);
+                        resolved_runtime = Some(runtime);
+                        Ok(available)
                     })
+                    .transpose()?
                     .unwrap_or_default()
                 },
                 configured_backend,
                 custom_wine,
             )?;
-            log_runner(&format!(
-                "Automatic Runner: detected graphics API {:?} (found: {:?}, evidence: {}) -> selecting {:?}",
+            trace_runner(&format!(
+                "Automatic Runner: routing graphics API {:?} (detected {:?}, found: {:?}, evidence: {}) -> selecting {:?}",
+                graphics_api,
                 detection.api,
                 detection.detected_dll,
                 detection.evidence.description(),
@@ -690,11 +810,16 @@ fn run_with_args_inner(args: &[String]) -> Result<()> {
             )
         }
         Some(eng) => {
-            log_runner(&format!("Engine manually overridden -> {:?}", eng));
+            trace_runner(&format!("Engine manually overridden -> {:?}", eng));
             (eng, format!("Manual Override ({:?})", eng))
         }
     };
 
+    if fex_selection.is_some() && engine == nucleon_core::detector::TargetEngine::Gptk {
+        bail!(
+            "ARM64/FEX cannot use the Intel GPTK engine. Choose auto, dxmt, vkd3d, dxvk or wine in its profile"
+        );
+    }
     log_runner(&format!(
         "Engine Router: target '{}' [{}] -> engine {:?}",
         target_exe.display(),
@@ -723,136 +848,106 @@ fn run_with_args_inner(args: &[String]) -> Result<()> {
         })?
     };
 
-    let wine_bin = if runner_dir.join("bin/wine").is_file() {
-        runner_dir.join("bin/wine")
-    } else {
-        runner_dir.join("bin/wine64")
+    let mut runtime = match resolved_runtime {
+        Some(runtime) if runtime.root == runner_dir.canonicalize()? => runtime,
+        _ => ResolvedRuntime::inspect(&runner_dir)?,
     };
-    let wineserver_bin = runner_dir.join("bin/wineserver");
+    effective_profile.apply_protocol(&mut runtime)?;
+    let pfx_dir = paths::game_prefix(&compat_data_path, &runtime);
+    let runner_dir = runtime.root.clone();
+    let graphics = match resolved_graphics {
+        Some(components) => components,
+        None => GraphicsComponents::discover(
+            &runtime,
+            game_profile.vulkan_icd.as_deref(),
+            game_profile.dxvk_path.as_deref(),
+        )?,
+    };
+    let mut plan = LaunchPlan::new(
+        runtime,
+        pfx_dir.clone(),
+        active_engine,
+        graphics,
+        nucleon_core::detector::is_pe_file_64_bit(&target_exe),
+        user_shim_override,
+        &graphics_api,
+    )?;
+    plan.log_directory = Some(session.directory.clone());
+    plan.diagnostics = session.debug;
+    session.resolved(&plan, None, None)?;
+    let run_seconds = config::environment("NUCLEON_RUN_SECONDS")?
+        .map(|value| {
+            value
+                .parse::<std::num::NonZeroU64>()
+                .map(|n| Duration::from_secs(n.get()))
+                .with_context(|| "NUCLEON_RUN_SECONDS must be a positive number of seconds")
+        })
+        .transpose()?;
+    let wine_bin = plan.runtime.loader.clone();
+    trace_runner(&format!(
+        "Resolved runtime mode: {:?}; native libraries: {}",
+        plan.runtime.mode,
+        plan.runtime.unix_dir.display()
+    ));
 
-    if !wine_bin.exists() {
-        bail!("Wine binary not found at {}", wine_bin.display());
-    }
-
+    let term_flag = termination_flag()?;
+    let _runtime_lease = nucleon_core::managed_runtime::lease(&plan.runtime.root)?;
+    let _prefix_session = PrefixSession::acquire(
+        &compat_data_path,
+        &plan.runtime,
+        if verb == "waitforexitandrun" {
+            Duration::from_secs(5)
+        } else {
+            Duration::ZERO
+        },
+        || term_flag.load(Ordering::SeqCst),
+    )?;
+    let mut prefix_cleanup = PrefixCleanup {
+        runtime: plan.runtime.clone(),
+        prefix: pfx_dir.clone(),
+        clock: session.clock.clone(),
+        armed: true,
+    };
+    log_runner(&format!(
+        "Prefix: {} (family {}, ABI {})",
+        pfx_dir.display(),
+        plan.runtime.prefix.family,
+        plan.runtime.prefix.abi
+    ));
     // Wait for previous instance if requested
     if verb == "waitforexitandrun" {
-        wait_wineserver(&wineserver_bin, &pfx_dir, 5000);
+        wait_wineserver(&plan.runtime, &pfx_dir, 5000);
     }
 
-    // Initialize prefix, registry, and bridge DLLs
-    prefix::ensure_prefix(&pfx_dir, &runner_dir).with_context(|| format!("Cannot initialize prefix {} using Wine {}. Check the Wine installation and prefix permissions", pfx_dir.display(), runner_dir.display()))?;
-
-    // Stage or unstage translation DLLs based on active backend:
-    let backend_choice = match active_engine {
-        nucleon_core::detector::TargetEngine::Gptk => {
-            nucleon_core::backend::GraphicsBackend::D3DMetal
-        }
-        nucleon_core::detector::TargetEngine::Dxmt => nucleon_core::backend::GraphicsBackend::Dxmt,
-        nucleon_core::detector::TargetEngine::Dxvk => nucleon_core::backend::GraphicsBackend::Dxvk,
-        nucleon_core::detector::TargetEngine::KosmicKrisp
-        | nucleon_core::detector::TargetEngine::Vkd3d => {
-            nucleon_core::backend::GraphicsBackend::KosmicKrisp
-        }
-        nucleon_core::detector::TargetEngine::WineStaging => {
-            nucleon_core::backend::GraphicsBackend::Auto
-        }
-        nucleon_core::detector::TargetEngine::Auto => configured_backend,
-    };
-
-    let backend = nucleon_core::backend::create_backend(backend_choice);
-    let profiled_dxvk = if backend_choice == nucleon_core::backend::GraphicsBackend::Dxvk
-        && env::var_os("DXVK_PATH").is_none()
-    {
-        game_profile
-            .dxvk_path
-            .as_ref()
-            .map(|path| {
-                nucleon_core::dxvk::inspect_candidate_dir(path).ok_or_else(|| {
-                    anyhow::anyhow!("Invalid per-game DXVK bundle: {}", path.display())
-                })
-            })
-            .transpose()?
-    } else {
-        None
-    };
-    nucleon_core::backend_files::transaction(&pfx_dir, || -> Result<()> {
-        match backend_choice {
-            nucleon_core::backend::GraphicsBackend::Auto => {
-                backend.disable(&pfx_dir, Some(&runner_dir))?;
-            }
-            nucleon_core::backend::GraphicsBackend::D3DMetal => {
-                backend.enable(&pfx_dir, Some(&runner_dir))?;
-            }
-            _ => match if let Some(bundle) = &profiled_dxvk {
-                nucleon_core::dxmt::unstage_dxmt_from_prefix(&pfx_dir, Some(&runner_dir))?;
-                nucleon_core::dxvk::stage_dxvk_into_prefix(bundle, &pfx_dir)
-            } else {
-                backend.enable(&pfx_dir, Some(&runner_dir))
-            } {
-                Ok(staged) => {
-                    log_runner(&format!(
-                        "{} active ({} DLL(s) staged into prefix)",
-                        backend.display_name(),
-                        staged
-                    ));
-                }
-                Err(e) => {
-                    return Err(e.context(format!(
-                        "Failed to stage backend {}",
-                        backend.display_name()
-                    )));
-                }
-            },
-        }
-
-        Ok(())
+    plan.prepare_prefix().with_context(|| {
+        format!(
+            "Cannot initialize prefix {} using Wine {}",
+            pfx_dir.display(),
+            runner_dir.display()
+        )
     })?;
-
-    if enable_hud {
-        log_runner("Metal Performance HUD enabled");
+    let staged = plan.stage_graphics()?;
+    log_runner(&format!(
+        "Resolved graphics {:?} active ({staged} DLL operations)",
+        active_engine
+    ));
+    let mut exec_env = plan.execution_env(enable_hud, enable_overlay);
+    plan.configure_launch_environment(&mut exec_env)?;
+    let caches = nucleon_core::shader_cache::ShaderCaches::prepare(
+        &plan,
+        &compat_data_path,
+        compat_appid.as_deref(),
+        &target_exe,
+        &exec_env,
+    )?;
+    if let Some(caches) = &caches {
+        caches.apply(&mut exec_env);
     }
-    let mut exec_env = runner::build_execution_env_for_engine(
-        &runner_dir,
-        &pfx_dir,
-        active_engine,
-        enable_hud,
-        enable_overlay,
-    );
-    if matches!(
-        backend_choice,
-        nucleon_core::backend::GraphicsBackend::Dxvk
-            | nucleon_core::backend::GraphicsBackend::KosmicKrisp
-    ) {
-        if env::var_os("VK_DRIVER_FILES").is_none()
-            && env::var_os("VK_ICD_FILENAMES").is_none()
-            && let Some(icd) = &game_profile.vulkan_icd
-        {
-            if !icd.is_file() {
-                bail!("Per-game Vulkan ICD is missing: {}", icd.display());
-            }
-            exec_env.insert("VK_DRIVER_FILES".into(), icd.to_string_lossy().into_owned());
-            exec_env.insert(
-                "VK_ICD_FILENAMES".into(),
-                icd.to_string_lossy().into_owned(),
-            );
-        }
-        if let Some(bundle) = &profiled_dxvk {
-            let config = bundle.root.join("dxvk.conf");
-            if config.is_file() && env::var_os("DXVK_CONFIG_FILE").is_none() {
-                exec_env.insert(
-                    "DXVK_CONFIG_FILE".into(),
-                    config.to_string_lossy().into_owned(),
-                );
-            }
-        }
-    }
-    for name in ["VK_DRIVER_FILES", "VK_ICD_FILENAMES"] {
-        if let Some(value) = config::environment(name)? {
-            exec_env.insert("VK_DRIVER_FILES".into(), value.clone());
-            exec_env.insert("VK_ICD_FILENAMES".into(), value);
-            break;
-        }
-    }
+    session.resolved(
+        &plan,
+        Some(staged),
+        caches.as_ref().map(serde_json::to_value).transpose()?,
+    )?;
     if let Some(directory) = target_exe.parent() {
         let helpers = nucleon_core::detector::bundled_directx_helpers(
             directory,
@@ -875,8 +970,12 @@ fn run_with_args_inner(args: &[String]) -> Result<()> {
         exec_env.insert("SteamGameId".to_string(), id.clone());
     }
 
-    // Register before spawning Wine so handler failures cannot leave an unsupervised game.
-    let term_flag = termination_flag()?;
+    if term_flag.load(Ordering::SeqCst) {
+        return Ok(RunOutcome {
+            code: 0,
+            status: "cancelled",
+        });
+    }
 
     // Working directory is the parent of the exe if available
     let game_cwd = if let Some(exe_path) = game_args.first().map(Path::new) {
@@ -893,13 +992,11 @@ fn run_with_args_inner(args: &[String]) -> Result<()> {
         None
     };
 
-    let steam_shim = pfx_dir.join("drive_c/Program Files (x86)/Steam/steam.exe");
     let is_64 = nucleon_core::detector::is_pe_file_64_bit(&target_exe);
 
     let steamworks_title = nucleon_core::detector::file_uses_steamworks(&target_exe);
-    let wine_args =
-        determine_wine_args(&game_args, !is_64, steam_shim.is_file(), user_shim_override);
-    log_runner(&format!(
+    let wine_args = plan.wine_args(&game_args)?;
+    trace_runner(&format!(
         "Steam client handshake: target {} Steamworks; 64-bit {}; wrapper {}",
         if steamworks_title {
             "links"
@@ -914,13 +1011,13 @@ fn run_with_args_inner(args: &[String]) -> Result<()> {
         }
     ));
 
-    log_runner(&format!("Wine binary: {}", wine_bin.display()));
-    log_runner(&format!("Game CWD: {:?}", game_cwd));
-    log_runner(&format!(
+    trace_runner(&format!("Wine binary: {}", wine_bin.display()));
+    trace_runner(&format!("Game CWD: {:?}", game_cwd));
+    trace_runner(&format!(
         "Target architecture: {}",
         if is_64 { "64-bit" } else { "32-bit" }
     ));
-    log_runner(&format!("Launching game with Wine: {:?}", wine_args));
+    trace_runner(&format!("Launching game with Wine: {:?}", wine_args));
 
     for key in [
         "STEAM_COMPAT_APP_ID",
@@ -941,18 +1038,19 @@ fn run_with_args_inner(args: &[String]) -> Result<()> {
         "DYLD_INSERT_LIBRARIES",
     ] {
         if let Ok(value) = env::var(key) {
-            log_runner(&format!("INHERITED_ENV: {key}={value}"));
+            trace_runner(&format!("INHERITED_ENV: {key}={value}"));
         }
     }
 
-    let mut cmd = Command::new(&wine_bin);
+    let mut cmd = plan.runtime.command(&wine_bin);
+    nucleon_core::launch::clean_command(&mut cmd);
     cmd.args(&wine_args);
     // Clear parent injection; exec_env supplies only the native renderer on opt-in.
     cmd.env_remove("DYLD_INSERT_LIBRARIES")
         .env_remove("STEAM_DYLD_INSERT_LIBRARIES");
 
     for (k, v) in &exec_env {
-        log_runner(&format!("ENV: {}={}", k, v));
+        trace_runner(&format!("ENV: {}={}", k, v));
         cmd.env(k, v);
     }
 
@@ -960,15 +1058,15 @@ fn run_with_args_inner(args: &[String]) -> Result<()> {
         cmd.current_dir(cwd);
     }
 
-    let wine_log_path = paths::support_dir().join("wine.log");
-    if let Ok(file) = fs::File::create(&wine_log_path)
-        && let Ok(err_file) = file.try_clone()
-    {
-        cmd.stdout(std::process::Stdio::from(file));
-        cmd.stderr(std::process::Stdio::from(err_file));
-    }
+    let file = fs::File::create(&session.wine_log)
+        .with_context(|| format!("Cannot write Wine log {}", session.wine_log.display()))?;
+    cmd.stdout(std::process::Stdio::from(file.try_clone()?));
+    cmd.stderr(std::process::Stdio::from(file));
 
     let mut child = OwnedChild::spawn(&mut cmd).with_context(|| format!("Cannot launch Wine {}. Check that this binary is executable and matches your Mac's architecture", wine_bin.display()))?;
+
+    session.started()?;
+    let started = std::time::Instant::now();
 
     // Focus activation after slight delay
     thread::spawn(|| {
@@ -979,19 +1077,42 @@ fn run_with_args_inner(args: &[String]) -> Result<()> {
     // Supervision watchdog
     let mut primary_exited = false;
     let mut exit_code = 0;
+    let mut outcome = "exited";
 
     loop {
+        if run_seconds.is_some_and(|limit| started.elapsed() >= limit) {
+            log_runner("Bounded run finished; stopping owned Wine prefix");
+            stop_game(
+                session,
+                &plan.runtime,
+                &pfx_dir,
+                &mut child,
+                &mut prefix_cleanup,
+            );
+            exit_code = 0;
+            outcome = "bounded";
+            break;
+        }
         if term_flag.load(Ordering::SeqCst) {
             log_runner("Termination signal received, stopping Wine processes cleanly");
-            terminate_wine_prefix(&runner_dir, &pfx_dir, &mut child);
-            std::process::exit(0);
+            stop_game(
+                session,
+                &plan.runtime,
+                &pfx_dir,
+                &mut child,
+                &mut prefix_cleanup,
+            );
+            exit_code = 0;
+            outcome = "cancelled";
+            break;
         }
 
         if !primary_exited {
             match child.try_wait() {
                 Ok(Some(status)) => {
                     primary_exited = true;
-                    exit_code = status.code().unwrap_or(0);
+                    exit_code = status.code().unwrap_or(1);
+                    session.primary_exited(status)?;
                     log_runner(&format!("Wine primary process exited with: {:?}", status));
 
                     // When Wine acts as a launcher that spawns/forks wine-preloader and exits,
@@ -1012,7 +1133,13 @@ fn run_with_args_inner(args: &[String]) -> Result<()> {
                         log_runner(
                             "No Wine game processes detected after primary launcher exit, shutting down",
                         );
-                        terminate_wine_prefix(&runner_dir, &pfx_dir, &mut child);
+                        stop_game(
+                            session,
+                            &plan.runtime,
+                            &pfx_dir,
+                            &mut child,
+                            &mut prefix_cleanup,
+                        );
                         break;
                     }
                 }
@@ -1020,7 +1147,14 @@ fn run_with_args_inner(args: &[String]) -> Result<()> {
                 Err(e) => {
                     log_runner(&format!("Error waiting on Wine process: {}", e));
                     exit_code = 1;
-                    terminate_wine_prefix(&runner_dir, &pfx_dir, &mut child);
+                    outcome = "supervision-failed";
+                    stop_game(
+                        session,
+                        &plan.runtime,
+                        &pfx_dir,
+                        &mut child,
+                        &mut prefix_cleanup,
+                    );
                     break;
                 }
             }
@@ -1031,7 +1165,13 @@ fn run_with_args_inner(args: &[String]) -> Result<()> {
                 thread::sleep(Duration::from_millis(500));
                 if !is_wine_game_process_running(&runner_dir, &target_exe, &pfx_dir) {
                     log_runner("All Wine game processes have terminated, exiting cleanly");
-                    terminate_wine_prefix(&runner_dir, &pfx_dir, &mut child);
+                    stop_game(
+                        session,
+                        &plan.runtime,
+                        &pfx_dir,
+                        &mut child,
+                        &mut prefix_cleanup,
+                    );
                     break;
                 }
             }
@@ -1040,7 +1180,10 @@ fn run_with_args_inner(args: &[String]) -> Result<()> {
         thread::sleep(Duration::from_millis(500));
     }
 
-    std::process::exit(exit_code);
+    Ok(RunOutcome {
+        code: exit_code,
+        status: outcome,
+    })
 }
 
 #[cfg(test)]
@@ -1088,7 +1231,8 @@ mod tests {
         .unwrap();
         fs::set_permissions(&server, fs::Permissions::from_mode(0o755)).unwrap();
         for argument in ["-k", "-w"] {
-            run_wineserver_helper(&server, &prefix, argument, Duration::from_secs(2)).unwrap();
+            run_wineserver_helper(&server, &prefix, argument, Duration::from_secs(2), None)
+                .unwrap();
             assert_eq!(
                 fs::read_to_string(prefix.join("helper-args")).unwrap(),
                 format!("{}\n{argument}\n", prefix.display())
@@ -1467,6 +1611,28 @@ mod tests {
         use std::fs;
         use tempfile::tempdir;
         let temp = tempdir().unwrap();
+        const CHILD_TEST: &str = "NUCLEON_BACKEND_STAGING_TEST_CHILD";
+        if env::var_os(CHILD_TEST).is_none() {
+            let output = Command::new(env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "tests::test_golden_path_backend_staging_isolation",
+                    "--nocapture",
+                ])
+                .env_clear()
+                .env(CHILD_TEST, "1")
+                .env("NUCLEON_SUPPORT_DIR", temp.path())
+                .output()
+                .unwrap();
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            assert!(
+                output.status.success() && stdout.contains("1 passed;"),
+                "Isolated backend staging test failed ({status}):\n{stdout}\n{stderr}",
+                status = output.status,
+                stderr = String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
         let pfx_dir = temp.path().join("pfx");
         let sys32 = pfx_dir.join("drive_c/windows/system32");
         let syswow64 = pfx_dir.join("drive_c/windows/syswow64");

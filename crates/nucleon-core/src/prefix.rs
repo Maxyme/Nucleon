@@ -1,58 +1,244 @@
 use crate::paths;
-use crate::runner;
-use anyhow::Result;
+use anyhow::{Context, Result, ensure};
 use std::fs;
 use std::path::Path;
 use std::process::Command;
 
-pub fn ensure_prefix(prefix_dir: &Path, runner_dir: &Path) -> Result<()> {
-    fs::create_dir_all(prefix_dir)?;
-    let drive_c = prefix_dir.join("drive_c");
-
-    if !drive_c.exists() {
-        log::info!("Initializing new Wine prefix at {}", prefix_dir.display());
-        let envs = runner::build_execution_env(runner_dir, prefix_dir, false);
-        let wineboot = runner_dir.join("bin/wineboot");
-
-        let mut cmd = Command::new(&wineboot);
-        cmd.arg("-u")
-            .env_remove("DYLD_INSERT_LIBRARIES")
-            .env_remove("STEAM_DYLD_INSERT_LIBRARIES");
-        for (k, v) in envs {
-            cmd.env(k, v);
+/// Bootstrap failures never publish a readiness marker or stage game DLL overrides.
+pub fn ensure_prefix_for_plan(plan: &crate::launch::LaunchPlan) -> Result<()> {
+    let runtime = &plan.runtime;
+    let p = &plan.prefix;
+    let source = plan
+        .bridge
+        .join(runtime.unix_name())
+        .join("lsteamclient.so");
+    ensure!(
+        crate::runtime_checks::native_arch(&source, runtime.arch()),
+        "Missing or incompatible {:?} Steam Unix bridge: {}",
+        runtime.mode,
+        source.display()
+    );
+    let pe = plan
+        .bridge
+        .join(if plan.is64 {
+            "x86_64-windows"
+        } else {
+            "i386-windows"
+        })
+        .join("lsteamclient.dll");
+    ensure!(
+        crate::runtime_checks::pe(Some(&pe), plan.is64),
+        "Steam PE bridge has the wrong guest ABI: {}",
+        pe.display()
+    );
+    if plan.use_steam_helper {
+        plan.validate_steam_helper()?;
+    }
+    if runtime.steam_protocol == crate::runtime::SteamProtocol::ValveRedirect {
+        ensure!(
+            plan.is64
+                && crate::runtime_checks::pe(
+                    Some(&plan.bridge.join("steamclient64.dll.valve")),
+                    true
+                ),
+            "Valve redirect requires a genuine AMD64 steamclient64.dll.valve and an x64 guest"
+        );
+    }
+    ensure_runtime_abi(p, runtime.mode)?;
+    let configured = p.join(".nucleon-configured-v3");
+    let env = plan.bootstrap_env();
+    let bootstrapped = p.join(".nucleon-bootstrapped-v1");
+    let runtime_inputs = vec![runtime.loader.clone(), runtime.unix_dir.join("ntdll.so")];
+    let bootstrap = || -> Result<()> {
+        let result = run_prefix_command(
+            runtime.command(&runtime.loader).args(["wineboot", "-i"]),
+            &env,
+            std::time::Duration::from_secs(120),
+        );
+        if let Err(error) = result {
+            let _ = run_prefix_command(
+                runtime.command(&runtime.server).arg("-k"),
+                &env,
+                std::time::Duration::from_secs(5),
+            );
+            return Err(error.context("Wine prefix initialization failed"));
         }
-        let _ = cmd.status();
-
-        // Wait for wineserver to settle (up to 5 seconds)
-        let wineserver = runner_dir.join("bin/wineserver");
-        if let Ok(mut child) = Command::new(&wineserver)
-            .arg("-w")
-            .env("WINEPREFIX", prefix_dir)
-            .env_remove("DYLD_INSERT_LIBRARIES")
-            .env_remove("STEAM_DYLD_INSERT_LIBRARIES")
-            .spawn()
+        ensure!(
+            p.join("drive_c/windows").is_dir(),
+            "Wine bootstrap did not create a Windows directory"
+        );
+        crate::fs_util::atomic_write_file(&bootstrapped, b"1")
+    };
+    if runtime.mode == crate::runtime::ExecutionMode::Arm64Fex {
+        if !p.join("drive_c/windows/system32").is_dir()
+            || !p.join("user.reg").is_file()
+            || !p.join("system.reg").is_file()
         {
-            let start = std::time::Instant::now();
-            loop {
-                if let Ok(Some(_)) = child.try_wait() {
-                    break;
+            crate::backend_files::remove(&bootstrapped)?;
+            crate::backend_files::remove(&configured)?;
+        }
+        crate::staging::component(
+            &p.join(".nucleon-prepared/bootstrap.json"),
+            crate::staging::key(&("bootstrap-v2", &runtime.root, &runtime.environment))?,
+            &runtime_inputs,
+            std::slice::from_ref(&bootstrapped),
+            bootstrap,
+        )?;
+    } else if !p.join("drive_c/windows").is_dir() {
+        bootstrap()?;
+    }
+    ensure!(
+        p.join("drive_c/windows").is_dir(),
+        "Wine bootstrap did not create a Windows directory"
+    );
+    isolate_user_shell_folders(p)?;
+    crate::staging::component(
+        &p.join(".nucleon-prepared/registry.json"),
+        crate::staging::key(&(PREFIX_REGISTRY, &runtime.root))?,
+        &runtime_inputs,
+        std::slice::from_ref(&configured),
+        || {
+            let reg = p.join("nucleon_tweaks.reg");
+            crate::fs_util::atomic_write_file(&reg, PREFIX_REGISTRY)?;
+            run_prefix_command(
+                runtime.command(&runtime.loader).arg("regedit").arg(&reg),
+                &env,
+                std::time::Duration::from_secs(30),
+            )?;
+            finish_registry_import(&reg, &configured)
+        },
+    )?;
+    prepare_bridge_libraries_for_runtime(p, &plan.bridge, runtime)?;
+    if runtime.steam_protocol == crate::runtime::SteamProtocol::ValveRedirect {
+        let marker = p.join(".nucleon-steam-redirect-v1");
+        crate::staging::component(
+            &p.join(".nucleon-prepared/steam-registry.json"),
+            crate::staging::key(&("steam-redirect-registry-v1", &runtime.root))?,
+            &runtime_inputs,
+            std::slice::from_ref(&marker),
+            || {
+                for (key, name, value) in [
+                    (
+                        "Software\\Valve\\Steam",
+                        "SteamPath",
+                        "C:\\Program Files (x86)\\Steam",
+                    ),
+                    (
+                        "Software\\Valve\\Steam\\ActiveProcess",
+                        "SteamClientDll64",
+                        "C:\\Program Files (x86)\\Steam\\steamclient64.dll",
+                    ),
+                    (
+                        "Software\\Valve\\Steam\\ActiveProcess",
+                        "Universe",
+                        "Public",
+                    ),
+                ] {
+                    run_prefix_command(
+                        runtime.command(&runtime.loader).args([
+                            "reg",
+                            "add",
+                            &format!("HKCU\\{key}"),
+                            "/v",
+                            name,
+                            "/t",
+                            "REG_SZ",
+                            "/d",
+                            value,
+                            "/f",
+                        ]),
+                        &env,
+                        std::time::Duration::from_secs(30),
+                    )?;
                 }
-                if start.elapsed() >= std::time::Duration::from_millis(5000) {
-                    let _ = child.kill();
-                    break;
-                }
-                std::thread::sleep(std::time::Duration::from_millis(100));
-            }
+                crate::fs_util::atomic_write_file(&marker, b"1")
+            },
+        )?;
+    }
+    Ok(())
+}
+
+/// Record ABI ownership only when absent; formatting does not change ownership.
+fn ensure_runtime_abi(prefix: &Path, mode: crate::runtime::ExecutionMode) -> Result<()> {
+    let marker = prefix.join(".nucleon-runtime-abi");
+    match fs::read_to_string(&marker) {
+        Ok(previous) => {
+            let recorded: crate::runtime::ExecutionMode = serde_json::from_str(&previous)
+                .with_context(|| format!("Invalid prefix ABI marker {}", marker.display()))?;
+            ensure!(
+                recorded == mode,
+                "Prefix belongs to {}; select a separate prefix for {} (ABI marker {})",
+                previous.trim(),
+                serde_json::to_string(&mode)?,
+                marker.display()
+            );
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            ensure!(
+                !prefix.join("drive_c").exists() || mode == crate::runtime::ExecutionMode::Intel,
+                "Existing prefix {} has no native runtime ABI record; use a new ARM64/FEX prefix",
+                prefix.display()
+            );
+            fs::create_dir_all(prefix)?;
+            // This records ABI ownership, not readiness; interrupted bootstrap can retry.
+            crate::fs_util::atomic_write_file(&marker, serde_json::to_vec(&mode)?)?;
+        }
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("Read prefix ABI marker {}", marker.display()));
         }
     }
-
-    isolate_user_shell_folders(prefix_dir)?;
-    configure_prefix_registry(prefix_dir, runner_dir)?;
-    stage_bridge_libraries(prefix_dir)?;
-    #[cfg(target_os = "macos")]
-    crate::steam_ntdll::bind_prefix(prefix_dir, runner_dir)?;
-
     Ok(())
+}
+
+pub(crate) fn run_prefix_command(
+    command: &mut Command,
+    env: &std::collections::HashMap<String, String>,
+    timeout: std::time::Duration,
+) -> Result<()> {
+    use crate::process::{OwnedChild, TERMINATION_GRACE};
+    crate::launch::clean_command(command);
+    command.envs(env);
+    if let Some(path) = env.get("NUCLEON_SETUP_LOG") {
+        let file = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)?;
+        command
+            .stdout(std::process::Stdio::from(file.try_clone()?))
+            .stderr(std::process::Stdio::from(file));
+    }
+    let mut child = OwnedChild::spawn(command)?;
+    let start = std::time::Instant::now();
+    loop {
+        if let Some(status) = child.try_wait()? {
+            child.terminate(std::time::Duration::ZERO)?;
+            ensure!(status.success(), "Wine setup command failed: {status}");
+            return Ok(());
+        }
+        if start.elapsed() >= timeout {
+            child.terminate(TERMINATION_GRACE)?;
+            anyhow::bail!(
+                "Wine setup command timed out after {} seconds",
+                timeout.as_secs()
+            );
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
+pub fn ensure_prefix(prefix_dir: &Path, runner_dir: &Path) -> Result<()> {
+    let runtime = crate::runtime::ResolvedRuntime::inspect(runner_dir)?;
+    let plan = crate::launch::LaunchPlan::new(
+        runtime,
+        prefix_dir.to_path_buf(),
+        crate::detector::TargetEngine::WineStaging,
+        Default::default(),
+        true,
+        Some(false),
+        &crate::detector::GraphicsApi::Unknown,
+    )?;
+    ensure_prefix_for_plan(&plan)
 }
 
 /// Isolates user shell folders (Desktop, Downloads, Documents, etc.) inside the Wine prefix.
@@ -123,16 +309,60 @@ pub fn isolate_all_steam_game_prefixes() -> Result<usize> {
 }
 
 pub fn configure_prefix_registry(prefix_dir: &Path, runner_dir: &Path) -> Result<()> {
-    let marker = prefix_dir.join(".nucleon_configured_v2");
-    if marker.exists() {
-        return Ok(());
+    let runtime = crate::runtime::ResolvedRuntime::inspect(runner_dir)?;
+    let plan = crate::launch::LaunchPlan::new(
+        runtime,
+        prefix_dir.to_path_buf(),
+        crate::detector::TargetEngine::WineStaging,
+        Default::default(),
+        true,
+        Some(false),
+        &crate::detector::GraphicsApi::Unknown,
+    )?;
+    let marker = prefix_dir.join(".nucleon-configured-v3");
+    if !marker.is_file() {
+        let reg = prefix_dir.join("nucleon_tweaks.reg");
+        crate::fs_util::atomic_write_file(&reg, PREFIX_REGISTRY)?;
+        run_prefix_command(
+            plan.runtime
+                .command(&plan.runtime.loader)
+                .arg("regedit")
+                .arg(&reg),
+            &plan.bootstrap_env(),
+            std::time::Duration::from_secs(30),
+        )?;
+        finish_registry_import(&reg, &marker)?;
     }
+    Ok(())
+}
 
-    let reg_file = prefix_dir.join("nucleon_tweaks.reg");
-    let reg_content = r#"Windows Registry Editor Version 5.00
+/// Call only after a successful import: temporary-file cleanup is not readiness.
+fn finish_registry_import(reg: &Path, configured: &Path) -> Result<()> {
+    if let Err(error) = fs::remove_file(reg)
+        && error.kind() != std::io::ErrorKind::NotFound
+    {
+        log::warn!(
+            "Could not remove temporary registry file {} after successful import: {error}",
+            reg.display()
+        );
+    }
+    crate::fs_util::atomic_write_file(configured, b"1").with_context(|| {
+        format!(
+            "Publish registry configuration marker {}",
+            configured.display()
+        )
+    })
+}
+
+const PREFIX_REGISTRY: &str = r#"Windows Registry Editor Version 5.00
 
 [HKEY_CURRENT_USER\Software\Wine\Mac Driver]
 "OpenGLSurfaceMode"="behind"
+
+; DiRT's custom menu cursor is blank on the ARM64/FEX GDI path.
+; Use a native pointer for this one resource without changing other cursors.
+[HKEY_CURRENT_USER\Software\Wine\Mac Driver\Cursors]
+"dirtrally2.exe,104"="arrowCursor"
 
 [HKEY_CURRENT_USER\Software\Wine\Direct3D]
 "csmt"=dword:00000001
@@ -168,38 +398,53 @@ pub fn configure_prefix_registry(prefix_dir: &Path, runner_dir: &Path) -> Result
 "My Video"="%USERPROFILE%\\Videos"
 "#;
 
-    fs::write(&reg_file, reg_content)?;
-
-    let envs = runner::build_execution_env(runner_dir, prefix_dir, false);
-    let regedit = runner_dir.join("bin/regedit");
-
-    let mut cmd = Command::new(&regedit);
-    cmd.arg(&reg_file)
-        .env_remove("DYLD_INSERT_LIBRARIES")
-        .env_remove("STEAM_DYLD_INSERT_LIBRARIES");
-    for (k, v) in envs {
-        cmd.env(k, v);
-    }
-    let _ = cmd.status();
-
-    let wineserver = runner_dir.join("bin/wineserver");
-    let _ = Command::new(&wineserver)
-        .arg("-k")
-        .env("WINEPREFIX", prefix_dir)
-        .env_remove("DYLD_INSERT_LIBRARIES")
-        .env_remove("STEAM_DYLD_INSERT_LIBRARIES")
-        .status();
-
-    let _ = fs::remove_file(&reg_file);
-    let _ = fs::write(&marker, b"1");
-    Ok(())
-}
-
 pub fn stage_bridge_libraries(prefix_dir: &Path) -> Result<()> {
     stage_bridge_libraries_from(prefix_dir, &paths::bridge_dir())
 }
 
 fn stage_bridge_libraries_from(prefix_dir: &Path, bridge: &Path) -> Result<()> {
+    stage_bridge_layout(prefix_dir, bridge, "x86_64-unix", false, None)
+}
+
+pub fn stage_bridge_libraries_for_runtime(
+    prefix_dir: &Path,
+    bridge: &Path,
+    runtime: &crate::runtime::ResolvedRuntime,
+) -> Result<()> {
+    stage_bridge_layout(
+        prefix_dir,
+        bridge,
+        runtime.unix_name(),
+        runtime.steam_protocol == crate::runtime::SteamProtocol::ValveRedirect,
+        None,
+    )
+}
+
+/// Stage the final bridge image, reusing a privately bound/signed variant.
+/// Unlike prefix initialization this performs no Wine or Steam command.
+pub fn prepare_bridge_libraries_for_runtime(
+    prefix: &Path,
+    bridge: &Path,
+    runtime: &crate::runtime::ResolvedRuntime,
+) -> Result<()> {
+    stage_bridge_layout(
+        prefix,
+        bridge,
+        runtime.unix_name(),
+        runtime.steam_protocol == crate::runtime::SteamProtocol::ValveRedirect,
+        Some(runtime),
+    )
+}
+
+fn stage_bridge_layout(
+    prefix_dir: &Path,
+    bridge: &Path,
+    unix_name: &str,
+    redirect: bool,
+    bound: Option<&crate::runtime::ResolvedRuntime>,
+) -> Result<()> {
+    use crate::staging::Desired;
+    let mut desired = std::collections::BTreeMap::new();
     let steam_dir = prefix_dir.join("drive_c/Program Files (x86)/Steam");
     let legacy_dir = steam_dir.join("legacycompat");
     let sys32 = prefix_dir.join("drive_c/windows/system32");
@@ -254,9 +499,9 @@ fn stage_bridge_libraries_from(prefix_dir: &Path, bridge: &Path) -> Result<()> {
 
     for (name, targets) in files_to_stage {
         let src_file = bridge.join(name);
-        if src_file.is_file() {
+        if src_file.is_file() && (name != "lsteamclient.so" || unix_name == "x86_64-unix") {
             for tgt in targets {
-                let _ = fs::copy(&src_file, &tgt);
+                desired.insert(tgt, Desired::Copy(src_file.to_path_buf()));
             }
         }
     }
@@ -274,7 +519,7 @@ fn stage_bridge_libraries_from(prefix_dir: &Path, bridge: &Path) -> Result<()> {
             steam_dir.join("steamclient64.dll"),
             steam_dir.join("x86_64-windows/lsteamclient.dll"),
         ] {
-            fs::copy(&x64_lsteam, target)?;
+            desired.insert(target, Desired::Copy(x64_lsteam.to_path_buf()));
         }
     }
     let i386_lsteam = bridge.join("i386-windows/lsteamclient.dll");
@@ -288,39 +533,64 @@ fn stage_bridge_libraries_from(prefix_dir: &Path, bridge: &Path) -> Result<()> {
             steam_dir.join("steamclient.dll"),
             steam_dir.join("i386-windows/lsteamclient.dll"),
         ] {
-            fs::copy(&i386_lsteam, target)?;
+            desired.insert(target, Desired::Copy(i386_lsteam.to_path_buf()));
+        }
+    }
+
+    if redirect {
+        let valve = bridge.join("steamclient64.dll.valve");
+        for target in [
+            steam_dir.join("steamclient64.dll"),
+            sys32.join("steamclient64.dll"),
+        ] {
+            desired.insert(target, Desired::Copy(valve.to_path_buf()));
         }
     }
 
     // Copy architecture-specific unix bridge libraries if present
-    let x64_unix_lsteam = bridge.join("x86_64-unix/lsteamclient.so");
+    let x64_unix_lsteam = bridge.join(unix_name).join("lsteamclient.so");
+    #[cfg(target_os = "macos")]
+    let x64_unix_lsteam = if let Some(runtime) = bound {
+        crate::steam_ntdll::cached_library(&x64_unix_lsteam, runtime)?
+    } else {
+        x64_unix_lsteam
+    };
     if x64_unix_lsteam.is_file() {
-        let _ = fs::copy(&x64_unix_lsteam, steam_dir.join("lsteamclient.so"));
-        let _ = fs::copy(&x64_unix_lsteam, steam_dir.join("steamclient.so"));
-        let _ = fs::copy(&x64_unix_lsteam, steam_dir.join("steamclient64.so"));
+        desired.insert(
+            steam_dir.join("lsteamclient.so"),
+            Desired::Copy(x64_unix_lsteam.to_path_buf()),
+        );
+        desired.insert(
+            steam_dir.join("steamclient.so"),
+            Desired::Copy(x64_unix_lsteam.to_path_buf()),
+        );
+        desired.insert(
+            steam_dir.join("steamclient64.so"),
+            Desired::Copy(x64_unix_lsteam.to_path_buf()),
+        );
     }
 
-    // Standard builtin PE lookup also changes Unix-library lookup. Point that lookup
-    // at the prefix-private files that steam_ntdll::bind_prefix relinks afterward.
-    #[cfg(unix)]
-    if steam_dir.join("lsteamclient.so").is_file() {
-        let unix_dir = steam_dir.join("x86_64-unix");
-        fs::create_dir_all(&unix_dir)?;
+    // These links are part of the prepared output set, so missing/retargeted
+    // aliases are repaired without touching identical libraries.
+    if x64_unix_lsteam.is_file() {
         for name in [
             "lsteamclient.so",
             "steamclient.so",
             "steamclient64.so",
             "ntdll.so",
         ] {
-            let target = std::path::PathBuf::from(format!("../{name}"));
-            let destination = unix_dir.join(name);
-            if fs::read_link(&destination).ok().as_ref() != Some(&target) {
-                let staging = tempfile::tempdir_in(&unix_dir)?;
-                let link = staging.path().join(name);
-                std::os::unix::fs::symlink(target, &link)?;
-                fs::rename(link, destination)?;
-            }
+            desired.insert(
+                steam_dir.join(unix_name).join(name),
+                Desired::Link(std::path::PathBuf::from(format!("../{name}"))),
+            );
         }
+    }
+    if let Some(runtime) = bound {
+        desired.insert(
+            steam_dir.join("ntdll.so"),
+            Desired::Link(runtime.unix_dir.join("ntdll.so").canonicalize()?),
+        );
+        desired.insert(steam_dir.join("ntdll_compat.so"), Desired::Absent);
     }
 
     // Copy legacycompat files and legacy Steam.dll
@@ -332,14 +602,19 @@ fn stage_bridge_libraries_from(prefix_dir: &Path, bridge: &Path) -> Result<()> {
             let p = e.path();
             if p.is_file() {
                 let fname = e.file_name();
-                let _ = fs::copy(&p, legacy_dir.join(&fname));
+                desired.insert(legacy_dir.join(&fname), Desired::Copy(p.to_path_buf()));
                 if fname == "Steam.dll" {
-                    let _ = fs::copy(&p, syswow64.join("Steam.dll"));
+                    desired.insert(syswow64.join("Steam.dll"), Desired::Copy(p.to_path_buf()));
                 }
             }
         }
     }
 
+    crate::staging::files(
+        &prefix_dir.join(".nucleon-prepared/bridge-files.json"),
+        &desired,
+        |op| op(),
+    )?;
     Ok(())
 }
 
@@ -347,6 +622,261 @@ fn stage_bridge_libraries_from(prefix_dir: &Path, bridge: &Path) -> Result<()> {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn runtime_abi_accepts_equivalent_json_without_rewriting_the_marker() {
+        use crate::runtime::ExecutionMode;
+        use std::os::unix::fs::MetadataExt;
+
+        let prefix = tempdir().unwrap();
+        let marker = prefix.path().join(".nucleon-runtime-abi");
+        for (mode, contents) in [
+            (ExecutionMode::Intel, "\"intel\""),
+            (ExecutionMode::Intel, "\"intel\"\n"),
+            (ExecutionMode::Arm64Fex, "\"arm64-fex\""),
+            (ExecutionMode::Arm64Fex, " \t\r\n\"arm64-fex\"\r\n "),
+            (ExecutionMode::Arm64Fex, r#""\u0061rm64-fex""#),
+        ] {
+            fs::write(&marker, contents).unwrap();
+            let inode = fs::metadata(&marker).unwrap().ino();
+            ensure_runtime_abi(prefix.path(), mode).unwrap();
+            assert_eq!(fs::read_to_string(&marker).unwrap(), contents);
+            assert_eq!(fs::metadata(&marker).unwrap().ino(), inode);
+        }
+    }
+
+    #[test]
+    fn runtime_abi_rejects_incompatible_invalid_and_unreadable_markers() {
+        use crate::runtime::ExecutionMode;
+
+        let prefix = tempdir().unwrap();
+        let marker = prefix.path().join(".nucleon-runtime-abi");
+        for (contents, expected) in [
+            ("\"intel\"\n", "Prefix belongs to"),
+            ("", "Invalid prefix ABI marker"),
+            ("arm64-fex", "Invalid prefix ABI marker"),
+            ("\"unknown\"", "Invalid prefix ABI marker"),
+            ("\"arm64-fex\" false", "Invalid prefix ABI marker"),
+        ] {
+            fs::write(&marker, contents).unwrap();
+            let error = ensure_runtime_abi(prefix.path(), ExecutionMode::Arm64Fex).unwrap_err();
+            let report = format!("{error:#}");
+            assert!(report.contains(expected), "{report}");
+            assert!(report.contains(&marker.display().to_string()), "{report}");
+            assert_eq!(fs::read_to_string(&marker).unwrap(), contents);
+        }
+        fs::write(&marker, b"\xff").unwrap();
+        let error = ensure_runtime_abi(prefix.path(), ExecutionMode::Arm64Fex).unwrap_err();
+        assert!(error.to_string().contains("Read prefix ABI marker"));
+        assert_eq!(fs::read(&marker).unwrap(), b"\xff");
+
+        fs::remove_file(&marker).unwrap();
+        // A directory guarantees a read failure without relying on Unix permissions.
+        fs::create_dir(&marker).unwrap();
+        let error = ensure_runtime_abi(prefix.path(), ExecutionMode::Arm64Fex).unwrap_err();
+        assert!(error.to_string().contains(&marker.display().to_string()));
+        assert!(marker.is_dir());
+    }
+
+    #[test]
+    fn runtime_abi_initializes_only_eligible_unmarked_prefixes() {
+        use crate::runtime::ExecutionMode;
+
+        let temp = tempdir().unwrap();
+        for mode in [ExecutionMode::Intel, ExecutionMode::Arm64Fex] {
+            let prefix = temp.path().join(format!("new-{mode:?}"));
+            ensure_runtime_abi(&prefix, mode).unwrap();
+            let marker = prefix.join(".nucleon-runtime-abi");
+            assert_eq!(
+                fs::read(&marker).unwrap(),
+                serde_json::to_vec(&mode).unwrap()
+            );
+            ensure_runtime_abi(&prefix, mode).unwrap();
+        }
+        let existing = temp.path().join("existing");
+        fs::create_dir_all(existing.join("drive_c")).unwrap();
+        let marker = existing.join(".nucleon-runtime-abi");
+        let error = ensure_runtime_abi(&existing, ExecutionMode::Arm64Fex).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("has no native runtime ABI record")
+        );
+        assert!(!marker.exists());
+        ensure_runtime_abi(&existing, ExecutionMode::Intel).unwrap();
+        assert_eq!(fs::read(&marker).unwrap(), b"\"intel\"");
+        assert!(ensure_runtime_abi(&existing, ExecutionMode::Arm64Fex).is_err());
+        assert_eq!(fs::read(&marker).unwrap(), b"\"intel\"");
+    }
+
+    #[test]
+    fn native_staging_preserves_valve_image_and_uses_arm64_unix_bridge() {
+        let (temp, mut runtime) = crate::runtime::fixture(crate::runtime::ExecutionMode::Arm64Fex);
+        runtime.steam_protocol = crate::runtime::SteamProtocol::ValveRedirect;
+        let bridge = temp.path().join("bridge");
+        for dir in ["aarch64-unix", "x86_64-unix", "x86_64-windows"] {
+            fs::create_dir_all(bridge.join(dir)).unwrap();
+        }
+        fs::write(
+            bridge.join("aarch64-unix/lsteamclient.so"),
+            b"ARM64 companion",
+        )
+        .unwrap();
+        fs::write(
+            bridge.join("x86_64-unix/lsteamclient.so"),
+            b"Intel companion",
+        )
+        .unwrap();
+        fs::write(bridge.join("x86_64-windows/lsteamclient.dll"), b"PE bridge").unwrap();
+        fs::write(
+            bridge.join("steamclient64.dll.valve"),
+            b"original Valve image",
+        )
+        .unwrap();
+        let prefix = temp.path().join("prefix");
+        stage_bridge_libraries_for_runtime(&prefix, &bridge, &runtime).unwrap();
+        let steam = prefix.join("drive_c/Program Files (x86)/Steam");
+        assert_eq!(
+            fs::read(steam.join("lsteamclient.so")).unwrap(),
+            b"ARM64 companion"
+        );
+        assert_eq!(
+            fs::read(steam.join("steamclient64.dll")).unwrap(),
+            b"original Valve image"
+        );
+        assert_eq!(
+            fs::read(prefix.join("drive_c/windows/system32/steamclient64.dll")).unwrap(),
+            b"original Valve image"
+        );
+        assert_eq!(
+            fs::read(steam.join("lsteamclient.dll")).unwrap(),
+            b"PE bridge"
+        );
+        assert!(steam.join("aarch64-unix/lsteamclient.so").is_file());
+        assert!(!steam.join("x86_64-unix").exists());
+        assert_eq!(
+            fs::read(bridge.join("steamclient64.dll.valve")).unwrap(),
+            b"original Valve image"
+        );
+    }
+
+    #[test]
+    fn failed_bootstrap_does_not_publish_readiness_and_can_retry() {
+        use std::os::unix::fs::PermissionsExt;
+        let (temp, mut runtime) = crate::runtime::fixture(crate::runtime::ExecutionMode::Arm64Fex);
+        let script = temp.path().join("failing-loader");
+        fs::write(
+            &script,
+            "#!/bin/sh\nmkdir -p \"$WINEPREFIX/drive_c/windows\"\nexit 7\n",
+        )
+        .unwrap();
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+        runtime.loader = script;
+        let mut plan = crate::launch::LaunchPlan::new(
+            runtime,
+            temp.path().join("prefix"),
+            crate::detector::TargetEngine::WineStaging,
+            Default::default(),
+            true,
+            Some(false),
+            &crate::detector::GraphicsApi::Unknown,
+        )
+        .unwrap();
+        plan.bridge = temp.path().join("bridge");
+        for dir in ["aarch64-unix", "x86_64-windows"] {
+            fs::create_dir_all(plan.bridge.join(dir)).unwrap();
+        }
+        let mut arm = crate::runtime_checks::test_image("bridge", 1);
+        arm[4..8].copy_from_slice(&0x0100000cu32.to_le_bytes());
+        fs::write(plan.bridge.join("aarch64-unix/lsteamclient.so"), arm).unwrap();
+        fs::write(
+            plan.bridge.join("x86_64-windows/lsteamclient.dll"),
+            crate::runtime_checks::test_pe_image(0x8664),
+        )
+        .unwrap();
+        for _ in 0..2 {
+            let error = format!("{:#}", plan.prepare_prefix().unwrap_err());
+            assert!(error.contains("initialization failed"), "{error}");
+            assert!(!plan.prefix.join(".nucleon-bootstrapped-v1").exists());
+            assert!(!plan.prefix.join(".nucleon-configured-v3").exists());
+        }
+    }
+
+    #[test]
+    fn failed_registry_import_never_marks_prefix_configured() {
+        let (temp, _) = crate::runtime::fixture(crate::runtime::ExecutionMode::Intel);
+        let prefix = temp.path().join("prefix");
+        fs::create_dir(&prefix).unwrap();
+        // The fixture's non-executable loader guarantees a setup error without Wine.
+        assert!(configure_prefix_registry(&prefix, temp.path()).is_err());
+        assert!(!prefix.join(".nucleon-configured-v3").exists());
+        assert!(prefix.join("nucleon_tweaks.reg").is_file());
+    }
+
+    #[test]
+    fn registry_readiness_does_not_depend_on_temporary_file_cleanup() {
+        let temp = tempdir().unwrap();
+        let reg = temp.path().join("nucleon_tweaks.reg");
+        let configured = temp.path().join(".nucleon-configured-v3");
+
+        fs::write(&reg, PREFIX_REGISTRY).unwrap();
+        finish_registry_import(&reg, &configured).unwrap();
+        assert!(!reg.exists());
+        assert_eq!(fs::read(&configured).unwrap(), b"1");
+
+        fs::remove_file(&configured).unwrap();
+        finish_registry_import(&reg, &configured).unwrap();
+        assert_eq!(fs::read(&configured).unwrap(), b"1");
+
+        fs::remove_file(&configured).unwrap();
+        // A directory produces a deterministic cleanup error without permission assumptions.
+        fs::create_dir(&reg).unwrap();
+        finish_registry_import(&reg, &configured).unwrap();
+        assert!(reg.is_dir());
+        assert_eq!(fs::read(&configured).unwrap(), b"1");
+    }
+
+    #[test]
+    fn registry_marker_publication_errors_remain_fatal_after_cleanup() {
+        let temp = tempdir().unwrap();
+        let reg = temp.path().join("nucleon_tweaks.reg");
+        let configured = temp.path().join(".nucleon-configured-v3");
+        fs::write(&reg, PREFIX_REGISTRY).unwrap();
+        fs::create_dir(&configured).unwrap();
+
+        let error = finish_registry_import(&reg, &configured).unwrap_err();
+        let report = format!("{error:#}");
+        assert!(
+            report.contains("Publish registry configuration marker"),
+            "{report}"
+        );
+        assert!(
+            report.contains(&configured.display().to_string()),
+            "{report}"
+        );
+        assert!(!reg.exists());
+        assert!(configured.is_dir());
+    }
+
+    #[test]
+    fn setup_command_preserves_failure_and_times_out_owned_children() {
+        let env = std::collections::HashMap::new();
+        assert!(
+            run_prefix_command(
+                Command::new("/bin/sh").args(["-c", "exit 19"]),
+                &env,
+                std::time::Duration::from_secs(2)
+            )
+            .is_err()
+        );
+        let error = run_prefix_command(
+            Command::new("/bin/sh").args(["-c", "trap '' TERM; sleep 30 & wait"]),
+            &env,
+            std::time::Duration::from_millis(100),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("timed out"));
+    }
 
     #[test]
     fn steam_bridge_builtin_lookup_preserves_both_architectures_and_bound_unix_library() {
@@ -404,8 +934,8 @@ mod tests {
     #[test]
     fn test_stage_bridge_libraries_structure() {
         let prefix_dir = tempdir().unwrap();
-        let res = stage_bridge_libraries(prefix_dir.path());
-        assert!(res.is_ok());
+        let bridge_dir = tempdir().unwrap();
+        stage_bridge_libraries_from(prefix_dir.path(), bridge_dir.path()).unwrap();
 
         let steam_dir = prefix_dir.path().join("drive_c/Program Files (x86)/Steam");
         assert!(steam_dir.is_dir());

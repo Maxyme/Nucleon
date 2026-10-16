@@ -1,0 +1,17 @@
+--- a/dlls/win32u/vulkan.c
++++ b/dlls/win32u/vulkan.c
+@@ -3006,7 +3006,14 @@
+     if (!(libvulkan = getenv( "CX_LIBVULKAN" )) ||
+         !(graphics_backend = getenv( "CX_ACTIVE_GRAPHICS_BACKEND" )) ||
+         strcmp( graphics_backend, "wined3d" ))
++    {
++#ifdef SONAME_LIBVULKAN
+         libvulkan = SONAME_LIBVULKAN;
++#else
++        ERR( "Vulkan support was disabled at build time\n" );
++        return;
++#endif
++    }
+     else
+         ERR( "Using %s\n", libvulkan );
+ 

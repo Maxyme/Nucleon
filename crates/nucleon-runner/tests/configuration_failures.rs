@@ -1,6 +1,91 @@
 use std::{fs, process::Command};
 
 #[test]
+fn failed_runs_preserve_separate_logs_and_structured_receipts() {
+    let dir = tempfile::tempdir().unwrap();
+    let mirror = dir.path().join("diagnostic-receipt.json");
+    let mut previous = None;
+    for debug in [false, true] {
+        let output = Command::new(env!("CARGO_BIN_EXE_nucleon-runner"))
+            .env_clear()
+            .env("NUCLEON_SUPPORT_DIR", dir.path())
+            .env("STEAM_COMPAT_APP_ID", "123")
+            .env("NUCLEON_RUN_RECEIPT", &mirror)
+            .env("NUCLEON_DEBUG", if debug { "1" } else { "0" })
+            .env("NUCLEON_ENGINE", "invalid-engine")
+            .args(["run", "/does-not-exist/game.exe"])
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        let report: serde_json::Value =
+            serde_json::from_slice(&fs::read(&mirror).unwrap()).unwrap();
+        assert_eq!(report["status"], "failed");
+        assert_eq!(report["debug"], debug);
+        assert_eq!(report["appid"], "123");
+        assert!(report["error"].as_str().unwrap().contains("NUCLEON_ENGINE"));
+        assert!(report["timings"]["runtime_ms"].is_null());
+        let log = std::path::PathBuf::from(report["runner_log"].as_str().unwrap());
+        assert!(fs::read_to_string(&log).unwrap().contains("Launch failed"));
+        if let Some(previous) = previous {
+            assert_ne!(log, previous);
+            assert!(std::path::Path::new(&previous).is_file());
+        }
+        previous = Some(log);
+    }
+    assert!(!dir.path().join("wine.log").exists());
+    assert!(!dir.path().join("default_prefix/pfx").exists());
+}
+
+fn runner_log(support: &std::path::Path) -> String {
+    let latest: serde_json::Value =
+        serde_json::from_slice(&fs::read(support.join("logs/latest-run.json")).unwrap()).unwrap();
+    fs::read_to_string(
+        support
+            .join("logs")
+            .join(latest["directory"].as_str().unwrap())
+            .join("runner.log"),
+    )
+    .unwrap()
+}
+
+#[test]
+fn profile_type_errors_include_field_location_in_logs_and_receipts() {
+    let dir = tempfile::tempdir().unwrap();
+    let profile = dir.path().join("profile.json");
+    let receipt = dir.path().join("receipt.json");
+    fs::write(&profile, "{\n  \"hud\": \"yes\"\n}").unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_nucleon-runner"))
+        .env_clear()
+        .env("NUCLEON_SUPPORT_DIR", dir.path())
+        .env("NUCLEON_GAME_PROFILE", &profile)
+        .env("NUCLEON_RUN_RECEIPT", &receipt)
+        .args(["run", "/does-not-exist/game.exe"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let receipt: serde_json::Value = serde_json::from_slice(&fs::read(receipt).unwrap()).unwrap();
+    for report in [
+        runner_log(dir.path()),
+        receipt["error"].as_str().unwrap().to_string(),
+    ] {
+        for expected in [
+            profile.to_str().unwrap(),
+            "field `hud`",
+            "boolean",
+            "line 2",
+            "remove the file",
+        ] {
+            assert!(report.contains(expected), "{report}");
+        }
+    }
+    assert_eq!(
+        fs::read_to_string(profile).unwrap(),
+        "{\n  \"hud\": \"yes\"\n}"
+    );
+    assert!(!dir.path().join("default_prefix/pfx").exists());
+}
+
+#[test]
 fn invalid_environment_overrides_fail_before_prefix_setup_and_are_logged() {
     for (name, value, correction) in [
         ("NUCLEON_ENGINE", "dxmtt", "Choose auto"),
@@ -27,7 +112,7 @@ fn invalid_environment_overrides_fail_before_prefix_setup_and_are_logged() {
             .output()
             .unwrap();
         assert!(!output.status.success(), "{name}");
-        let log = fs::read_to_string(dir.path().join("nucleon-runner.log")).unwrap();
+        let log = runner_log(dir.path());
         assert!(log.contains(name) && log.contains(correction), "{log}");
         assert!(!dir.path().join("default_prefix/pfx").exists());
     }
@@ -47,7 +132,7 @@ fn corrupt_override_and_backend_files_report_the_path_without_deleting_them() {
             .output()
             .unwrap();
         assert!(!output.status.success());
-        let log = fs::read_to_string(dir.path().join("nucleon-runner.log")).unwrap();
+        let log = runner_log(dir.path());
         assert!(log.contains(&path.display().to_string()), "{log}");
         assert_eq!(fs::read_to_string(&path).unwrap(), "not valid config");
     }
@@ -79,10 +164,40 @@ fn valid_per_game_paths_override_stale_global_paths() {
         .output()
         .unwrap();
     assert!(!output.status.success());
-    let log = fs::read_to_string(dir.path().join("nucleon-runner.log")).unwrap();
+    let log = runner_log(dir.path());
     assert!(log.contains("NUCLEON_STEAM_SHIM"), "{log}");
     assert!(
         !log.contains("shadowed-driver") && !log.contains("saved-dxvk"),
         "{log}"
     );
+}
+
+#[test]
+fn explicit_diagnostic_profile_is_loaded_and_does_not_consume_global_override() {
+    let dir = tempfile::tempdir().unwrap();
+    let profile = dir.path().join("diagnostic.json");
+    let global = dir.path().join("launch_override_123.json");
+    fs::write(&global, "malformed and must remain untouched").unwrap();
+    for contents in [None, Some(r#"{"engine":"dxmtt"}"#)] {
+        if let Some(text) = contents {
+            fs::write(&profile, text).unwrap();
+        }
+        let output = Command::new(env!("CARGO_BIN_EXE_nucleon-runner"))
+            .env_clear()
+            .env("NUCLEON_SUPPORT_DIR", dir.path())
+            .env("STEAM_COMPAT_APP_ID", "123")
+            .env("NUCLEON_GAME_PROFILE", &profile)
+            .args(["run", "/does-not-exist/game.exe"])
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        let log = runner_log(dir.path());
+        assert!(log.contains(&profile.display().to_string()), "{log}");
+        assert!(!log.contains("malformed and must"), "{log}");
+        assert_eq!(
+            fs::read_to_string(&global).unwrap(),
+            "malformed and must remain untouched"
+        );
+        assert!(!dir.path().join("default_prefix/pfx").exists());
+    }
 }

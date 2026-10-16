@@ -1,0 +1,109 @@
+diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
+index 8208cc1..5aba1d5 100644
+--- a/dlls/ntdll/loader.c
++++ b/dlls/ntdll/loader.c
+@@ -2247,6 +2247,88 @@ done:
+  *
+  * Build the module data for a mapped dll.
+  */
++#ifdef __x86_64__
++static BOOL nucleon_plain_amd64_image( HMODULE module )
++{
++    IMAGE_NT_HEADERS *nt = RtlImageNtHeader( module );
++    IMAGE_LOAD_CONFIG_DIRECTORY *config;
++    ULONG size;
++
++    if (!nt || nt->FileHeader.Machine != IMAGE_FILE_MACHINE_AMD64) return FALSE;
++    config = RtlImageDirectoryEntryToData( module, TRUE, IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG, &size );
++    return !config || size < offsetof(IMAGE_LOAD_CONFIG_DIRECTORY, CHPEMetadataPointer) + sizeof(config->CHPEMetadataPointer) ||
++           !config->CHPEMetadataPointer;
++}
++
++/* Experimental macOS Steam bridge, following Proton's loader arrangement:
++ * keep Valve's PE on disk, route its mapped exports to lsteamclient. */
++static NTSTATUS nucleon_redirect_steamclient( WINE_MODREF *wm, LPCWSTR load_path, BOOL *did_redirect )
++{
++    UNICODE_STRING env_name = RTL_CONSTANT_STRING( L"NUCLEON_STEAMCLIENT_REDIRECT" );
++    UNICODE_STRING dll_name = RTL_CONSTANT_STRING( L"steamclient64.dll" );
++    UNICODE_STRING bridge_name = RTL_CONSTANT_STRING( L"lsteamclient.dll" );
++    WCHAR enabled[2];
++    UNICODE_STRING env_value = { 0, sizeof(enabled), enabled };
++    IMAGE_EXPORT_DIRECTORY *exports;
++    IMAGE_NT_HEADERS *nt = RtlImageNtHeader( wm->ldr.DllBase );
++    HMODULE bridge;
++    DWORD *names, *functions, export_size, i, redirected = 0;
++    WORD *ordinals;
++    NTSTATUS status;
++
++    *did_redirect = FALSE;
++    if (!RtlEqualUnicodeString( &wm->ldr.BaseDllName, &dll_name, TRUE )) return STATUS_SUCCESS;
++    if (RtlQueryEnvironmentVariable_U( NULL, &env_name, &env_value ) ||
++        env_value.Length != sizeof(WCHAR) || enabled[0] != '1') return STATUS_SUCCESS;
++    if ((status = LdrLoadDll( load_path, 0, &bridge_name, &bridge ))) return status;
++    /* This route deliberately forwards an AMD64 Valve image to an AMD64 PE
++     * bridge. FEX executes both entry stubs, and the bridge's unixcalls reach
++     * native ARM64 Wine. Do not write x64 jumps to an ARM64/ARM64EC image.
++     */
++    if (!nucleon_plain_amd64_image( wm->ldr.DllBase ) || !nucleon_plain_amd64_image( bridge ))
++        return STATUS_INVALID_IMAGE_FORMAT;
++    exports = RtlImageDirectoryEntryToData( wm->ldr.DllBase, TRUE,
++                                         IMAGE_DIRECTORY_ENTRY_EXPORT, &export_size );
++    if (!exports) return STATUS_INVALID_IMAGE_FORMAT;
++    names = get_rva( wm->ldr.DllBase, exports->AddressOfNames );
++    functions = get_rva( wm->ldr.DllBase, exports->AddressOfFunctions );
++    ordinals = get_rva( wm->ldr.DllBase, exports->AddressOfNameOrdinals );
++    for (i = 0; i < exports->NumberOfNames; ++i)
++    {
++        ANSI_STRING name;
++        void *target, *address;
++        SIZE_T size = 12;
++        ULONG old_protect, ignored;
++        BYTE jump[12] = { 0x48, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xe0 };
++        DWORD rva;
++
++        RtlInitAnsiString( &name, get_rva( wm->ldr.DllBase, names[i] ) );
++        if (LdrGetProcedureAddress( bridge, &name, 0, &target )) continue;
++        rva = functions[ordinals[i]];
++        if (!rva || rva > nt->OptionalHeader.SizeOfImage - sizeof(jump) ||
++            (rva >= (BYTE *)exports - (BYTE *)wm->ldr.DllBase &&
++             rva < (BYTE *)exports - (BYTE *)wm->ldr.DllBase + export_size))
++            return STATUS_INVALID_IMAGE_FORMAT;
++        address = get_rva( wm->ldr.DllBase, rva );
++        memcpy( jump + 2, &target, sizeof(target) );
++        if ((status = NtProtectVirtualMemory( NtCurrentProcess(), &address, &size,
++                                             PAGE_EXECUTE_READWRITE, &old_protect ))) return status;
++        memcpy( get_rva( wm->ldr.DllBase, rva ), jump, sizeof(jump) );
++        if ((status = NtProtectVirtualMemory( NtCurrentProcess(), &address, &size,
++                                             old_protect, &ignored ))) return status;
++        ++redirected;
++    }
++    if (!redirected) return STATUS_ENTRYPOINT_NOT_FOUND;
++    NtFlushInstructionCache( NtCurrentProcess(), wm->ldr.DllBase, nt->OptionalHeader.SizeOfImage );
++    wm->ldr.Flags |= LDR_DONT_RESOLVE_REFS;
++    *did_redirect = TRUE;
++    TRACE_(loaddll)( "Nucleon redirected %lu exports in %s to lsteamclient.\n",
++                    redirected, debugstr_w(wm->ldr.BaseDllName.Buffer) );
++    return STATUS_SUCCESS;
++}
++#endif
++
++
+ static NTSTATUS build_module( LPCWSTR load_path, const UNICODE_STRING *nt_name, void **module,
+                               const SECTION_IMAGE_INFORMATION *image_info, const struct file_id *id,
+                               DWORD flags, BOOL system, WINE_MODREF **pwm )
+@@ -2278,6 +2360,15 @@ static NTSTATUS build_module( LPCWSTR load_path, const UNICODE_STRING *nt_name,
+ 
+     update_load_config( *module );
+ 
++#ifdef __x86_64__
++    if (!is_builtin)
++    {
++        BOOL did_redirect;
++        if ((status = nucleon_redirect_steamclient( wm, load_path, &did_redirect ))) return status;
++        if (did_redirect) flags |= DONT_RESOLVE_DLL_REFERENCES;
++    }
++#endif
++
+     /* fixup imports */
+ 
+     if (!(flags & DONT_RESOLVE_DLL_REFERENCES) &&

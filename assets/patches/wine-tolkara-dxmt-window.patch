@@ -1,0 +1,104 @@
+diff --git a/dlls/winemac.drv/cocoa_window.m b/dlls/winemac.drv/cocoa_window.m
+index 1c04d34..590282f 100644
+--- a/dlls/winemac.drv/cocoa_window.m
++++ b/dlls/winemac.drv/cocoa_window.m
+@@ -3878,6 +3878,16 @@ void macdrv_release_metal_device(macdrv_metal_device d)
+ }
+ }
+ 
++/* DXMT's legacy window bridge also needs the toplevel view before any GL/Vulkan
++ * client surface has been created. The window-data lock protects its lifetime.
++ */
++macdrv_view macdrv_window_get_content_view(macdrv_window w)
++{
++    __block NSView *view;
++    OnMainThread(^{ view = [(NSWindow *)w contentView]; });
++    return (macdrv_view)view;
++}
++
+ macdrv_metal_view macdrv_view_create_metal_view(macdrv_view v, macdrv_metal_device d)
+ {
+     id<MTLDevice> device = (id<MTLDevice>)d;
+diff --git a/dlls/winemac.drv/macdrv_cocoa.h b/dlls/winemac.drv/macdrv_cocoa.h
+index ac4787b..2cd43a9 100644
+--- a/dlls/winemac.drv/macdrv_cocoa.h
++++ b/dlls/winemac.drv/macdrv_cocoa.h
+@@ -521,6 +521,7 @@ extern void macdrv_order_cocoa_window(macdrv_window w, macdrv_window prev,
+ extern void macdrv_remove_view_opengl_context(macdrv_view v, macdrv_opengl_context c);
+ extern macdrv_metal_device macdrv_create_metal_device(void);
+ extern void macdrv_release_metal_device(macdrv_metal_device d);
++extern macdrv_view macdrv_window_get_content_view(macdrv_window w);
+ extern macdrv_metal_view macdrv_view_create_metal_view(macdrv_view v, macdrv_metal_device d);
+ extern macdrv_metal_layer macdrv_view_get_metal_layer(macdrv_metal_view v);
+ extern void macdrv_view_release_metal_view(macdrv_metal_view v);
+diff --git a/dlls/winemac.drv/window.c b/dlls/winemac.drv/window.c
+index 5fa9022..e1648e7 100644
+--- a/dlls/winemac.drv/window.c
++++ b/dlls/winemac.drv/window.c
+@@ -215,6 +215,66 @@ void release_win_data(struct macdrv_win_data *data)
+ }
+ 
+ 
++/* Private compatibility ABI used by the pinned MacRunner DXMT companion.
++ * Its older Wine layout has two view slots. Do not expose our internal layout:
++ * retain the window lock while returning a per-thread snapshot of those slots.
++ */
++struct dxmt_window_data
++{
++    HWND hwnd;
++    macdrv_window cocoa_window;
++    macdrv_view cocoa_view;
++    macdrv_view client_cocoa_view;
++};
++
++static _Thread_local struct dxmt_window_data dxmt_data;
++static _Thread_local struct macdrv_win_data *dxmt_locked_data;
++
++static struct dxmt_window_data *dxmt_get_win_data(HWND hwnd)
++{
++    struct macdrv_win_data *data = get_win_data(hwnd);
++    if (!data) return NULL;
++    dxmt_locked_data = data;
++    dxmt_data.hwnd = data->hwnd;
++    dxmt_data.cocoa_window = data->cocoa_window;
++    dxmt_data.cocoa_view = data->client_view;
++    if (!dxmt_data.cocoa_view && data->cocoa_window)
++        dxmt_data.cocoa_view = macdrv_window_get_content_view(data->cocoa_window);
++    dxmt_data.client_cocoa_view = dxmt_data.cocoa_view;
++    return &dxmt_data;
++}
++
++static void dxmt_release_win_data(struct dxmt_window_data *data)
++{
++    if (!data) return;
++    release_win_data(dxmt_locked_data);
++    dxmt_locked_data = NULL;
++}
++
++/* Preserve the reference's ten-slot table; only its window/Metal entries are
++ * consumed by winemetal. The unused display/main-thread slots stay NULL.
++ */
++DECLSPEC_EXPORT const struct
++{
++    void (*init_display_devices)(BOOL);
++    struct dxmt_window_data *(*get_win_data)(HWND);
++    void (*release_win_data)(struct dxmt_window_data *);
++    macdrv_window (*get_cocoa_window)(HWND, BOOL);
++    macdrv_metal_device (*create_metal_device)(void);
++    void (*release_metal_device)(macdrv_metal_device);
++    macdrv_metal_view (*create_metal_view)(macdrv_view, macdrv_metal_device);
++    macdrv_metal_layer (*get_metal_layer)(macdrv_metal_view);
++    void (*release_metal_view)(macdrv_metal_view);
++    void (*on_main_thread)(void *);
++} macdrv_functions =
++{
++    NULL, dxmt_get_win_data, dxmt_release_win_data, macdrv_get_cocoa_window,
++    macdrv_create_metal_device, macdrv_release_metal_device,
++    macdrv_view_create_metal_view, macdrv_view_get_metal_layer,
++    macdrv_view_release_metal_view, NULL
++};
++
++
+ /***********************************************************************
+  *              macdrv_get_cocoa_window
+  *

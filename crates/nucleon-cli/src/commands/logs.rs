@@ -6,9 +6,15 @@ use std::path::PathBuf;
 use std::thread;
 use std::time::Duration;
 
+fn current_runner_path() -> Result<PathBuf> {
+    Ok(paths::latest_run_dir()?
+        .map(|p| p.join("runner.log"))
+        .unwrap_or_else(|| paths::support_dir().join("nucleon-runner.log")))
+}
+
 pub fn run(lines: usize, show_hook: bool, show_runner: bool, follow: bool) -> Result<()> {
     let hook_path = paths::support_dir().join("nucleon-hook.log");
-    let runner_path = paths::support_dir().join("nucleon-runner.log");
+    let runner_path = current_runner_path()?;
 
     let targets: Vec<(&str, &PathBuf)> = if show_hook && !show_runner {
         vec![("Hook Log", &hook_path)]
@@ -40,24 +46,44 @@ pub fn run(lines: usize, show_hook: bool, show_runner: bool, follow: bool) -> Re
 
     if follow {
         println!("==> Following logs (press Ctrl+C to exit)...");
-        let active_path = if show_runner {
-            &runner_path
+        let mut active_path = if show_runner { runner_path } else { hook_path };
+        let mut file = if active_path.is_file() {
+            Some(File::open(&active_path)?)
         } else {
-            &hook_path
+            None
         };
-        if !active_path.exists() {
-            let _ = File::create(active_path);
-        }
-        let mut file = File::open(active_path)?;
-        let mut pos = file.seek(SeekFrom::End(0))?;
+        let mut pos = match &mut file {
+            Some(file) => file.seek(SeekFrom::End(0))?,
+            None => 0,
+        };
 
         loop {
             thread::sleep(Duration::from_millis(500));
-            let metadata = fs::metadata(active_path)?;
+            if show_runner {
+                let latest = current_runner_path()?;
+                if latest != active_path {
+                    println!("==> Runner Log ({})", latest.display());
+                    active_path = latest;
+                    file = None;
+                    pos = 0;
+                }
+            }
+            if file.is_none() {
+                match File::open(&active_path) {
+                    Ok(opened) => file = Some(opened),
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                    Err(error) => return Err(error.into()),
+                }
+            }
+            let file = file.as_mut().unwrap();
+            let metadata = file.metadata()?;
             let len = metadata.len();
+            if len < pos {
+                pos = 0;
+            }
             if len > pos {
                 file.seek(SeekFrom::Start(pos))?;
-                let mut reader = BufReader::new(&file);
+                let mut reader = BufReader::new(&mut *file);
                 let mut line = String::new();
                 while reader.read_line(&mut line)? > 0 {
                     print!("{line}");

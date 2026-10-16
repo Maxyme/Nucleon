@@ -127,22 +127,5 @@ pub fn snapshot_memory(_address: usize, _length: usize) -> Result<Vec<u8>> {
     anyhow::bail!("Loaded-image snapshots require macOS")
 }
 
-/// Matches an Array of Bytes (AOB) with wildcards against an owned/borrowed slice.
-pub fn aob_scan_bytes(data: &[u8], pattern: &str) -> Option<usize> {
-    let pattern: Vec<Option<u8>> = pattern
-        .split_whitespace()
-        .map(|token| match token {
-            "?" | "??" => Some(None),
-            _ => u8::from_str_radix(token, 16).ok().map(Some),
-        })
-        .collect::<Option<_>>()?;
-    if pattern.is_empty() || pattern.len() > data.len() {
-        return None;
-    }
-    data.windows(pattern.len()).position(|window| {
-        window
-            .iter()
-            .zip(&pattern)
-            .all(|(byte, expected)| expected.is_none_or(|expected| *byte == expected))
-    })
-}
+/// Shared wildcard scanner, retaining the hook's public name for existing callers.
+pub use nucleon_core::client_image::aob_scan_slice as aob_scan_bytes;

@@ -24,6 +24,12 @@ pub struct WineRuntime {
     pub version: Option<String>,
 }
 
+impl WineRuntime {
+    pub fn capabilities(&self) -> Result<crate::runtime::ResolvedRuntime> {
+        crate::runtime::ResolvedRuntime::inspect(&self.root)
+    }
+}
+
 fn query_wine_version(wine_bin: &Path) -> Option<String> {
     let mut command = Command::new(wine_bin);
     command
@@ -958,6 +964,11 @@ mod tests {
 
     #[test]
     fn test_custom_crossover_registration_and_resolution() {
+        if crate::test_support::run_in_isolated_support(
+            "wine::tests::test_custom_crossover_registration_and_resolution",
+        ) {
+            return;
+        }
         let dir = tempdir().unwrap();
         let cx_app = dir.path().join("CrossOver 24.app");
         let inner_cx = cx_app.join("Contents/SharedSupport/CrossOver/bin");

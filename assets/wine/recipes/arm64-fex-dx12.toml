@@ -1,0 +1,39 @@
+schema = 1
+
+[integration]
+prefix_family = "tolkara-fex"
+prefix_abi = 1
+
+[steamac]
+url = "https://github.com/fxgl/steamac.git"
+revision = "6ef3992d869e41291bb2841bef2e71ae318d2a02"
+
+[mesa]
+url = "https://gitlab.freedesktop.org/mesa/mesa.git"
+revision = "ce576c29ed90822ea15564e1e60cb48e455881bb"
+
+[python]
+meson = "1.12.1"
+mako = "1.3.10"
+pyyaml = "6.0.3"
+packaging = "25.0"
+markupsafe = "3.0.4"
+
+[wine]
+patches = ["assets/patches/wine-tolkara-steamclient-redirect.patch",
+           "assets/patches/wine-tolkara-process-exit-trace.patch",
+           "assets/patches/wine-tolkara-quit-message-trace.patch"]
+
+[graphics]
+vkd3d_version = "3.0.1"
+dxgi_version = "3.1"
+
+[archives.vkd3d]
+url = "https://github.com/HansKristian-Work/vkd3d-proton/releases/download/v3.0.1/vkd3d-proton-3.0.1.tar.zst"
+archive = "vkd3d-proton-3.0.1.tar.zst"
+sha256 = "3cf2315522af5e43605ef6d3c41dad91387040bf97199934f3f7ab76caaa2f0c"
+
+[archives.dxvk]
+url = "https://github.com/doitsujin/dxvk/releases/download/v3.1/dxvk-3.1.tar.gz"
+archive = "dxvk-3.1.tar.gz"
+sha256 = "30f9cc326874be344285582275446968cfa4c069db31ce56df312d6644179154"

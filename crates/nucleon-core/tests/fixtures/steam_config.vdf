@@ -1,0 +1,29 @@
+// Synthetic Steam configuration: contains no user account or machine data.
+"InstallConfigStore"
+{
+    "Software"
+    {
+        "Valve"
+        {
+            "Steam"
+            {
+                "BaseInstallFolder_1" "/Volumes/Games/Steam Library"
+                "CompatToolMapping"
+                {
+                    "601150"
+                    {
+                        "name" "nucleon"
+                        "config" ""
+                        "priority" "250"
+                    }
+                    "26800"
+                    {
+                        "name" ""
+                        "config" ""
+                        "priority" "250"
+                    }
+                }
+            }
+        }
+    }
+}

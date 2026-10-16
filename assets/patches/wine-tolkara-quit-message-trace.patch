@@ -1,0 +1,56 @@
+--- a/dlls/user32/message.c
++++ b/dlls/user32/message.c
+@@ -698,10 +698,38 @@
+ /**********************************************************************
+  *		PostThreadMessageA  (USER32.@)
+  */
++static void nucleon_trace_quit_message( UINT msg )
++{
++    WCHAR enabled[2];
++    DWORD error = GetLastError();
++    if ((msg == WM_QUIT || msg == WM_APP + 0x20) &&
++        GetEnvironmentVariableW( L"NUCLEON_TRACE_PROCESS_EXIT", enabled, ARRAY_SIZE(enabled) ) == 1 &&
++        enabled[0] == '1')
++    {
++        void *frames[20];
++        ULONG count = RtlCaptureStackBackTrace( 0, ARRAY_SIZE(frames), frames, NULL ), i;
++        WARN( "Nucleon quit message=%04x frames=%lu\n", msg, count );
++        for (i = 0; i < count; ++i) WARN( "Nucleon quit frame %lu: %p\n", i, frames[i] );
++    }
++    SetLastError( error );
++}
++
++void WINAPI PostQuitMessage( INT exit_code )
++{
++    nucleon_trace_quit_message( WM_QUIT );
++    NtUserPostQuitMessage( exit_code );
++}
++
++BOOL WINAPI PostThreadMessageW( DWORD thread, UINT msg, WPARAM wparam, LPARAM lparam )
++{
++    nucleon_trace_quit_message( msg );
++    return NtUserPostThreadMessage( thread, msg, wparam, lparam );
++}
++
+ BOOL WINAPI PostThreadMessageA( DWORD thread, UINT msg, WPARAM wparam, LPARAM lparam )
+ {
+     if (!map_wparam_AtoW( msg, &wparam, WMCHAR_MAP_POSTMESSAGE )) return TRUE;
+-    return NtUserPostThreadMessage( thread, msg, wparam, lparam );
++    return PostThreadMessageW( thread, msg, wparam, lparam );
+ }
+ 
+ 
+--- a/dlls/user32/user32.spec
++++ b/dlls/user32/user32.spec
+@@ -906,9 +906,9 @@
+ @ stub PlaySoundEvent
+ @ stdcall PostMessageA(long long long long)
+ @ stdcall PostMessageW(long long long long)
+-@ stdcall PostQuitMessage(long) NtUserPostQuitMessage
++@ stdcall PostQuitMessage(long)
+ @ stdcall PostThreadMessageA(long long long long)
+-@ stdcall PostThreadMessageW(long long long long) NtUserPostThreadMessage
++@ stdcall PostThreadMessageW(long long long long)
+ @ stdcall PrintWindow(long long long) NtUserPrintWindow
+ @ stdcall PrivateExtractIconExA(str long ptr ptr long)
+ @ stdcall PrivateExtractIconExW(wstr long ptr ptr long)

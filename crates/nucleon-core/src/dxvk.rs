@@ -71,24 +71,6 @@ impl DxvkBundle {
     }
 }
 
-fn read_version_file(dir: &Path) -> Option<String> {
-    let ver_file = dir.join("version.txt");
-    if ver_file.is_file()
-        && let Ok(c) = fs::read_to_string(&ver_file)
-    {
-        let t = c.trim();
-        if !t.is_empty() {
-            return Some(t.to_string());
-        }
-    }
-    None
-}
-
-fn check_dll(dir: &Path, name: &str) -> Option<PathBuf> {
-    let p = dir.join(name);
-    if p.is_file() { Some(p) } else { None }
-}
-
 /// Inspects a directory to check if it contains a valid DXVK installation.
 /// Accepts either the standard release hierarchy (x64/d3d11.dll, x32/d3d11.dll or x86/d3d11.dll),
 /// flat directory (d3d11.dll), or nested release directories.
@@ -102,32 +84,22 @@ pub fn inspect_candidate_dir(dir: &Path) -> Option<DxvkBundle> {
 
 fn inspect_bundle_layout(dir: &Path) -> Option<DxvkBundle> {
     // 1. Check standard release layout: <dir>/x64 and <dir>/x32 (or x86)
-    let x64_dir = if dir.join("x86_64-windows").is_dir() {
-        dir.join("x86_64-windows")
-    } else {
-        dir.join("x64")
-    };
-    let x86_dir = if dir.join("i386-windows").is_dir() {
-        dir.join("i386-windows")
-    } else if dir.join("x32").is_dir() {
-        dir.join("x32")
-    } else {
-        dir.join("x86")
-    };
+    let x64_dir = crate::graphics_bundle::directory(dir, &["x86_64-windows", "x64"]);
+    let x86_dir = crate::graphics_bundle::directory(dir, &["i386-windows", "x32", "x86"]);
 
     let has_x64 = x64_dir.is_dir();
     let has_x86 = x86_dir.is_dir();
 
     if has_x64 || has_x86 {
-        let x64_d3d11 = check_dll(&x64_dir, "d3d11.dll");
-        let x64_d3d10core = check_dll(&x64_dir, "d3d10core.dll");
-        let x64_d3d9 = check_dll(&x64_dir, "d3d9.dll");
-        let x64_dxgi = check_dll(&x64_dir, "dxgi.dll");
+        let x64_d3d11 = crate::graphics_bundle::file(&x64_dir, "d3d11.dll");
+        let x64_d3d10core = crate::graphics_bundle::file(&x64_dir, "d3d10core.dll");
+        let x64_d3d9 = crate::graphics_bundle::file(&x64_dir, "d3d9.dll");
+        let x64_dxgi = crate::graphics_bundle::file(&x64_dir, "dxgi.dll");
 
-        let x86_d3d11 = check_dll(&x86_dir, "d3d11.dll");
-        let x86_d3d10core = check_dll(&x86_dir, "d3d10core.dll");
-        let x86_d3d9 = check_dll(&x86_dir, "d3d9.dll");
-        let x86_dxgi = check_dll(&x86_dir, "dxgi.dll");
+        let x86_d3d11 = crate::graphics_bundle::file(&x86_dir, "d3d11.dll");
+        let x86_d3d10core = crate::graphics_bundle::file(&x86_dir, "d3d10core.dll");
+        let x86_d3d9 = crate::graphics_bundle::file(&x86_dir, "d3d9.dll");
+        let x86_dxgi = crate::graphics_bundle::file(&x86_dir, "dxgi.dll");
 
         if x64_d3d11.is_some()
             || x64_d3d9.is_some()
@@ -145,16 +117,16 @@ fn inspect_bundle_layout(dir: &Path) -> Option<DxvkBundle> {
                 x86_d3d10core,
                 x86_d3d9,
                 x86_dxgi,
-                version: read_version_file(dir),
+                version: crate::graphics_bundle::version(dir),
             });
         }
     }
 
     // 2. Check flat directory: <dir>/d3d11.dll or <dir>/d3d9.dll
-    let flat_d3d11 = check_dll(dir, "d3d11.dll");
-    let flat_d3d10core = check_dll(dir, "d3d10core.dll");
-    let flat_d3d9 = check_dll(dir, "d3d9.dll");
-    let flat_dxgi = check_dll(dir, "dxgi.dll");
+    let flat_d3d11 = crate::graphics_bundle::file(dir, "d3d11.dll");
+    let flat_d3d10core = crate::graphics_bundle::file(dir, "d3d10core.dll");
+    let flat_d3d9 = crate::graphics_bundle::file(dir, "d3d9.dll");
+    let flat_dxgi = crate::graphics_bundle::file(dir, "dxgi.dll");
 
     if flat_d3d11.is_some() || flat_d3d9.is_some() || flat_dxgi.is_some() {
         return Some(DxvkBundle {
@@ -167,7 +139,7 @@ fn inspect_bundle_layout(dir: &Path) -> Option<DxvkBundle> {
             x86_d3d10core: None,
             x86_d3d9: None,
             x86_dxgi: None,
-            version: read_version_file(dir),
+            version: crate::graphics_bundle::version(dir),
         });
     }
 
@@ -181,23 +153,16 @@ pub fn custom_dxvk_path_file() -> PathBuf {
 /// Locates a DXVK bundle from environment, configured custom path,
 /// Nucleon support directory, Heroic tools, or well-known system/Proton paths.
 pub fn find_dxvk() -> Option<DxvkBundle> {
-    // 1. Explicit environment variable: DXVK_PATH
-    if let Ok(p) = std::env::var("DXVK_PATH") {
-        let path = PathBuf::from(p);
-        if let Some(bundle) = inspect_candidate_dir(&path) {
-            return Some(bundle);
-        }
-    }
-
-    // 2. Custom path stored via `nucleon dxvk set-path <path>`
-    let custom_file = custom_dxvk_path_file();
-    if custom_file.is_file()
-        && let Ok(content) = fs::read_to_string(&custom_file)
-    {
-        let p = PathBuf::from(content.trim());
-        if let Some(bundle) = inspect_candidate_dir(&p) {
-            return Some(bundle);
-        }
+    if let Some(bundle) = crate::graphics_bundle::configured(
+        &std::env::var("DXVK_PATH")
+            .ok()
+            .map(PathBuf::from)
+            .into_iter()
+            .collect::<Vec<_>>(),
+        &custom_dxvk_path_file(),
+        inspect_candidate_dir,
+    ) {
+        return Some(bundle);
     }
 
     // 3. Nucleon managed directory: ~/Library/Application Support/nucleon/dxvk
@@ -219,10 +184,8 @@ pub fn find_dxvk() -> Option<DxvkBundle> {
         PathBuf::from("/usr/local/share/dxvk"),
         paths::home_dir().join(".local/share/dxvk"),
     ];
-    for cand in &candidates {
-        if let Some(bundle) = inspect_candidate_dir(cand) {
-            return Some(bundle);
-        }
+    if let Some(bundle) = crate::graphics_bundle::find(candidates, inspect_candidate_dir) {
+        return Some(bundle);
     }
 
     // 6. Scan Steam Proton installs for dxvk if present
@@ -256,86 +219,45 @@ pub fn is_dxvk_installed() -> bool {
 }
 
 pub fn set_custom_dxvk_path(path: &Path) -> Result<DxvkBundle> {
-    let resolved = if path.is_relative() {
-        std::env::current_dir()?.join(path)
-    } else {
-        path.to_path_buf()
-    };
-
-    let bundle = inspect_candidate_dir(&resolved).ok_or_else(|| {
-        anyhow::anyhow!(
-            "Invalid DXVK installation at {}. Expected x64/d3d11.dll, x32/d3d11.dll, or d3d11.dll",
-            resolved.display()
-        )
-    })?;
-
-    fs::write(
-        custom_dxvk_path_file(),
-        bundle.root.to_string_lossy().as_bytes(),
+    crate::graphics_bundle::register(
+        path,
+        &custom_dxvk_path_file(),
+        "DXVK (expected x64/d3d11.dll, x32/d3d11.dll, or d3d11.dll)",
+        inspect_candidate_dir,
+        |bundle| &bundle.root,
     )
-    .with_context(|| format!("Failed to write {}", custom_dxvk_path_file().display()))?;
-
-    Ok(bundle)
 }
 
 pub fn clear_custom_dxvk_path() -> Result<()> {
-    let custom_file = custom_dxvk_path_file();
-    if custom_file.exists() {
-        fs::remove_file(&custom_file)?;
-    }
-    Ok(())
+    crate::graphics_bundle::clear(&custom_dxvk_path_file())
 }
 
 /// Stages DXVK DLLs into a Wine prefix's system32 and syswow64 directories.
 pub fn stage_dxvk_into_prefix(bundle: &DxvkBundle, prefix_dir: &Path) -> Result<usize> {
     let sys32 = prefix_dir.join("drive_c/windows/system32");
     let syswow64 = prefix_dir.join("drive_c/windows/syswow64");
-    let is_wow64 = syswow64.is_dir();
-
-    let mut staged_count = 0;
-
-    let target_64 = &sys32;
-    let target_32 = if is_wow64 { &syswow64 } else { &sys32 };
-
-    let files_64 = [
-        ("d3d11.dll", &bundle.x64_d3d11),
-        ("d3d10core.dll", &bundle.x64_d3d10core),
-        ("d3d9.dll", &bundle.x64_d3d9),
-        ("dxgi.dll", &bundle.x64_dxgi),
-    ];
-
-    for (name, opt_path) in files_64 {
-        if let Some(src) = opt_path
-            && target_64.is_dir()
-        {
-            let dst = target_64.join(name);
-            crate::backend_files::copy(src, &dst).with_context(|| {
-                format!("Failed to stage 64-bit DXVK {name} to {}", dst.display())
-            })?;
-            staged_count += 1;
-        }
-    }
-
-    let files_32 = [
-        ("d3d11.dll", &bundle.x86_d3d11),
-        ("d3d10core.dll", &bundle.x86_d3d10core),
-        ("d3d9.dll", &bundle.x86_d3d9),
-        ("dxgi.dll", &bundle.x86_dxgi),
-    ];
-
-    for (name, opt_path) in files_32 {
-        if let Some(src) = opt_path
-            && target_32.is_dir()
-        {
-            let dst = target_32.join(name);
-            crate::backend_files::copy(src, &dst).with_context(|| {
-                format!("Failed to stage 32-bit DXVK {name} to {}", dst.display())
-            })?;
-            staged_count += 1;
-        }
-    }
-
-    Ok(staged_count)
+    let target_32 = if syswow64.is_dir() { &syswow64 } else { &sys32 };
+    let count = crate::graphics_bundle::stage(
+        &sys32,
+        "64-bit DXVK",
+        [
+            ("d3d11.dll", bundle.x64_d3d11.as_deref()),
+            ("d3d10core.dll", bundle.x64_d3d10core.as_deref()),
+            ("d3d9.dll", bundle.x64_d3d9.as_deref()),
+            ("dxgi.dll", bundle.x64_dxgi.as_deref()),
+        ],
+    )?;
+    Ok(count
+        + crate::graphics_bundle::stage(
+            target_32,
+            "32-bit DXVK",
+            [
+                ("d3d11.dll", bundle.x86_d3d11.as_deref()),
+                ("d3d10core.dll", bundle.x86_d3d10core.as_deref()),
+                ("d3d9.dll", bundle.x86_d3d9.as_deref()),
+                ("dxgi.dll", bundle.x86_dxgi.as_deref()),
+            ],
+        )?)
 }
 
 fn restore_dll_in_dir(

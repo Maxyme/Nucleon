@@ -45,8 +45,11 @@ pub fn run_validate(appid: u32) -> Result<()> {
         "==> Validating window presentation for AppID {} (zero screen capture)...",
         appid
     );
-    let prefix = paths::steam_data_dir().join(format!("steamapps/compatdata/{appid}/pfx"));
-    let pids = nucleon_runner::wine_process_pids(&prefix);
+    let compat_data = paths::steam_compat_data_dir().join(appid.to_string());
+    let pids = paths::game_prefixes(&compat_data)
+        .into_iter()
+        .flat_map(|prefix| nucleon_runner::wine_process_pids(&prefix))
+        .collect::<Vec<_>>();
     let presented = validator::check_window_presentation(Some(&pids))?;
     if presented.is_empty() {
         println!("  ! No active Wine window currently presenting on screen.");

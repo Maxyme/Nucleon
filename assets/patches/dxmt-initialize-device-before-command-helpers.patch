@@ -1,0 +1,36 @@
+--- a/src/dxmt/dxmt_context.hpp
++++ b/src/dxmt/dxmt_context.hpp
+@@ -830,6 +830,7 @@
+   uint32_t tess_threads_per_patch;
+ 
+   InternalCommandLibrary &lib;
++  WMT::Device device_;
+   EmulatedCommandContext emulated_cmd;
+   ClearRTV<ArgumentEncodingContext> clear_rt_cmd;
+   DepthStencilBlitContext blit_depth_stencil_cmd;
+@@ -918,7 +919,6 @@
+ 
+   uint64_t intrapass_barrier_control_bits_ = 0;
+ 
+-  WMT::Device device_;
+   CommandQueue& queue_;
+ };
+ 
+--- a/src/dxmt/dxmt_context.cpp
++++ b/src/dxmt/dxmt_context.cpp
+@@ -31,6 +31,7 @@
+ 
+ ArgumentEncodingContext::ArgumentEncodingContext(CommandQueue &queue, WMT::Device device, InternalCommandLibrary &lib) :
+     lib(lib),
++    device_(device),
+     emulated_cmd(device, lib, *this),
+     clear_rt_cmd(device, *this),
+     blit_depth_stencil_cmd(device, lib, *this),
+@@ -38,7 +39,6 @@
+     mv_scale_cmd(device, lib, *this),
+     tile_barrier_cmd(device, lib, *this),
+     timestamp_state_(device),
+-    device_(device),
+     queue_(queue) {
+   dummy_sampler_info_.support_argument_buffers = true;
+   dummy_sampler_info_.border_color = WMTSamplerBorderColorTransparentBlack;
