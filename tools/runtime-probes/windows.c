@@ -7,6 +7,19 @@
 
 static LONG counter;
 
+#if defined(__i386__)
+static volatile LONG vectored_exception_seen;
+
+static LONG CALLBACK exception_handler(EXCEPTION_POINTERS *exception)
+{
+    if (exception->ExceptionRecord->ExceptionCode != 0xe0424242)
+        return EXCEPTION_CONTINUE_SEARCH;
+    vectored_exception_seen = 1;
+    return EXCEPTION_CONTINUE_EXECUTION;
+}
+#endif
+
+
 __declspec(noinline) static uint32_t shared_read(volatile uint32_t *pointer)
 {
     return *pointer;
@@ -57,12 +70,22 @@ int wmain(int argc, wchar_t **argv)
     puts("NUCLEON_FEX_PASS threads");
 
     volatile int caught = 0;
+#if defined(__i386__)
+    /* LLVM-MinGW's i686 target cannot emit the x64 test's MS-style SEH tables. */
+    void *handler = AddVectoredExceptionHandler(1, exception_handler);
+    if (!handler) return fail("exception-handler");
+    RaiseException(0xe0424242, 0, 0, NULL);
+    caught = vectored_exception_seen;
+    if (!RemoveVectoredExceptionHandler(handler)) return fail("remove-exception-handler");
+#else
     __try { RaiseException(0xe0424242, 0, 0, NULL); }
     __except(GetExceptionCode() == 0xe0424242 ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH)
     { caught = 1; }
+#endif
     if (!caught) return fail("exception");
     puts("NUCLEON_FEX_PASS exception");
 
+#if defined(__x86_64__)
     if (argc == 2 && !wcscmp(argv[1], L"--shared-data"))
     {
         void *(__cdecl *get_shared_data)(void) = (void *)GetProcAddress(
@@ -91,6 +114,8 @@ int wmain(int argc, wchar_t **argv)
         if (!caught) return fail("shared-data-boundary");
         puts("NUCLEON_FEX_PASS shared-data-protection");
     }
+
+#endif
 
 #if defined(__x86_64__)
     unsigned char *code = VirtualAlloc(NULL, 4096, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);

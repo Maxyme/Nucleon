@@ -1,0 +1,93 @@
+name: ARM64 Wine/FEX runtime prerelease
+
+on:
+  push:
+    tags:
+      - 'runtime-arm64-fex-v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Build-only runtime version (for example 0.1.0-rc.1)'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: arm64-fex-runtime-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # v1
+        with:
+          toolchain: stable
+      - name: Install publisher build tools
+        run: |
+          test "$(uname -m)" = arm64
+          brew install bison flex cmake ninja python@3.13
+          echo "$(brew --prefix bison)/bin" >> "$GITHUB_PATH"
+          echo "$(brew --prefix flex)/bin" >> "$GITHUB_PATH"
+          echo "$(brew --prefix python@3.13)/libexec/bin" >> "$GITHUB_PATH"
+      - name: Test publisher packaging
+        run: python3 -m unittest discover -s tools -p test_arm64_fex_release.py -v
+      - name: Build the installer CLI
+        run: cargo build --release --locked -p nucleon-cli
+      - name: Compile, package and validate the installed runtime
+        env:
+          REQUESTED_VERSION: ${{ inputs.version || github.ref_name }}
+        run: |
+          python3 tools/arm64_fex_release.py build \
+            --version "$REQUESTED_VERSION" \
+            --work target/runtime-release \
+            --output target/runtime-release-assets \
+            --nucleon target/release/nucleon --jobs 2
+      - name: Retain release assets
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: arm64-fex-runtime
+          path: target/runtime-release-assets/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Retain publisher logs on failure
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: arm64-fex-runtime-failure-logs
+          path: |
+            target/runtime-release/tolkara/logs/
+            target/runtime-release/tolkara/release-validation/
+          if-no-files-found: warn
+          retention-days: 14
+
+  release:
+    needs: build
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/runtime-arm64-fex-v')
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - name: Download this run's validated assets and publish a prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          gh run download "$RUN_ID" --repo "$GH_REPO" --name arm64-fex-runtime --dir assets
+          cd assets
+          sha256sum --check SHA256SUMS.txt
+          gh release create "$RELEASE_TAG" --repo "$GH_REPO" --verify-tag \
+            --draft --prerelease --latest=false \
+            --title "ARM64 Wine/FEX core ${RELEASE_TAG#runtime-arm64-fex-v} (experimental)" \
+            --notes-file RELEASE-NOTES.md \
+            ./*.tar.gz SHA256SUMS.txt runtime-release.json RELEASE-NOTES.md
+          gh release edit "$RELEASE_TAG" --repo "$GH_REPO" --draft=false --prerelease --latest=false

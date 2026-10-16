@@ -1,5 +1,9 @@
 # ARM64 Wine/FEX experiment
 
+For prebuilt runtime releases and publisher automation, see
+[RUNTIME-RELEASES.md](../RUNTIME-RELEASES.md). End users install those archives
+with `nucleon wine fex install`; the build instructions below are for developers.
+
 This builds a separate experimental runtime on Apple Silicon macOS. Python 3.12+,
 Xcode, CMake, Ninja, current Bison and Flex are required. It does not register a
 Steam compatibility tool, select a runtime in Nucleon, or launch Steam.
@@ -53,9 +57,10 @@ python3 tools/arm64_fex.py probe --variant tolkara --window
 This uses the separately pinned Tolkara Wine/FEX branches and stores products
 under `target/arm64-fex/tolkara`. Its two emulator modules use the matching Wine
 fork's relocated guest-address and thread-local-state conventions. They are
-not replacements to copy into the MacRunner-based runtime. This route does not
-build a native FEX Unix companion; unsupported optional UnixLib facilities use
-the fork's fallback behavior.
+not replacements to copy into the MacRunner-based runtime. This route builds both
+matching native FEX Unix companions from the pinned Tolkara source with the Darwin
+portability patch. Unsupported optional UnixLib
+facilities return the fork's documented fallback results.
 
 On the test Mac this variant passes memory operations, thread atomics,
 exception handling, self-modifying x64 code, child processes and a bounded GDI

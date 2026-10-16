@@ -31,6 +31,7 @@ terms, including the warranty disclaimer and source distribution requirements.
   Mesa retains its file-specific licenses and notices; Steamac is Apache-2.0,
   and imported upstream patches retain their own notices. Source pins, patch
   hashes and native build receipts are kept with the private driver. Official
-  VKD3D-Proton and DXVK Windows releases retain their LGPL terms. The shader
-  probe can use a separately licensed Microsoft compiler from a local game;
+  VKD3D-Proton releases retain LGPL-2.1-or-later terms; DXVK retains its
+  zlib/libpng license. The shader probe can use a separately licensed Microsoft
+  compiler from a local game;
   that proprietary DLL is not redistributed by this repository.

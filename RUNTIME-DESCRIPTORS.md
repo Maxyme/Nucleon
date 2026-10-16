@@ -86,6 +86,14 @@ error. Normal Steam launches never rewrite the game INI. The diagnostic scripts
 use a private profile passed through `NUCLEON_GAME_PROFILE`, bypassing one-shot
 production overrides, and call the same Rust runner.
 
+## Prebuilt publisher releases
+
+The publisher pipeline compiles a separate experimental Wine/FEX core runtime;
+users install its archive through `nucleon wine fex install` without building Wine
+or FEX. See [RUNTIME-RELEASES.md](RUNTIME-RELEASES.md) for release tags, checksums,
+corresponding sources, validation and scope. The core package includes WineD3D;
+it does not include the local experiment's DXMT/Vulkan graphics stack.
+
 ## Install once and verify explicitly
 
 `nucleon wine fex install <directory> --register` imports the complete runtime into
