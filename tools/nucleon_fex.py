@@ -62,10 +62,13 @@ def launch(runtime, bridge, appid, executable, compat_data, profile, log, timeou
            if not k.startswith(('WINE','DYLD_','FEX_','MACRUNNER_','NUCLEON_'))
            and k not in ('VK_DRIVER_FILES','VK_ICD_FILENAMES','VKD3D_CONFIG',
                          'VKD3D_FEATURE_LEVEL','VKD3D_SHADER_MODEL','MESA_VK_VERSION_OVERRIDE',
-                         'MVK_CONFIG_ADVERTISE_API_VERSION')}
+                         'MVK_CONFIG_ADVERTISE_API_VERSION','VK_LOADER_DEBUG','VKD3D_DEBUG',
+                         'VKD3D_SHADER_DEBUG','VKD3D_LOG_FILE','DXVK_LOG_LEVEL','DXVK_LOG_PATH',
+                         'DXMT_LOG_LEVEL','DXMT_LOG_PATH')}
     if 'NUCLEON_SUPPORT_DIR' in os.environ:
         env['NUCLEON_SUPPORT_DIR'] = os.environ['NUCLEON_SUPPORT_DIR']
     wine_log = log.with_suffix('.wine.log')
+    runner_receipt = log.with_suffix('.runner.json')
     prefix = compat_data / 'nucleon/arm64-fex' / descriptor['prefix']['family'] / 'pfx'
     with tempfile.TemporaryDirectory(prefix='nucleon-fex-launch-') as temporary:
         temporary = Path(temporary)
@@ -75,10 +78,10 @@ def launch(runtime, bridge, appid, executable, compat_data, profile, log, timeou
         write_json(profile_file,profile)
         env.update(NUCLEON_FEX_SELECTION=str(selection),NUCLEON_GAME_PROFILE=str(profile_file),
                    NUCLEON_STEAM_BRIDGE=str(bridge.resolve()),NUCLEON_WINE_LOG=str(wine_log),
+                   NUCLEON_RUN_RECEIPT=str(runner_receipt),NUCLEON_DEBUG='1' if debug else '0',
                    STEAM_COMPAT_APP_ID=str(appid),STEAM_COMPAT_DATA_PATH=str(compat_data.resolve()),
                    SteamAppId=str(appid),SteamGameId=str(appid))
         if timeout: env['NUCLEON_RUN_SECONDS'] = str(timeout)
-        if debug: env.update(NUCLEON_WINEDEBUG='+timestamp,+loaddll,+msgbox,+seh,+process,+msg',NUCLEON_TRACE_PROCESS_EXIT='1')
         with log.open('ab') as stream:
             process = subprocess.Popen([str(runner),'run',str(executable)],cwd=executable.parent,
                 env=env,stdout=stream,stderr=subprocess.STDOUT,start_new_session=True)
@@ -98,7 +101,11 @@ def launch(runtime, bridge, appid, executable, compat_data, profile, log, timeou
             finally:
                 signal.signal(signal.SIGTERM, previous_handler)
         if code:
-            raise RuntimeError(f'Nucleon exited {code}; see {log} and {wine_log}')
-    text = log.read_text(errors='replace')
+            raise RuntimeError(f'Nucleon exited {code}; see {runner_receipt}, {log} and {wine_log}')
+    report = json.loads(runner_receipt.read_text())
+    if report['status'] not in ('bounded','exited'):
+        raise RuntimeError(f'Nucleon did not complete a supervised launch; see {runner_receipt}')
     return dict(prefix=str(prefix),wine_log=str(wine_log),profile=profile,
-                status='BOUNDED_RUN_FINISHED' if 'Bounded run finished;' in text else 'PROCESS_EXITED_ZERO')
+                runner_receipt=str(runner_receipt),timings=report['timings'],
+                shader_caches=report.get('shader_caches'),
+                status='BOUNDED_RUN_FINISHED' if report['status']=='bounded' else 'PROCESS_EXITED_ZERO')

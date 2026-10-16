@@ -450,10 +450,6 @@ impl Backend for KosmicKrispBackend {
             );
         }
 
-        if crate::vkd3d::find_vkd3d_proton().is_some() {
-            env.insert("VKD3D_CONFIG".to_string(), "dxr11,dxr".to_string());
-        }
-
         let mesa_cache = paths::home_dir().join("Library/Caches/Mesa");
         let _ = fs::create_dir_all(&mesa_cache);
         env.insert(

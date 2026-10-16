@@ -19,6 +19,7 @@ pub mod process;
 pub mod profile;
 pub mod runner;
 pub mod runtime;
+pub mod shader_cache;
 pub(crate) mod staging;
 pub mod steam;
 pub mod steam_contract;

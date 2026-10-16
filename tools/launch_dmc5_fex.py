@@ -65,7 +65,7 @@ def main():
         backup.write_bytes(original)
         receipt = dict(status='PREPARING',appid=601150,api=a.api,log=str(log),
                        runtime=str(runtime),settings_backup=str(backup),game_identity=game_identity(exe),game_sha256=sha(exe) if a.debug else None,
-                       production_profile_changed=False,gameplay_validation='NOT_CONFIRMED',runtime_limit_seconds=a.timeout)
+                       production_profile_changed=False,runner_receipt=str(log.with_suffix('.runner.json')),gameplay_validation='NOT_CONFIRMED',runtime_limit_seconds=a.timeout)
         write_json(report,receipt)
         changed = False
         started = time.monotonic()
@@ -90,8 +90,8 @@ def main():
             if changed: replace_bytes(ini,original)
             wine_log = log.with_suffix('.wine.log')
             text = wine_log.read_text(errors='replace') if wine_log.exists() else ''
-            receipt['steam_exports_redirected'] = 'Nucleon redirected' in text
-            receipt['dx12_swapchain_created'] = 'dxgi_vk_swap_chain_init: Creating swapchain' in text
+            receipt['steam_exports_redirected'] = True if 'Nucleon redirected' in text else None
+            receipt['dx12_swapchain_created'] = True if 'dxgi_vk_swap_chain_init: Creating swapchain' in text else None
             receipt['settings_restored'] = ini.read_bytes() == original
             receipt['elapsed_seconds_including_preparation'] = round(time.monotonic()-started,3)
             write_json(report,receipt)

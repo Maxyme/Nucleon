@@ -89,7 +89,7 @@ fn assembled_runtime_resolves_both_graphics_plans_without_executing_wine() {
         (TargetEngine::Dxmt, GraphicsApi::DirectX11),
         (TargetEngine::Vkd3d, GraphicsApi::DirectX12),
     ] {
-        let plan = LaunchPlan::new(
+        let mut plan = LaunchPlan::new(
             runtime.clone(),
             prefix.clone(),
             engine,
@@ -112,6 +112,34 @@ fn assembled_runtime_resolves_both_graphics_plans_without_executing_wine() {
         assert_eq!(environment["NUCLEON_EMULATE_KUSD"], "1");
         assert!(!environment.contains_key("ROSETTA_ADVERTISE_AVX"));
         assert!(environment["WINEDLLPATH"].contains("aarch64-windows"));
+        let caches = nucleon_core::shader_cache::ShaderCaches::prepare(
+            &plan,
+            temp.path(),
+            Some("601150"),
+            &temp.path().join("game.exe"),
+            &environment,
+        )
+        .unwrap();
+        if engine == TargetEngine::Vkd3d {
+            let caches = caches.unwrap();
+            assert!(caches.vkd3d.as_ref().unwrap().is_dir());
+            let warmed = caches.vkd3d.as_ref().unwrap().join("preserved.cache");
+            fs::write(&warmed, b"warm").unwrap();
+            plan.runtime.root = temp.path().join("compatible-generation");
+            let again = nucleon_core::shader_cache::ShaderCaches::prepare(
+                &plan,
+                temp.path(),
+                Some("601150"),
+                &temp.path().join("game.exe"),
+                &environment,
+            )
+            .unwrap()
+            .unwrap();
+            assert_eq!(caches.root, again.root);
+            assert_eq!(fs::read(warmed).unwrap(), b"warm");
+        } else {
+            assert!(caches.is_none());
+        }
     }
     assert!(!prefix.join("user.reg").exists());
 }

@@ -211,6 +211,57 @@ identity in addition to the native session connection. The prior prototype's
 in `tools/runtime-probes/steam-route.c`; bridge binding alone does not replace
 those end-to-end checks.
 
+## Launch diagnostics and shader caches
+
+Each launch writes `logs/<AppID-or-manual>/<run-id>/` under Nucleon's Application
+Support directory. It contains `runner.log`, `wine.log`, `receipt.json`, and
+`setup.log` when Wine setup commands run. Concurrent launches have separate files.
+`nucleon logs --runner` reads the latest run; `--follow` switches to new launches.
+Existing shared logs remain available as historical files.
+
+Normal launches keep warnings/errors, engine selection, preparation summaries
+and process outcomes. `NUCLEON_DEBUG=1` enables DLL/exception/process messages,
+Vulkan-loader diagnostics, graphics info logs and native quit-stack tracing.
+Diagnostic DXVK/DXMT files also stay in the run directory. Explicit
+`NUCLEON_WINEDEBUG` channels and `NUCLEON_TRACE_PROCESS_EXIT=0|1` remain available.
+`NUCLEON_WINE_LOG` redirects Wine output; `NUCLEON_RUN_RECEIPT` writes an additional
+receipt for diagnostic wrappers. Both file overrides resolve relative to the
+runner's working directory.
+
+Receipts record the runtime, engine, prefix, staged-file count, effective cache
+paths, outcome and separate preparation/runtime/cleanup durations. Runtime is the
+supervised interval after launcher spawn, not measured gameplay or frame time.
+An exit code or completed timer does not establish gameplay validity. Interrupted
+runs retain their last recorded phase.
+
+Vulkan-backed launches use persistent per-game directories beneath
+`<compatdata>/nucleon/shader-cache/v1/`. Their namespaces include execution mode,
+runtime family/ABI, guest architecture, engine, graphics tuning and translator/
+driver contents. Moving unchanged components to a new Wine generation preserves
+the same cache directory. Changed graphics inputs select a new directory while
+retaining old data. Prefix repair and graphics staging do not delete caches.
+Existing prototype cache locations are left intact; automatic migration is not
+performed.
+
+Explicit `VKD3D_SHADER_CACHE_PATH`, `DXVK_SHADER_CACHE_PATH` and
+`MESA_SHADER_CACHE_DIR` overrides take precedence. Managed Windows translator
+paths use Wine's `Z:` mapping; Mesa receives a native path.
+[VKD3D cache controls](https://github.com/HansKristian-Work/vkd3d-proton/blob/v3.0.1/README.md#shader-cache)
+and [DXVK cache controls](https://github.com/doitsujin/dxvk/blob/v3.1/README.md)
+define the component behavior. DXMT and Metal retain their existing driver/prefix
+cache handling. The pinned KosmicKrisp source does not initialize its Mesa disk
+cache: Nucleon preserves its directory, but persistent Mesa cache writes require
+separate driver work. Cache policy alone makes no performance claim.
+
+The Vulkan backend no longer forces `VKD3D_CONFIG=dxr11,dxr`. Native launches
+ignore inherited raw feature-forcing variables. Deliberate per-game experiments
+can use `NUCLEON_VKD3D_CONFIG`, `NUCLEON_VKD3D_FEATURE_LEVEL`,
+`NUCLEON_VKD3D_SHADER_MODEL`, `NUCLEON_MESA_VK_VERSION_OVERRIDE` or
+`NUCLEON_MVK_CONFIG_ADVERTISE_API_VERSION`. Intel launches retain explicit raw
+overrides; the `NUCLEON_` form takes precedence in both modes. Forced settings
+participate in cache compatibility. Upstream describes `dxr` as forcing support
+even where unsafe; it is not a default capability selection.
+
 ## Verification
 
 Core/runner regressions cover descriptors, hybrid PE detection, graphics

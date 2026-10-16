@@ -211,7 +211,7 @@ path is integrated and measurable.
 
 ## Implementation follow-up
 
-Steps 1–4 are implemented in core and the runner: explicit runtime descriptors,
+Steps 1–5 are implemented in core and the runner: explicit runtime descriptors,
 a shared launch plan, pinned graphics paths, architecture-aware bridge staging,
 private ARM64 relinking/signing and checked prefix setup. The experimental Steam
 tool pins its native runtime, uses scoped profiles, and keeps a family/ABI-checked
@@ -223,7 +223,12 @@ See [RUNTIME-DESCRIPTORS.md](RUNTIME-DESCRIPTORS.md) for registration, profiles 
 validation. Developer generations are assembled from existing local artifacts and can be
 imported into retained managed storage. Managed runtime installation and
 preparation caches are now available.
-Step 5 remains the follow-up for logs, shader-cache policy and performance measurement. Existing
+Normal launches now retain warning/error logs and structured per-run timing
+receipts. Verbose traces require opt-in. Per-game shader-cache namespaces follow
+graphics contents and ABI rather than the Wine generation path. The pinned
+KosmicKrisp driver does not initialize Mesa's disk cache; supplying a persistent
+directory alone does not activate that driver feature. Performance measurement
+and driver disk-cache activation remain follow-ups. Existing
 game selections and global Wine remain unchanged. The new runner flow has not
 received a new gameplay validation; the earlier DMC5 exit and sparse-depth failures
 remain unresolved.

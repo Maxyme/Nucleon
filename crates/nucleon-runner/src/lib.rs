@@ -8,8 +8,7 @@ use nucleon_core::profile::GameProfile as LaunchOverride;
 use nucleon_core::runtime::ResolvedRuntime;
 use nucleon_core::{paths, runner};
 use std::env;
-use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
@@ -19,7 +18,9 @@ use std::time::Duration;
 use sysinfo::{ProcessesToUpdate, System};
 
 mod process;
+mod session;
 use process::{OwnedChild, TERMINATION_GRACE};
+use session::{RunSession, trace as trace_runner};
 
 /// Resolve once so compatibility checks and execution use the same Wine.
 fn resolve_wine_override(
@@ -42,7 +43,7 @@ fn resolve_wine_override(
         let runtime = (!value.trim().is_empty()).then(|| nucleon_core::wine::resolve_wine_runtime_by_query(&value)).flatten()
             .ok_or_else(|| config::invalid(&source, &value, "Wine runtime was not found",
                 "Run 'nucleon wine list' and choose an installed name or path, or remove this override."))?;
-        log_runner(&format!(
+        trace_runner(&format!(
             "Wine selection from {source}: '{}' -> {}",
             runtime.name,
             runtime.root.display()
@@ -236,16 +237,7 @@ pub fn determine_wine_args(
 }
 
 fn log_runner(msg: &str) {
-    let ts = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
-    let line = format!("{ts} [nucleon-runner] {msg}\n");
-    print!("{line}");
-    let log_path = paths::support_dir().join("nucleon-runner.log");
-    if let Some(p) = log_path.parent() {
-        let _ = fs::create_dir_all(p);
-    }
-    if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(&log_path) {
-        let _ = f.write_all(line.as_bytes());
-    }
+    session::log(msg);
 }
 
 fn activate_frontmost_window() {
@@ -376,14 +368,32 @@ fn terminate_wine_prefix(runtime: &ResolvedRuntime, pfx_dir: &Path, child: &mut 
     wait_wineserver(runtime, pfx_dir, 1000);
 }
 
+fn stop_game(
+    session: &RunSession,
+    runtime: &ResolvedRuntime,
+    prefix: &Path,
+    child: &mut OwnedChild,
+    cleanup: &mut PrefixCleanup,
+) {
+    session.clock.begin_cleanup();
+    terminate_wine_prefix(runtime, prefix, child);
+    cleanup.armed = false;
+}
+
 /// Declared after the prefix lease, so failed preparation stops this prefix's
 /// server before ownership is released. Normal game shutdown already does this.
 struct PrefixCleanup {
     runtime: ResolvedRuntime,
     prefix: PathBuf,
+    clock: session::Clock,
+    armed: bool,
 }
 impl Drop for PrefixCleanup {
     fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        self.clock.begin_cleanup();
         if let Err(error) = run_wineserver_helper(
             &self.runtime.server,
             &self.prefix,
@@ -515,47 +525,62 @@ pub fn is_wine_game_process_running(runner_dir: &Path, target_exe: &Path, prefix
     })
 }
 
-pub fn run_with_args(args: &[String]) -> Result<()> {
-    let result = run_with_args_inner(args);
-    if let Err(error) = &result {
-        log_runner(&format!("Launch failed: {error:#}"));
-    }
-    result
+struct RunOutcome {
+    code: i32,
+    status: &'static str,
 }
 
-fn run_with_args_inner(args: &[String]) -> Result<()> {
+pub fn run_with_args(args: &[String]) -> Result<()> {
+    if args
+        .get(1)
+        .is_some_and(|verb| verb == "check-app-compatibility")
+    {
+        return Ok(());
+    }
+    let mut session = RunSession::create(args)?;
+    log_runner(&format!("Launch logs: {}", session.directory.display()));
+    let result = session
+        .configure()
+        .and_then(|()| run_with_args_inner(args, &mut session));
+    match result {
+        Ok(outcome) => {
+            session.finish(outcome.status, Some(outcome.code), None)?;
+            log_runner(&format!(
+                "Launch finished: {} (exit {})",
+                outcome.status, outcome.code
+            ));
+            if outcome.code != 0 {
+                std::process::exit(outcome.code);
+            }
+            Ok(())
+        }
+        Err(error) => {
+            log_runner(&format!("Launch failed: {error:#}"));
+            if let Err(report_error) = session.finish("failed", None, Some(format!("{error:#}"))) {
+                eprintln!("Cannot finalize launch receipt: {report_error:#}");
+            }
+            Err(error)
+        }
+    }
+}
+
+fn run_with_args_inner(args: &[String], session: &mut RunSession) -> Result<RunOutcome> {
     if args.len() < 2 {
-        eprintln!("Usage: nucleon-runner <verb> [args...]");
-        std::process::exit(1);
+        bail!("Usage: nucleon-runner <verb> [args...]");
     }
-
     let verb = &args[1];
-
-    if verb == "check-app-compatibility" {
-        std::process::exit(0);
-    }
-
-    // Bypass iscriptevaluator.exe immediately
     for arg in args {
         if arg.contains("iscriptevaluator.exe") {
             log_runner("Intercepted iscriptevaluator.exe, exiting cleanly");
-            std::process::exit(0);
+            return Ok(RunOutcome {
+                code: 0,
+                status: "skipped",
+            });
         }
     }
 
     // Parse Steam compatibility environment
-    let compat_appid = env::var("STEAM_COMPAT_APP_ID")
-        .ok()
-        .or_else(|| env::var("SteamAppId").ok())
-        .or_else(|| {
-            env::var_os("STEAM_COMPAT_DATA_PATH").and_then(|p| {
-                let path = PathBuf::from(p);
-                path.file_name()
-                    .and_then(|n| n.to_str())
-                    .filter(|s| s.chars().all(|c| c.is_ascii_digit()))
-                    .map(|s| s.to_string())
-            })
-        });
+    let compat_appid = session.appid.clone();
     let compat_data_path = env::var_os("STEAM_COMPAT_DATA_PATH")
         .map(PathBuf::from)
         .unwrap_or_else(|| paths::support_dir().join("default_prefix"));
@@ -573,7 +598,10 @@ fn run_with_args_inner(args: &[String]) -> Result<()> {
 
     if game_args.is_empty() {
         log_runner("No game executable specified to run, exiting.");
-        std::process::exit(0);
+        return Ok(RunOutcome {
+            code: 0,
+            status: "skipped",
+        });
     }
 
     let target_exe = PathBuf::from(&game_args[0]);
@@ -763,7 +791,7 @@ fn run_with_args_inner(args: &[String]) -> Result<()> {
                 configured_backend,
                 custom_wine,
             )?;
-            log_runner(&format!(
+            trace_runner(&format!(
                 "Automatic Runner: routing graphics API {:?} (detected {:?}, found: {:?}, evidence: {}) -> selecting {:?}",
                 graphics_api,
                 detection.api,
@@ -782,7 +810,7 @@ fn run_with_args_inner(args: &[String]) -> Result<()> {
             )
         }
         Some(eng) => {
-            log_runner(&format!("Engine manually overridden -> {:?}", eng));
+            trace_runner(&format!("Engine manually overridden -> {:?}", eng));
             (eng, format!("Manual Override ({:?})", eng))
         }
     };
@@ -835,7 +863,7 @@ fn run_with_args_inner(args: &[String]) -> Result<()> {
             game_profile.dxvk_path.as_deref(),
         )?,
     };
-    let plan = LaunchPlan::new(
+    let mut plan = LaunchPlan::new(
         runtime,
         pfx_dir.clone(),
         active_engine,
@@ -844,6 +872,9 @@ fn run_with_args_inner(args: &[String]) -> Result<()> {
         user_shim_override,
         &graphics_api,
     )?;
+    plan.log_directory = Some(session.directory.clone());
+    plan.diagnostics = session.debug;
+    session.resolved(&plan, None, None)?;
     let run_seconds = config::environment("NUCLEON_RUN_SECONDS")?
         .map(|value| {
             value
@@ -853,7 +884,7 @@ fn run_with_args_inner(args: &[String]) -> Result<()> {
         })
         .transpose()?;
     let wine_bin = plan.runtime.loader.clone();
-    log_runner(&format!(
+    trace_runner(&format!(
         "Resolved runtime mode: {:?}; native libraries: {}",
         plan.runtime.mode,
         plan.runtime.unix_dir.display()
@@ -871,9 +902,11 @@ fn run_with_args_inner(args: &[String]) -> Result<()> {
         },
         || term_flag.load(Ordering::SeqCst),
     )?;
-    let _prefix_cleanup = PrefixCleanup {
+    let mut prefix_cleanup = PrefixCleanup {
         runtime: plan.runtime.clone(),
         prefix: pfx_dir.clone(),
+        clock: session.clock.clone(),
+        armed: true,
     };
     log_runner(&format!(
         "Prefix: {} (family {}, ABI {})",
@@ -899,6 +932,22 @@ fn run_with_args_inner(args: &[String]) -> Result<()> {
         active_engine
     ));
     let mut exec_env = plan.execution_env(enable_hud, enable_overlay);
+    plan.configure_launch_environment(&mut exec_env)?;
+    let caches = nucleon_core::shader_cache::ShaderCaches::prepare(
+        &plan,
+        &compat_data_path,
+        compat_appid.as_deref(),
+        &target_exe,
+        &exec_env,
+    )?;
+    if let Some(caches) = &caches {
+        caches.apply(&mut exec_env);
+    }
+    session.resolved(
+        &plan,
+        Some(staged),
+        caches.as_ref().map(serde_json::to_value).transpose()?,
+    )?;
     if let Some(directory) = target_exe.parent() {
         let helpers = nucleon_core::detector::bundled_directx_helpers(
             directory,
@@ -922,7 +971,10 @@ fn run_with_args_inner(args: &[String]) -> Result<()> {
     }
 
     if term_flag.load(Ordering::SeqCst) {
-        return Ok(());
+        return Ok(RunOutcome {
+            code: 0,
+            status: "cancelled",
+        });
     }
 
     // Working directory is the parent of the exe if available
@@ -944,7 +996,7 @@ fn run_with_args_inner(args: &[String]) -> Result<()> {
 
     let steamworks_title = nucleon_core::detector::file_uses_steamworks(&target_exe);
     let wine_args = plan.wine_args(&game_args)?;
-    log_runner(&format!(
+    trace_runner(&format!(
         "Steam client handshake: target {} Steamworks; 64-bit {}; wrapper {}",
         if steamworks_title {
             "links"
@@ -959,13 +1011,13 @@ fn run_with_args_inner(args: &[String]) -> Result<()> {
         }
     ));
 
-    log_runner(&format!("Wine binary: {}", wine_bin.display()));
-    log_runner(&format!("Game CWD: {:?}", game_cwd));
-    log_runner(&format!(
+    trace_runner(&format!("Wine binary: {}", wine_bin.display()));
+    trace_runner(&format!("Game CWD: {:?}", game_cwd));
+    trace_runner(&format!(
         "Target architecture: {}",
         if is_64 { "64-bit" } else { "32-bit" }
     ));
-    log_runner(&format!("Launching game with Wine: {:?}", wine_args));
+    trace_runner(&format!("Launching game with Wine: {:?}", wine_args));
 
     for key in [
         "STEAM_COMPAT_APP_ID",
@@ -986,7 +1038,7 @@ fn run_with_args_inner(args: &[String]) -> Result<()> {
         "DYLD_INSERT_LIBRARIES",
     ] {
         if let Ok(value) = env::var(key) {
-            log_runner(&format!("INHERITED_ENV: {key}={value}"));
+            trace_runner(&format!("INHERITED_ENV: {key}={value}"));
         }
     }
 
@@ -998,7 +1050,7 @@ fn run_with_args_inner(args: &[String]) -> Result<()> {
         .env_remove("STEAM_DYLD_INSERT_LIBRARIES");
 
     for (k, v) in &exec_env {
-        log_runner(&format!("ENV: {}={}", k, v));
+        trace_runner(&format!("ENV: {}={}", k, v));
         cmd.env(k, v);
     }
 
@@ -1006,34 +1058,14 @@ fn run_with_args_inner(args: &[String]) -> Result<()> {
         cmd.current_dir(cwd);
     }
 
-    let explicit_wine_log = config::environment("NUCLEON_WINE_LOG")?.map(PathBuf::from);
-    let wine_log_path = explicit_wine_log
-        .clone()
-        .unwrap_or_else(|| paths::support_dir().join("wine.log"));
-    match fs::File::create(&wine_log_path) {
-        Ok(file) => {
-            let err_file = file
-                .try_clone()
-                .context("Clone Wine diagnostic log handle")?;
-            cmd.stdout(std::process::Stdio::from(file));
-            cmd.stderr(std::process::Stdio::from(err_file));
-        }
-        Err(error) if explicit_wine_log.is_some() => {
-            return Err(error).with_context(|| {
-                format!(
-                    "Cannot write diagnostic Wine log {}",
-                    wine_log_path.display()
-                )
-            });
-        }
-        Err(error) => log_runner(&format!(
-            "Cannot write Wine log {}: {error}",
-            wine_log_path.display()
-        )),
-    }
+    let file = fs::File::create(&session.wine_log)
+        .with_context(|| format!("Cannot write Wine log {}", session.wine_log.display()))?;
+    cmd.stdout(std::process::Stdio::from(file.try_clone()?));
+    cmd.stderr(std::process::Stdio::from(file));
 
     let mut child = OwnedChild::spawn(&mut cmd).with_context(|| format!("Cannot launch Wine {}. Check that this binary is executable and matches your Mac's architecture", wine_bin.display()))?;
 
+    session.started()?;
     let started = std::time::Instant::now();
 
     // Focus activation after slight delay
@@ -1045,25 +1077,42 @@ fn run_with_args_inner(args: &[String]) -> Result<()> {
     // Supervision watchdog
     let mut primary_exited = false;
     let mut exit_code = 0;
+    let mut outcome = "exited";
 
     loop {
         if run_seconds.is_some_and(|limit| started.elapsed() >= limit) {
             log_runner("Bounded run finished; stopping owned Wine prefix");
-            terminate_wine_prefix(&plan.runtime, &pfx_dir, &mut child);
+            stop_game(
+                session,
+                &plan.runtime,
+                &pfx_dir,
+                &mut child,
+                &mut prefix_cleanup,
+            );
             exit_code = 0;
+            outcome = "bounded";
             break;
         }
         if term_flag.load(Ordering::SeqCst) {
             log_runner("Termination signal received, stopping Wine processes cleanly");
-            terminate_wine_prefix(&plan.runtime, &pfx_dir, &mut child);
-            std::process::exit(0);
+            stop_game(
+                session,
+                &plan.runtime,
+                &pfx_dir,
+                &mut child,
+                &mut prefix_cleanup,
+            );
+            exit_code = 0;
+            outcome = "cancelled";
+            break;
         }
 
         if !primary_exited {
             match child.try_wait() {
                 Ok(Some(status)) => {
                     primary_exited = true;
-                    exit_code = status.code().unwrap_or(0);
+                    exit_code = status.code().unwrap_or(1);
+                    session.primary_exited(status)?;
                     log_runner(&format!("Wine primary process exited with: {:?}", status));
 
                     // When Wine acts as a launcher that spawns/forks wine-preloader and exits,
@@ -1084,7 +1133,13 @@ fn run_with_args_inner(args: &[String]) -> Result<()> {
                         log_runner(
                             "No Wine game processes detected after primary launcher exit, shutting down",
                         );
-                        terminate_wine_prefix(&plan.runtime, &pfx_dir, &mut child);
+                        stop_game(
+                            session,
+                            &plan.runtime,
+                            &pfx_dir,
+                            &mut child,
+                            &mut prefix_cleanup,
+                        );
                         break;
                     }
                 }
@@ -1092,7 +1147,14 @@ fn run_with_args_inner(args: &[String]) -> Result<()> {
                 Err(e) => {
                     log_runner(&format!("Error waiting on Wine process: {}", e));
                     exit_code = 1;
-                    terminate_wine_prefix(&plan.runtime, &pfx_dir, &mut child);
+                    outcome = "supervision-failed";
+                    stop_game(
+                        session,
+                        &plan.runtime,
+                        &pfx_dir,
+                        &mut child,
+                        &mut prefix_cleanup,
+                    );
                     break;
                 }
             }
@@ -1103,7 +1165,13 @@ fn run_with_args_inner(args: &[String]) -> Result<()> {
                 thread::sleep(Duration::from_millis(500));
                 if !is_wine_game_process_running(&runner_dir, &target_exe, &pfx_dir) {
                     log_runner("All Wine game processes have terminated, exiting cleanly");
-                    terminate_wine_prefix(&plan.runtime, &pfx_dir, &mut child);
+                    stop_game(
+                        session,
+                        &plan.runtime,
+                        &pfx_dir,
+                        &mut child,
+                        &mut prefix_cleanup,
+                    );
                     break;
                 }
             }
@@ -1112,7 +1180,10 @@ fn run_with_args_inner(args: &[String]) -> Result<()> {
         thread::sleep(Duration::from_millis(500));
     }
 
-    std::process::exit(exit_code);
+    Ok(RunOutcome {
+        code: exit_code,
+        status: outcome,
+    })
 }
 
 #[cfg(test)]

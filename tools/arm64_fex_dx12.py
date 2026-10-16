@@ -32,6 +32,7 @@ class DX12:
         self.logs.mkdir(parents=True, exist_ok=True)
         self.sdk = sdk.resolve()
         self.jobs = jobs
+        self.debug = False
         self.pin = tomllib.loads(RECIPE.read_text())
         if self.pin['schema'] != 1 or jobs < 1:
             raise ValueError('Unsupported DX12 recipe or invalid job count')
@@ -328,8 +329,12 @@ class DX12:
         cache.mkdir(parents=True,exist_ok=True)
         env['VKD3D_SHADER_CACHE_PATH'] = str(cache)
         env['MESA_SHADER_CACHE_DIR'] = str(cache / 'mesa')
-        env.update(VKD3D_DEBUG='info', DXVK_LOG_LEVEL='info',
-                   DXVK_LOG_PATH=str(self.logs), WINEDEBUG='+loaddll', VK_LOADER_DEBUG='driver')
+        env.update(VKD3D_DEBUG='info' if self.debug else 'warn',
+                   DXVK_LOG_LEVEL='info' if self.debug else 'warn',
+                   DXVK_LOG_PATH=str(self.logs) if self.debug else 'none',
+                   WINEDEBUG='-all,warn+all,err+all,+loaddll' if self.debug else '-all,warn+all,err+all')
+        env.pop('VK_LOADER_DEBUG',None)
+        if self.debug: env['VK_LOADER_DEBUG']='error,warn,driver'
         for name in ['VKD3D_CONFIG','VKD3D_FEATURE_LEVEL','VKD3D_SHADER_MODEL',
                      'MVK_CONFIG_ADVERTISE_API_VERSION', 'MESA_VK_VERSION_OVERRIDE']:
             env.pop(name, None)
@@ -538,8 +543,10 @@ def main():
     p.add_argument('--work', type=Path, default=REPO / 'target/arm64-fex')
     p.add_argument('--sdk', type=Path, default=Path.home() / 'VulkanSDK/1.4.363.0/macOS')
     p.add_argument('--jobs', type=int, default=6)
+    p.add_argument('--debug', action='store_true', help='Enable verbose Wine and Vulkan diagnostics')
     a = p.parse_args()
     e = DX12(a.work.resolve(), a.sdk, a.jobs)
+    e.debug = a.debug
     getattr(e,a.action.replace('-','_'))()
 
 

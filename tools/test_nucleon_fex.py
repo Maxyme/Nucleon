@@ -45,7 +45,8 @@ profile = Path(os.environ['NUCLEON_GAME_PROFILE'])
 Path(os.environ['NUCLEON_SUPPORT_DIR']).joinpath('capture.json').write_text(json.dumps(dict(
     argv=sys.argv[1:], environment=dict(os.environ), selection=json.loads(selection.read_text()),
     profile=json.loads(profile.read_text()))))
-print('Bounded run finished; stopping owned Wine prefix')
+Path(os.environ['NUCLEON_RUN_RECEIPT']).write_text(json.dumps(dict(status='bounded',timings=dict(preparation_ms=25,runtime_ms=7000,cleanup_ms=50))))
+print('quiet runner')
 ''')
             runner.chmod(0o755)
             profile = dict(graphics_api='dx12', steam_protocol='valve-redirect', overlay=False)
@@ -61,9 +62,16 @@ print('Bounded run finished; stopping owned Wine prefix')
             for name in ['WINEPREFIX', 'VK_DRIVER_FILES', 'NUCLEON_ENGINE']:
                 self.assertNotIn(name, env)
             self.assertEqual(env['NUCLEON_RUN_SECONDS'], '7')
+            self.assertEqual(env['NUCLEON_DEBUG'], '0')
+            self.assertNotIn('NUCLEON_TRACE_PROCESS_EXIT',env)
+            self.assertEqual(result['timings']['runtime_ms'],7000)
             self.assertFalse(Path(env['NUCLEON_GAME_PROFILE']).exists())
             self.assertEqual(result['status'], 'BOUNDED_RUN_FINISHED')
             self.assertTrue(result['prefix'].endswith('/compat/nucleon/arm64-fex/fixture/pfx'))
+            with patch.dict(os.environ, {'NUCLEON_RUNNER':str(runner), 'NUCLEON_SUPPORT_DIR':str(root)}):
+                launch(runtime, root / 'bridge', 601150, game, root / 'compat',
+                       profile, root / 'debug.log', 7, debug=True)
+            self.assertEqual(json.loads(capture.read_text())['environment']['NUCLEON_DEBUG'], '1')
 
     def test_configuration_lock_covers_the_actual_path_and_releases_after_error(self):
         with tempfile.TemporaryDirectory() as temporary:

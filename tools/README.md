@@ -134,8 +134,13 @@ runtime; `--game-dir`, `--bridge`, `--sdk` and `--work` override local locations
 Rust owns prefix initialization, private bridge binding/signing, graphics staging
 and process cleanup. The private diagnostic profile leaves the production profile
 and one-shot overrides intact. Runner output, a separate Wine log and a JSON
-receipt go into `dx12/logs/`. `--timeout SECONDS` starts counting after the game
-launcher is spawned; preparation is excluded. `--debug` enables verbose traces. Steam cloud/user saves still use the real Steam
+receipt go into `dx12/logs/`. The adjacent `.runner.json` is the Rust runner's
+structured receipt, with separate preparation, supervised-runtime and cleanup
+times and effective shader-cache paths. Helpers read its outcome rather than
+inferring success from log text. `--timeout SECONDS` starts counting after the game
+launcher is spawned; preparation is excluded. `--debug` enables verbose traces
+and executable hashing. Without it, missing trace markers mean unknown rather
+than failed Steam/device initialization. Steam cloud/user saves still use the real Steam
 user-data directory. Close an existing prototype game before relaunching.
 
 The bridge is a local prerequisite, not a new pinned build product; this helper

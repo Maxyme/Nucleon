@@ -16,6 +16,29 @@ pub fn support_dir() -> PathBuf {
     home_dir().join("Library/Application Support/nucleon")
 }
 
+/// Latest launch pointer; historical runs stay in AppID/run-specific directories.
+pub fn latest_run_dir() -> Result<Option<PathBuf>> {
+    let logs = support_dir().join("logs");
+    let Some(text) = crate::configuration::optional_file(&logs.join("latest-run.json"))? else {
+        return Ok(None);
+    };
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Latest {
+        directory: PathBuf,
+    }
+    let latest: Latest = serde_json::from_str(&text).context("Invalid latest-run log pointer")?;
+    anyhow::ensure!(
+        !latest.directory.as_os_str().is_empty()
+            && latest
+                .directory
+                .components()
+                .all(|c| matches!(c, std::path::Component::Normal(_))),
+        "Invalid latest-run log path"
+    );
+    Ok(Some(logs.join(latest.directory)))
+}
+
 pub fn runners_dir() -> PathBuf {
     support_dir().join("runners")
 }

@@ -260,6 +260,8 @@ pub struct LaunchPlan {
     pub bridge: PathBuf,
     pub is64: bool,
     pub use_steam_helper: bool,
+    pub log_directory: Option<PathBuf>,
+    pub diagnostics: bool,
 }
 
 impl LaunchPlan {
@@ -312,6 +314,8 @@ impl LaunchPlan {
                 .unwrap_or_else(paths::bridge_dir),
             is64,
             use_steam_helper,
+            log_directory: None,
+            diagnostics: false,
         })
     }
 
@@ -489,6 +493,21 @@ impl LaunchPlan {
                 "winemenubuilder.exe=d;mscoree=d;mshtml=d".into(),
             ),
         ]);
+        env.insert(
+            "WINEDEBUG".into(),
+            if self.diagnostics {
+                "-all,warn+all,err+all,+timestamp,+loaddll,+seh"
+            } else {
+                "-all,warn+all,err+all"
+            }
+            .into(),
+        );
+        if let Some(directory) = &self.log_directory {
+            env.insert(
+                "NUCLEON_SETUP_LOG".into(),
+                directory.join("setup.log").display().to_string(),
+            );
+        }
         env.extend(r.environment.iter().map(|(k, v)| (k.clone(), v.clone())));
         env
     }
@@ -631,10 +650,89 @@ impl LaunchPlan {
                     .to_string(),
             );
         }
+        // Avoid per-frame/info chatter during ordinary launches, including GPTK.
+        env.insert("WINEDEBUG".into(), "-all,warn+all,err+all".into());
+        for name in [
+            "VKD3D_DEBUG",
+            "VKD3D_SHADER_DEBUG",
+            "DXVK_LOG_LEVEL",
+            "DXMT_LOG_LEVEL",
+        ] {
+            env.insert(name.into(), "warn".into());
+        }
+        env.insert("DXVK_LOG_PATH".into(), "none".into());
+        env.insert("DXMT_LOG_PATH".into(), "none".into());
         if let Ok(debug) = std::env::var("NUCLEON_WINEDEBUG") {
             env.insert("WINEDEBUG".into(), debug);
         }
         env
+    }
+
+    pub fn configure_launch_environment(&self, env: &mut HashMap<String, String>) -> Result<()> {
+        self.configure_environment(env, crate::configuration::environment)
+    }
+
+    fn configure_environment(
+        &self,
+        env: &mut HashMap<String, String>,
+        mut setting: impl FnMut(&str) -> Result<Option<String>>,
+    ) -> Result<()> {
+        if self.diagnostics {
+            env.insert(
+                "WINEDEBUG".into(),
+                "-all,warn+all,err+all,+timestamp,+loaddll,+seh,+process,+msg".into(),
+            );
+            env.insert("VK_LOADER_DEBUG".into(), "error,warn,driver".into());
+            env.insert("NUCLEON_TRACE_PROCESS_EXIT".into(), "1".into());
+            for name in [
+                "VKD3D_DEBUG",
+                "VKD3D_SHADER_DEBUG",
+                "DXVK_LOG_LEVEL",
+                "DXMT_LOG_LEVEL",
+            ] {
+                env.insert(name.into(), "info".into());
+            }
+            if let Some(directory) = &self.log_directory {
+                let windows = format!(
+                    "Z:{}",
+                    directory
+                        .canonicalize()?
+                        .display()
+                        .to_string()
+                        .replace('/', "\\")
+                );
+                env.insert("DXVK_LOG_PATH".into(), windows.clone());
+                env.insert("DXMT_LOG_PATH".into(), windows);
+            }
+        }
+        if let Some(value) = setting("NUCLEON_WINEDEBUG")? {
+            anyhow::ensure!(
+                !value.trim().is_empty(),
+                "NUCLEON_WINEDEBUG must name Wine channels"
+            );
+            env.insert("WINEDEBUG".into(), value);
+        }
+        if let Some(value) = setting("NUCLEON_TRACE_PROCESS_EXIT")? {
+            if crate::configuration::boolean("NUCLEON_TRACE_PROCESS_EXIT", &value)? {
+                env.insert("NUCLEON_TRACE_PROCESS_EXIT".into(), "1".into());
+            } else {
+                env.remove("NUCLEON_TRACE_PROCESS_EXIT");
+            }
+        }
+        for name in FEATURE_OVERRIDES {
+            let explicit = setting(&format!("NUCLEON_{name}"))?;
+            let value = if explicit.is_some() {
+                explicit
+            } else if self.runtime.mode == ExecutionMode::Intel {
+                setting(name)?
+            } else {
+                None
+            };
+            if let Some(value) = value {
+                env.insert((*name).into(), value);
+            }
+        }
+        Ok(())
     }
 
     pub fn wine_args(&self, args: &[String]) -> Result<Vec<String>> {
@@ -683,14 +781,39 @@ fn join(paths: &[PathBuf]) -> String {
         .join(":")
 }
 
+pub const FEATURE_OVERRIDES: &[&str] = &[
+    "VKD3D_CONFIG",
+    "VKD3D_FEATURE_LEVEL",
+    "VKD3D_SHADER_MODEL",
+    "MESA_VK_VERSION_OVERRIDE",
+    "MVK_CONFIG_ADVERTISE_API_VERSION",
+];
+const DIAGNOSTIC_VARIABLES: &[&str] = &[
+    "VK_LOADER_DEBUG",
+    "VKD3D_DEBUG",
+    "VKD3D_SHADER_DEBUG",
+    "VKD3D_LOG_FILE",
+    "DXVK_LOG_LEVEL",
+    "DXVK_LOG_PATH",
+    "DXMT_LOG_LEVEL",
+    "DXMT_LOG_PATH",
+    "NUCLEON_TRACE_PROCESS_EXIT",
+];
+
 /// Strip foreign Wine/FEX/dyld state without changing the parent's environment.
 pub fn clean_command(command: &mut Command) {
+    // Remove explicit command entries too, even if absent from the parent.
+    for name in FEATURE_OVERRIDES.iter().chain(DIAGNOSTIC_VARIABLES) {
+        command.env_remove(name);
+    }
     for (key, _) in std::env::vars_os() {
         let name = key.to_string_lossy();
         if ["WINE", "DYLD_", "FEX_", "MACRUNNER_", "ROSETTA_"]
             .iter()
             .any(|p| name.starts_with(p))
             || name == "STEAM_DYLD_INSERT_LIBRARIES"
+            || FEATURE_OVERRIDES.contains(&name.as_ref())
+            || DIAGNOSTIC_VARIABLES.contains(&name.as_ref())
         {
             command.env_remove(key);
         }
@@ -700,6 +823,69 @@ pub fn clean_command(command: &mut Command) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn diagnostics_and_native_capability_forcing_require_explicit_opt_in() {
+        let (temp, runtime) = runtime::fixture(ExecutionMode::Arm64Fex);
+        let mut plan = LaunchPlan::new(
+            runtime,
+            temp.path().join("pfx"),
+            TargetEngine::WineStaging,
+            Default::default(),
+            true,
+            Some(false),
+            &GraphicsApi::Unknown,
+        )
+        .unwrap();
+        let mut normal = plan.execution_env(false, false);
+        plan.configure_environment(&mut normal, |key| {
+            Ok((key == "VKD3D_CONFIG").then(|| "dxr".into()))
+        })
+        .unwrap();
+        assert_eq!(normal["WINEDEBUG"], "-all,warn+all,err+all");
+        assert_eq!(normal["VKD3D_DEBUG"], "warn");
+        assert_eq!(normal["DXVK_LOG_PATH"], "none");
+        assert!(!normal.contains_key("VK_LOADER_DEBUG"));
+        assert!(!normal.contains_key("NUCLEON_TRACE_PROCESS_EXIT"));
+        assert!(!normal.contains_key("VKD3D_CONFIG"));
+
+        plan.diagnostics = true;
+        plan.log_directory = Some(temp.path().to_owned());
+        let mut diagnostic = normal;
+        plan.configure_environment(&mut diagnostic, |key| {
+            Ok(match key {
+                "NUCLEON_TRACE_PROCESS_EXIT" => Some("false".into()),
+                "NUCLEON_VKD3D_CONFIG" => Some("dxr".into()),
+                _ => None,
+            })
+        })
+        .unwrap();
+        assert!(diagnostic["WINEDEBUG"].contains("+loaddll"));
+        assert_eq!(diagnostic["VKD3D_DEBUG"], "info");
+        assert!(diagnostic["DXVK_LOG_PATH"].starts_with("Z:\\"));
+        assert!(diagnostic.contains_key("VK_LOADER_DEBUG"));
+        assert!(!diagnostic.contains_key("NUCLEON_TRACE_PROCESS_EXIT"));
+        assert_eq!(diagnostic["VKD3D_CONFIG"], "dxr");
+    }
+
+    #[test]
+    fn foreign_diagnostics_and_feature_overrides_are_scrubbed_before_policy() {
+        let mut command = Command::new("/usr/bin/env");
+        for name in FEATURE_OVERRIDES.iter().chain(DIAGNOSTIC_VARIABLES) {
+            command.env(name, "foreign");
+        }
+        clean_command(&mut command);
+        let output = command.output().unwrap();
+        assert!(output.status.success());
+        let output = String::from_utf8(output.stdout).unwrap();
+        for name in FEATURE_OVERRIDES.iter().chain(DIAGNOSTIC_VARIABLES) {
+            assert!(
+                !output
+                    .lines()
+                    .any(|line| line.starts_with(&format!("{name}=")))
+            );
+        }
+    }
 
     #[test]
     fn native_dxmt_requires_the_paired_bundle_and_uses_native_override() {

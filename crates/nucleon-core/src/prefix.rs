@@ -187,6 +187,15 @@ pub(crate) fn run_prefix_command(
     use crate::process::{OwnedChild, TERMINATION_GRACE};
     crate::launch::clean_command(command);
     command.envs(env);
+    if let Some(path) = env.get("NUCLEON_SETUP_LOG") {
+        let file = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)?;
+        command
+            .stdout(std::process::Stdio::from(file.try_clone()?))
+            .stderr(std::process::Stdio::from(file));
+    }
     let mut child = OwnedChild::spawn(command)?;
     let start = std::time::Instant::now();
     loop {

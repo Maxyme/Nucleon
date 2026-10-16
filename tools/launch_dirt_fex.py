@@ -31,7 +31,7 @@ def main():
     stamp=datetime.now().strftime('%Y%m%d-%H%M%S-%f')
     log=e.logs / f'dirt-690790-{stamp}.log'
     receipt=dict(appid=690790,runtime=str(runtime),game_identity=game_identity(exe),game_sha256=sha(exe) if a.debug else None,status='PREPARING',
-                 gameplay_validation='NOT_CONFIRMED',production_profile_changed=False,log=str(log))
+                 gameplay_validation='NOT_CONFIRMED',production_profile_changed=False,runner_receipt=str(log.with_suffix('.runner.json')),log=str(log))
     try:
         receipt.update(launch(runtime,a.bridge,690790,exe,e.base.workspace / 'integrated-compatdata/690790',
             dict(graphics_api='dx11',steam_protocol='bridge',use_steam_shim=True,overlay=False),log,a.timeout,a.debug))
