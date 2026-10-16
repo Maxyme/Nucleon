@@ -8,6 +8,7 @@ pub mod dxmt;
 pub mod dxvk;
 pub mod fs_util;
 pub mod gptk_abi;
+mod graphics_bundle;
 pub mod guard;
 pub mod launch;
 pub mod managed_runtime;

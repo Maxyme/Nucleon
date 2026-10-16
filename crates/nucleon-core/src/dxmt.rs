@@ -73,24 +73,6 @@ impl DxmtBundle {
     }
 }
 
-fn read_version_file(dir: &Path) -> Option<String> {
-    let ver_file = dir.join("version.txt");
-    if ver_file.is_file()
-        && let Ok(c) = fs::read_to_string(&ver_file)
-    {
-        let t = c.trim();
-        if !t.is_empty() {
-            return Some(t.to_string());
-        }
-    }
-    None
-}
-
-fn check_file(dir: &Path, name: &str) -> Option<PathBuf> {
-    let p = dir.join(name);
-    if p.is_file() { Some(p) } else { None }
-}
-
 /// Inspects a directory to check if it contains a valid DXMT installation.
 /// Supports standard DXMT release hierarchy (x86_64-windows / i386-windows / x86_64-unix),
 /// x64 / x32 layouts, flat directories, or nested release directories.
@@ -104,41 +86,23 @@ pub fn inspect_candidate_dir(dir: &Path) -> Option<DxmtBundle> {
 
 fn inspect_bundle_layout(dir: &Path) -> Option<DxmtBundle> {
     // 1. Check official DXMT layout: x86_64-windows, i386-windows, and x86_64-unix
-    let x64_win = if dir.join("x86_64-windows").is_dir() {
-        dir.join("x86_64-windows")
-    } else {
-        dir.join("x64")
-    };
+    let x64_win = crate::graphics_bundle::directory(dir, &["x86_64-windows", "x64"]);
+    let x86_win =
+        crate::graphics_bundle::directory(dir, &["i386-windows", "x86-windows", "x32", "x86"]);
 
-    let x86_win = if dir.join("i386-windows").is_dir() {
-        dir.join("i386-windows")
-    } else if dir.join("x86-windows").is_dir() {
-        dir.join("x86-windows")
-    } else if dir.join("x32").is_dir() {
-        dir.join("x32")
-    } else {
-        dir.join("x86")
-    };
-
-    let x64_unix = if dir.join("x86_64-unix").is_dir() {
-        dir.join("x86_64-unix")
-    } else if dir.join("aarch64-unix").is_dir() {
-        dir.join("aarch64-unix")
-    } else {
-        dir.to_path_buf()
-    };
+    let x64_unix = crate::graphics_bundle::directory(dir, &["x86_64-unix", "aarch64-unix", ""]);
 
     if x64_win.is_dir() || x86_win.is_dir() {
-        let x64_d3d11 = check_file(&x64_win, "d3d11.dll");
-        let x64_d3d10core = check_file(&x64_win, "d3d10core.dll");
-        let x64_dxgi = check_file(&x64_win, "dxgi.dll");
-        let x64_winemetal = check_file(&x64_win, "winemetal.dll");
-        let x64_winemetal_so = check_file(&x64_unix, "winemetal.so");
+        let x64_d3d11 = crate::graphics_bundle::file(&x64_win, "d3d11.dll");
+        let x64_d3d10core = crate::graphics_bundle::file(&x64_win, "d3d10core.dll");
+        let x64_dxgi = crate::graphics_bundle::file(&x64_win, "dxgi.dll");
+        let x64_winemetal = crate::graphics_bundle::file(&x64_win, "winemetal.dll");
+        let x64_winemetal_so = crate::graphics_bundle::file(&x64_unix, "winemetal.so");
 
-        let x86_d3d11 = check_file(&x86_win, "d3d11.dll");
-        let x86_d3d10core = check_file(&x86_win, "d3d10core.dll");
-        let x86_dxgi = check_file(&x86_win, "dxgi.dll");
-        let x86_winemetal = check_file(&x86_win, "winemetal.dll");
+        let x86_d3d11 = crate::graphics_bundle::file(&x86_win, "d3d11.dll");
+        let x86_d3d10core = crate::graphics_bundle::file(&x86_win, "d3d10core.dll");
+        let x86_dxgi = crate::graphics_bundle::file(&x86_win, "dxgi.dll");
+        let x86_winemetal = crate::graphics_bundle::file(&x86_win, "winemetal.dll");
 
         if x64_d3d11.is_some() || x86_d3d11.is_some() || x64_winemetal_so.is_some() {
             return Some(DxmtBundle {
@@ -152,17 +116,17 @@ fn inspect_bundle_layout(dir: &Path) -> Option<DxmtBundle> {
                 x86_d3d10core,
                 x86_dxgi,
                 x86_winemetal,
-                version: read_version_file(dir),
+                version: crate::graphics_bundle::version(dir),
             });
         }
     }
 
     // 2. Check flat directory: <dir>/d3d11.dll or <dir>/winemetal.so
-    let flat_d3d11 = check_file(dir, "d3d11.dll");
-    let flat_d3d10core = check_file(dir, "d3d10core.dll");
-    let flat_dxgi = check_file(dir, "dxgi.dll");
-    let flat_winemetal = check_file(dir, "winemetal.dll");
-    let flat_winemetal_so = check_file(dir, "winemetal.so");
+    let flat_d3d11 = crate::graphics_bundle::file(dir, "d3d11.dll");
+    let flat_d3d10core = crate::graphics_bundle::file(dir, "d3d10core.dll");
+    let flat_dxgi = crate::graphics_bundle::file(dir, "dxgi.dll");
+    let flat_winemetal = crate::graphics_bundle::file(dir, "winemetal.dll");
+    let flat_winemetal_so = crate::graphics_bundle::file(dir, "winemetal.so");
 
     if flat_d3d11.is_some() || flat_winemetal_so.is_some() {
         return Some(DxmtBundle {
@@ -176,7 +140,7 @@ fn inspect_bundle_layout(dir: &Path) -> Option<DxmtBundle> {
             x86_d3d10core: None,
             x86_dxgi: None,
             x86_winemetal: None,
-            version: read_version_file(dir),
+            version: crate::graphics_bundle::version(dir),
         });
     }
 
@@ -190,23 +154,16 @@ pub fn custom_dxmt_path_file() -> PathBuf {
 /// Locates a DXMT bundle from environment, configured custom path,
 /// Nucleon support directory, Heroic tools, active Wine runtime, or well-known system paths.
 pub fn find_dxmt() -> Option<DxmtBundle> {
-    // 1. Explicit environment variable: DXMT_PATH
-    if let Ok(p) = std::env::var("DXMT_PATH") {
-        let path = PathBuf::from(p);
-        if let Some(bundle) = inspect_candidate_dir(&path) {
-            return Some(bundle);
-        }
-    }
-
-    // 2. Custom path stored via `nucleon dxmt set-path <path>`
-    let custom_file = custom_dxmt_path_file();
-    if custom_file.is_file()
-        && let Ok(content) = fs::read_to_string(&custom_file)
-    {
-        let p = PathBuf::from(content.trim());
-        if let Some(bundle) = inspect_candidate_dir(&p) {
-            return Some(bundle);
-        }
+    if let Some(bundle) = crate::graphics_bundle::configured(
+        &std::env::var("DXMT_PATH")
+            .ok()
+            .map(PathBuf::from)
+            .into_iter()
+            .collect::<Vec<_>>(),
+        &custom_dxmt_path_file(),
+        inspect_candidate_dir,
+    ) {
+        return Some(bundle);
     }
 
     // 3. Nucleon managed directory: ~/Library/Application Support/nucleon/dxmt
@@ -238,10 +195,8 @@ pub fn find_dxmt() -> Option<DxmtBundle> {
         PathBuf::from("/usr/local/share/dxmt"),
         paths::home_dir().join(".local/share/dxmt"),
     ];
-    for cand in &candidates {
-        if let Some(bundle) = inspect_candidate_dir(cand) {
-            return Some(bundle);
-        }
+    if let Some(bundle) = crate::graphics_bundle::find(candidates, inspect_candidate_dir) {
+        return Some(bundle);
     }
 
     None
@@ -252,35 +207,17 @@ pub fn is_dxmt_installed() -> bool {
 }
 
 pub fn set_custom_dxmt_path(path: &Path) -> Result<DxmtBundle> {
-    let resolved = if path.is_relative() {
-        std::env::current_dir()?.join(path)
-    } else {
-        path.to_path_buf()
-    };
-
-    let bundle = inspect_candidate_dir(&resolved).ok_or_else(|| {
-        anyhow::anyhow!(
-            "Invalid DXMT installation at {}. Expected x86_64-windows/d3d11.dll, winemetal.so, or d3d11.dll",
-            resolved.display()
-        )
-    })?;
-
-    fs::create_dir_all(paths::support_dir())?;
-    fs::write(
-        custom_dxmt_path_file(),
-        resolved.to_string_lossy().as_bytes(),
-    )?;
-    log::info!("Registered custom DXMT path: {}", resolved.display());
-    Ok(bundle)
+    crate::graphics_bundle::register(
+        path,
+        &custom_dxmt_path_file(),
+        "DXMT (expected x86_64-windows/d3d11.dll, winemetal.so, or d3d11.dll)",
+        inspect_candidate_dir,
+        |bundle| &bundle.root,
+    )
 }
 
 pub fn clear_custom_dxmt_path() -> Result<()> {
-    let f = custom_dxmt_path_file();
-    if f.exists() {
-        fs::remove_file(&f)?;
-        log::info!("Cleared custom DXMT path");
-    }
-    Ok(())
+    crate::graphics_bundle::clear(&custom_dxmt_path_file())
 }
 
 /// Builtin DXMT DLLs must match the selected Wine runtime.
@@ -338,52 +275,32 @@ pub fn stage_dxmt_into_prefix(
     runner_dir: Option<&Path>,
 ) -> Result<usize> {
     validate_runtime(bundle, runner_dir)?;
-    let pfx = prefix_dir.join("drive_c/windows");
-    let target_64 = pfx.join("system32");
-    let target_32 = pfx.join("syswow64");
-
-    fs::create_dir_all(&target_64)?;
-    fs::create_dir_all(&target_32)?;
-
-    let mut staged_count = 0;
-
-    let files_64 = [
-        ("d3d11.dll", bundle.x64_d3d11.as_deref()),
-        ("d3d10core.dll", bundle.x64_d3d10core.as_deref()),
-        ("dxgi.dll", bundle.x64_dxgi.as_deref()),
-        ("winemetal.dll", bundle.x64_winemetal.as_deref()),
-    ];
-
-    for (name, opt_path) in files_64 {
-        if let Some(src) = opt_path {
-            let dst = target_64.join(name);
-            crate::backend_files::copy(src, &dst).with_context(|| {
-                format!("Failed to stage 64-bit DXMT {name} to {}", dst.display())
-            })?;
-            staged_count += 1;
-        }
-    }
-
-    let files_32 = [
-        ("d3d11.dll", bundle.x86_d3d11.as_deref()),
-        ("d3d10core.dll", bundle.x86_d3d10core.as_deref()),
-        ("dxgi.dll", bundle.x86_dxgi.as_deref()),
-        ("winemetal.dll", bundle.x86_winemetal.as_deref()),
-    ];
-
-    for (name, opt_path) in files_32 {
-        if let Some(src) = opt_path
-            && target_32.is_dir()
-        {
-            let dst = target_32.join(name);
-            crate::backend_files::copy(src, &dst).with_context(|| {
-                format!("Failed to stage 32-bit DXMT {name} to {}", dst.display())
-            })?;
-            staged_count += 1;
-        }
-    }
-
-    Ok(staged_count)
+    let sys32 = prefix_dir.join("drive_c/windows/system32");
+    let syswow64 = prefix_dir.join("drive_c/windows/syswow64");
+    fs::create_dir_all(&sys32)?;
+    fs::create_dir_all(&syswow64)?;
+    let target_32 = &syswow64;
+    let count = crate::graphics_bundle::stage(
+        &sys32,
+        "64-bit DXMT",
+        [
+            ("d3d11.dll", bundle.x64_d3d11.as_deref()),
+            ("d3d10core.dll", bundle.x64_d3d10core.as_deref()),
+            ("dxgi.dll", bundle.x64_dxgi.as_deref()),
+            ("winemetal.dll", bundle.x64_winemetal.as_deref()),
+        ],
+    )?;
+    Ok(count
+        + crate::graphics_bundle::stage(
+            target_32,
+            "32-bit DXMT",
+            [
+                ("d3d11.dll", bundle.x86_d3d11.as_deref()),
+                ("d3d10core.dll", bundle.x86_d3d10core.as_deref()),
+                ("dxgi.dll", bundle.x86_dxgi.as_deref()),
+                ("winemetal.dll", bundle.x86_winemetal.as_deref()),
+            ],
+        )?)
 }
 
 fn restore_dll_in_dir(
