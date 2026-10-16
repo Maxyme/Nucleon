@@ -1,0 +1,52 @@
+{
+  "date": "2026-10-16",
+  "status": "SCREEN_CONFIRMED_REBUILT_CURSOR_VISUAL_CONFIRMATION_PENDING",
+  "runtime": "target/arm64-fex/integrated/faa3ce6fd4fdfccb14f4",
+  "cursor": {
+    "wine_patch": "assets/patches/wine-tolkara-cursor-registry.patch",
+    "resource": "dirtrally2.exe,104",
+    "native_cursor": "arrowCursor",
+    "trace": [
+      "0120:trace:cursor:copy_system_cursor_name L\"dirtrally2.exe,104\" -> \"arrowCursor\""
+    ],
+    "log": "target/arm64-fex/dx12/logs/dirt-cursor-confirmation.wine.log",
+    "user_observation": "Black box reported; latest user launch receipt uses the original runtime, which still logs an unmapped DiRT cursor.",
+    "user_run_receipt": "target/arm64-fex/dx12/logs/dirt-690790-20261016-162231-051556.runner.json",
+    "user_run_runtime": "target/arm64-fex/integrated/7fd2ee63cb2cc9594fac"
+  },
+  "display": {
+    "previous_resolution": [
+      1600,
+      900
+    ],
+    "fullscreen_view": [
+      2560,
+      1440
+    ],
+    "configured_resolution": [
+      2560,
+      1440
+    ],
+    "workaround": "Match game fullscreen resolution to measured Wine fullscreen view",
+    "visual_confirmation": true,
+    "original_settings_backup": "target/arm64-fex/dx12/logs/dirt-display-original-20261016.xml"
+  },
+  "validation": {
+    "prefix_tests_passed": 12,
+    "runner_build": "PASSED",
+    "formatting": "PASSED",
+    "build_receipt_boundary_hash": "MATCHED",
+    "gameplay": "NOT_VALIDATED",
+    "process_audit": {
+      "status": "NO_PREFIX_PROCESSES_REMAIN",
+      "wineserver_wait": {
+        "completed": true,
+        "exit_code": 0
+      },
+      "first_sample": [],
+      "second_sample": []
+    },
+    "latest_user_run_exit_code": 0,
+    "latest_user_run_primary_exit": "exit status: 0"
+  }
+}

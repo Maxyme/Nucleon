@@ -75,11 +75,15 @@ impl GraphicsComponents {
             })
             .collect::<Result<Vec<_>>>()?;
         let mut selected = Self {
-            dxmt: bundle(
-                runtime.graphics.dxmt.as_deref(),
-                crate::dxmt::inspect_candidate_dir,
-                crate::dxmt::find_dxmt,
-            )?,
+            dxmt: if runtime.graphics.frontend_abi == crate::runtime::FrontendAbi::Arm64Ec {
+                None
+            } else {
+                bundle(
+                    runtime.graphics.dxmt.as_deref(),
+                    crate::dxmt::inspect_candidate_dir,
+                    crate::dxmt::find_dxmt,
+                )?
+            },
             dxvk: bundle(
                 dxvk_path,
                 crate::dxvk::inspect_candidate_dir,
@@ -90,7 +94,11 @@ impl GraphicsComponents {
                 crate::vkd3d::inspect_candidate_dir,
                 crate::vkd3d::find_vkd3d_proton,
             )?,
-            d7vk: crate::d7vk::find_d7vk(),
+            d7vk: if runtime.graphics.frontend_abi == crate::runtime::FrontendAbi::X64 {
+                crate::d7vk::find_d7vk()
+            } else {
+                None
+            },
             vulkan,
             gptk: runtime.mode == ExecutionMode::Intel
                 && crate::runner::find_gptk_components(None)
@@ -171,6 +179,7 @@ impl GraphicsComponents {
             pin(&mut b.root)?;
             pin(&mut b.x86_ddraw)?;
         }
+        crate::frontend::validate_selected(runtime, &selected)?;
         Ok(selected)
     }
 
@@ -180,7 +189,8 @@ impl GraphicsComponents {
         api: &GraphicsApi,
         is64: bool,
     ) -> AutoBackends {
-        let pe = |p: Option<&Path>| runtime_checks::pe(p, is64);
+        let pe =
+            |p: Option<&Path>| runtime_checks::graphics_pe(p, is64, runtime.graphics.frontend_abi);
         let dxvk = self.dxvk.as_ref().is_some_and(|b| {
             let (d9, d10, d11, dxgi) = if is64 {
                 (&b.x64_d3d9, &b.x64_d3d10core, &b.x64_d3d11, &b.x64_dxgi)
@@ -269,6 +279,7 @@ impl LaunchPlan {
         api: &GraphicsApi,
     ) -> Result<Self> {
         runtime.require_guest(is64)?;
+        crate::frontend::validate_selected(&runtime, &graphics)?;
         let available = graphics.available(&runtime, api, is64);
         let usable = match engine {
             TargetEngine::Dxmt => available.dxmt,
@@ -739,14 +750,10 @@ impl LaunchPlan {
         if let Some(exe) = args.first_mut()
             && (Path::new(exe).is_absolute() || Path::new(exe).is_file())
         {
-            *exe = format!(
-                "Z:{}",
-                Path::new(exe)
-                    .canonicalize()?
-                    .display()
-                    .to_string()
-                    .replace('/', "\\")
-            );
+            let canonical = Path::new(exe)
+                .canonicalize()
+                .with_context(|| format!("Cannot resolve game executable path: {exe}"))?;
+            *exe = format!("Z:{}", canonical.display().to_string().replace('/', "\\"));
         }
         result.extend(args);
         Ok(result)
@@ -1014,6 +1021,22 @@ mod tests {
         assert!(wrapped[1].starts_with("Z:\\"));
         assert!(wrapped[1].ends_with("game with spaces.exe"));
         assert_eq!(wrapped[2], args[1]);
+        let missing = temp.path().join("missing game.exe");
+        let broken = temp.path().join("broken game.exe");
+        std::os::unix::fs::symlink(&missing, &broken).unwrap();
+        for path in [&missing, &broken] {
+            let error = plan.wine_args(&[path.display().to_string()]).unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                format!("Cannot resolve game executable path: {}", path.display())
+            );
+            assert_eq!(
+                error.downcast_ref::<std::io::Error>().unwrap().kind(),
+                std::io::ErrorKind::NotFound
+            );
+        }
+        let windows_args = vec!["C:\\Games\\game.exe".into(), "argument with spaces".into()];
+        assert_eq!(&plan.wine_args(&windows_args).unwrap()[1..], windows_args);
         let direct = LaunchPlan::new(
             runtime,
             temp.path().join("other"),
@@ -1025,6 +1048,8 @@ mod tests {
         )
         .unwrap();
         assert_eq!(direct.wine_args(&args).unwrap(), args);
+        let unresolved = vec![missing.display().to_string()];
+        assert_eq!(direct.wine_args(&unresolved).unwrap(), unresolved);
     }
 
     #[test]

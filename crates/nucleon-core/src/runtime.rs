@@ -36,11 +36,23 @@ pub enum SteamProtocol {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GraphicsPaths {
+    #[serde(default)]
+    pub frontend_abi: FrontendAbi,
+    pub frontend_manifest: Option<PathBuf>,
     pub dxmt: Option<PathBuf>,
     pub dxvk: Option<PathBuf>,
     pub vkd3d: Option<PathBuf>,
     pub vulkan_icd: Option<PathBuf>,
     pub vulkan_loader: Option<PathBuf>,
+}
+
+/// Graphics implementation ABI, independent of the game's guest ABI.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FrontendAbi {
+    #[default]
+    X64,
+    Arm64Ec,
 }
 
 #[derive(Debug, Deserialize)]
@@ -237,6 +249,12 @@ impl ResolvedRuntime {
             );
         }
         if d.mode == ExecutionMode::Arm64Fex {
+            if d.graphics.frontend_abi == FrontendAbi::Arm64Ec {
+                ensure!(
+                    d.emulators.len() == 1,
+                    "Experimental ARM64EC graphics requires exactly one x64 emulator pair"
+                );
+            }
             for guest in &d.guests {
                 let module = d
                     .emulators
@@ -260,6 +278,17 @@ impl ResolvedRuntime {
                     companion.display()
                 );
                 let module = resolve(&module.path)?;
+                if d.graphics.frontend_abi == FrontendAbi::Arm64Ec {
+                    ensure!(
+                        module
+                            .file_name()
+                            .is_some_and(|name| name == "libarm64ecfex.dll")
+                            && companion
+                                .file_name()
+                                .is_some_and(|name| name == "libarm64ecfex.so"),
+                        "Experimental ARM64EC graphics requires the paired libarm64ecfex.dll/so boundary"
+                    );
+                }
                 let abi = runtime_checks::pe_abi(&fs::read(&module)?)?;
                 let expected = match guest {
                     GuestAbi::X64 => runtime_checks::PeAbi::Arm64Ec,
@@ -304,6 +333,8 @@ impl ResolvedRuntime {
             .transpose()
         };
         let graphics = GraphicsPaths {
+            frontend_abi: d.graphics.frontend_abi,
+            frontend_manifest: optional(d.graphics.frontend_manifest, false)?,
             dxmt: optional(d.graphics.dxmt, true)?,
             dxvk: optional(d.graphics.dxvk, true)?,
             vkd3d: optional(d.graphics.vkd3d, true)?,
@@ -332,7 +363,7 @@ impl ResolvedRuntime {
                 "Bundled Vulkan ICD library must stay inside the runtime and match its native ABI"
             );
         }
-        Ok(Self {
+        let runtime = Self {
             root: root.to_owned(),
             mode: d.mode,
             prefix,
@@ -346,7 +377,9 @@ impl ResolvedRuntime {
             steam_protocol: d.steam_protocol,
             steam_helper: d.steam_helper,
             graphics,
-        })
+        };
+        crate::frontend::validate_declared(&runtime)?;
+        Ok(runtime)
     }
 
     fn infer(root: &Path) -> Result<Self> {

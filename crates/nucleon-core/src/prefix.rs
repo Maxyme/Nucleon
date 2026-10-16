@@ -359,6 +359,11 @@ const PREFIX_REGISTRY: &str = r#"Windows Registry Editor Version 5.00
 [HKEY_CURRENT_USER\Software\Wine\Mac Driver]
 "OpenGLSurfaceMode"="behind"
 
+; DiRT's custom menu cursor is blank on the ARM64/FEX GDI path.
+; Use a native pointer for this one resource without changing other cursors.
+[HKEY_CURRENT_USER\Software\Wine\Mac Driver\Cursors]
+"dirtrally2.exe,104"="arrowCursor"
+
 [HKEY_CURRENT_USER\Software\Wine\Direct3D]
 "csmt"=dword:00000001
 
@@ -929,8 +934,8 @@ mod tests {
     #[test]
     fn test_stage_bridge_libraries_structure() {
         let prefix_dir = tempdir().unwrap();
-        let res = stage_bridge_libraries(prefix_dir.path());
-        assert!(res.is_ok());
+        let bridge_dir = tempdir().unwrap();
+        stage_bridge_libraries_from(prefix_dir.path(), bridge_dir.path()).unwrap();
 
         let steam_dir = prefix_dir.path().join("drive_c/Program Files (x86)/Steam");
         assert!(steam_dir.is_dir());

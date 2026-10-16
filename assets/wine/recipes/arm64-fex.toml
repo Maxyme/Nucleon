@@ -55,6 +55,7 @@ patches = [
     "assets/patches/wine-tolkara-arm64ec-chkstk-alias.patch",
     "assets/patches/wine-tolkara-kusd-loads.patch",
     "assets/patches/wine-tolkara-dxmt-window.patch",
+    "assets/patches/wine-tolkara-cursor-registry.patch",
 ]
 shared_data_helper = "dlls/ntdll/unix/macrunner_fex_kusd.h"
 shared_data_helper_sha256 = "8e7d75d18572a01b37bfdbe6322e375f07d7920a460b76176f07cd4cdcca36a1"

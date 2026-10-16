@@ -167,7 +167,46 @@ the explicitly paired bundle declared in the runtime descriptor. AMD64 frontend 
 through FEX; ordinary ARM64 DLLs and hybrid AMD64/ARM64EC/ARM64X images are not
 silently treated as equivalent AMD64 frontends. Hybrid metadata is recognized,
 and unvalidated native frontend combinations are rejected. ARM64EC graphics
-frontend optimization remains a separate experiment.
+frontend optimization remains experimental. An explicit Vulkan-only ARM64EC
+contract is available for local integration validation; the default remains the
+existing x86/x64 frontend behavior.
+
+An experimental descriptor can declare:
+
+```toml
+[graphics]
+frontend_abi = "arm64ec"
+frontend_manifest = "share/nucleon/arm64ec/frontend.json"
+dxvk = "share/nucleon/arm64ec/dxvk"
+vkd3d = "share/nucleon/arm64ec/vkd3d"
+vulkan_icd = "lib/vulkan/kosmickrisp_icd.json"
+vulkan_loader = "lib/vulkan/libvulkan.1.dylib"
+```
+
+Omitting `frontend_abi` selects `x64`, preserving the existing guest-specific
+x86/x64 checks. `arm64ec` requires ARM64/FEX, only x64 guests, one Windows library
+directory, and the pinned DXVK/VKD3D Vulkan component set. DXMT/GPTK and DX9/DX10
+are outside this initial contract. The guest executable, Steam helper and bridge
+retain their existing ABI requirements.
+
+The schema-1 frontend JSON contains `frontend_abi`, `files` (runtime-relative
+paths to SHA256 digests), and complete `dxvk`/`vkd3d` build receipts in `builds`.
+Coverage includes the selected DLLs, their original receipts, Darwin CRT/TLS
+objects/header, Wine/FEX PE and native boundaries, and Vulkan loader/driver/ICD.
+Receipt sources must match the pinned frontend recipe; C and C++ options must
+declare the paired emulated-TLS/thread-pointer contract. Runtime inspection and
+launch selection verify identities and reject unpaired overrides before prefix
+preparation. Managed import verifies the same contract after relocation.
+These local provenance records establish pairing and integrity; they are not a
+signed certification of arbitrary binaries or gameplay compatibility.
+
+`tools/arm64ec_graphics.py prepare-runtime --base-runtime /path/to/baseline`
+copies an existing descriptor-backed runtime into a separate
+`target/arm64-fex/arm64ec-integrated/<generation>` directory. It packages retained
+ARM64EC Vulkan builds and gives them an experimental prefix family. With an
+explicit baseline, assembly executes no Wine, Steam or game command and does not
+register or select a Steam compatibility tool. Run receipts report the frontend
+ABI and pairing-manifest path; they do not claim to identify loaded modules.
 
 Vulkan paths require matching loader/driver/Wine components. A native FEX runtime
 must declare its Vulkan loader; availability includes the native Wine Vulkan

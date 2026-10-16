@@ -7,6 +7,7 @@ pub mod detector;
 mod downloads;
 pub mod dxmt;
 pub mod dxvk;
+mod frontend;
 pub mod fs_util;
 pub mod gptk_abi;
 mod graphics_bundle;
@@ -36,3 +37,6 @@ pub mod wine_build;
 pub(crate) mod runtime_checks;
 
 pub mod configuration;
+
+#[cfg(test)]
+mod test_support;

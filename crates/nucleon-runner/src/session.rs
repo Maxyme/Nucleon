@@ -85,6 +85,8 @@ struct Receipt {
     debug: bool,
     runtime: Option<PathBuf>,
     execution_mode: Option<String>,
+    frontend_abi: Option<nucleon_core::runtime::FrontendAbi>,
+    frontend_manifest: Option<PathBuf>,
     engine: Option<String>,
     prefix: Option<PathBuf>,
     shader_caches: Option<serde_json::Value>,
@@ -157,6 +159,8 @@ impl RunSession {
             debug: false,
             runtime: None,
             execution_mode: None,
+            frontend_abi: None,
+            frontend_manifest: None,
             engine: None,
             prefix: None,
             shader_caches: None,
@@ -220,6 +224,8 @@ impl RunSession {
     ) -> Result<()> {
         self.receipt.runtime = Some(plan.runtime.root.clone());
         self.receipt.execution_mode = Some(format!("{:?}", plan.runtime.mode));
+        self.receipt.frontend_abi = Some(plan.runtime.graphics.frontend_abi);
+        self.receipt.frontend_manifest = plan.runtime.graphics.frontend_manifest.clone();
         self.receipt.engine = Some(plan.engine.display_name().into());
         self.receipt.prefix = Some(plan.prefix.clone());
         self.receipt.staged_files = staged;

@@ -1,0 +1,9 @@
+diff --git a/dlls/winemac.drv/mouse.c b/dlls/winemac.drv/mouse.c
+index c655f56..d9059c2 100644
+--- a/dlls/winemac.drv/mouse.c
++++ b/dlls/winemac.drv/mouse.c
+@@ -194,3 +194,3 @@ CFStringRef copy_system_cursor_name(ICONINFOEXW *info)
+     /* @@ Wine registry key: HKCU\Software\Wine\Mac Driver\Cursors */
+-    if (!(key = open_hkcu_key("Software\\Wine\\Mac Driver\\Cursors")))
++    if ((key = open_hkcu_key("Software\\Wine\\Mac Driver\\Cursors")))
+     {

@@ -160,6 +160,11 @@ mod tests {
     };
     #[test]
     fn compatible_wine_moves_keep_cached_bytes_and_changed_graphics_or_abi_use_new_namespaces() {
+        if crate::test_support::run_in_isolated_support(
+            "shader_cache::tests::compatible_wine_moves_keep_cached_bytes_and_changed_graphics_or_abi_use_new_namespaces",
+        ) {
+            return;
+        }
         let (temp, mut runtime) = runtime::fixture(ExecutionMode::Intel);
         let source = temp.path().join("dxvk");
         fs::create_dir(&source).unwrap();

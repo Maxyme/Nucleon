@@ -1,0 +1,79 @@
+{
+  "schema": 1,
+  "date": "2026-10-16",
+  "scope": "ASSEMBLY_IMPORT_RELOCATION_STAGING_WITHOUT_EXECUTION",
+  "runtime": "target/arm64-fex/arm64ec-integrated/0e87f0e2c728faf01431",
+  "frontend_abi": "arm64ec",
+  "guests": [
+    "x64"
+  ],
+  "frontend_manifest_sha256": "e2d4d909080c4c4436700c1f704a52abc37fc96a17982e6af30063799ded60b8",
+  "paired_files": {
+    "share/nucleon/arm64ec/dxvk/d3d11.dll": "fbb16c971032adaec5e80fa4aa815ab4776a6fd9f079bba1c693539189eb5fe0",
+    "share/nucleon/arm64ec/dxvk/dxgi.dll": "60491adef8ba52396746b1b8b8f257da38fdfdab45cd74c8b670ebf9e332cf52",
+    "share/nucleon/arm64ec/dxvk/build.json": "64bf18626dcb15a0aed25a0869c0d70866098da5af1fc1eb8408731fee216125",
+    "share/nucleon/arm64ec/crt/dllcrt2.o": "a7fd5644f01b052968b97dca3a9df24f3a23d0f76df798cc97bfefb0765f98d0",
+    "share/nucleon/arm64ec/crt/emutls.o": "f8c620901777c860f40619e3fb5da2037a295122ac2ba5adae35059dd4b23acf",
+    "share/nucleon/arm64ec/crt/darwin-teb.h": "a08a01833fca0da88331397c58bf48672fbec5a31ea9dd85fb42378e0bf66a2c",
+    "share/nucleon/arm64ec/vkd3d/d3d12.dll": "5a033b24575f97b8f1c766d6cc59c57915d215fb1744f67737ebd398052328d4",
+    "share/nucleon/arm64ec/vkd3d/d3d12core.dll": "44106139c67d373ef571190aa21d2fada3e4f217c5f4054b15041ea8e85e3fc9",
+    "share/nucleon/arm64ec/vkd3d/build.json": "b3b2d6bddf6fb06421f2ed152bf63ae59c3a5a2dce62d47a61ff3ac61d345a74",
+    "share/nucleon/arm64ec/arm64ec-graphics.toml": "72e6076f3e1de102bc74d44bcdcbfeac2ece289dd3f86d16d5b49b0c0bb6f055",
+    "share/nucleon/arm64ec/crt/darwin-emutls.c": "25997e018de69cfa1007e17485a80e375c87f8877a27e59d21b0e52f5ba69365",
+    "bin/wine": "8dfd4dae5fa6a1c80052aa4255d5d8a0d526ccd30ad8cd655eecfb60bc245c99",
+    "bin/wineserver": "01cef12a1734682dd8889ca7b5a12036f7f119cc32bac28c26d00273845d57ed",
+    "lib/wine/aarch64-unix/ntdll.so": "1a237fc5a033a38416e997bc7df5bce76139de362383c44d11d93d940496b6d1",
+    "lib/wine/aarch64-unix/winevulkan.so": "5446b74c8dc7209e775fe599cdf35cdbb431e1b2616f6cd62be41511301f94dc",
+    "lib/wine/aarch64-unix/libarm64ecfex.so": "ec7e7ee628ba44300fac314716aef91c024e0e81704533ca3f307adb17e40497",
+    "lib/wine/aarch64-windows/ntdll.dll": "6f374c18eb56f9675699a3bcf1ad960a5e099b4bd1cfad91248e6d9f55877b92",
+    "lib/wine/aarch64-windows/winevulkan.dll": "f79c6890924a5906a3b51585faa200ce7714e2c3854a739ef83fad532d9dbff7",
+    "lib/wine/aarch64-windows/libarm64ecfex.dll": "c72aca9d3be6db4043d06b7442dc9621f0f35a9fc26776577145803888933d35",
+    "lib/vulkan/kosmickrisp_icd.json": "806be89170f3b384ab7fb38086628b2dd2fc9e790aea23391333890735e25592",
+    "lib/vulkan/libvulkan_kosmickrisp.dylib": "1cd31de2e7d51792aba62ebececf001cca7c30b038f6e7b19d0968bb53cbdf40",
+    "lib/vulkan/libvulkan.1.dylib": "2f2bacd1f5d3dcc3b7103801bd9371b5b40fbe0cf68869ed419dc77ab380233c"
+  },
+  "validation": {
+    "isolated_assembly": "PASSED",
+    "managed_import": "PASSED",
+    "managed_full_integrity_verification": "PASSED",
+    "managed_relocation": "PASSED",
+    "dx11_dxvk_staging": "PASSED",
+    "dx12_vkd3d_staging": "PASSED",
+    "unchanged_staging_reuse": "PASSED",
+    "managed_reimport_reuse": "PASSED",
+    "final_descriptor_and_abi_preflight": "PASSED",
+    "unpaired_override_before_prefix_mutation": "REJECTED_AS_EXPECTED",
+    "core_unit_tests": {
+      "passed": 203,
+      "ignored": 3
+    },
+    "runner_unit_tests": {
+      "passed": 16
+    },
+    "runner_configuration_integration_tests": {
+      "passed": 6
+    },
+    "python_tool_tests": {
+      "passed": 14,
+      "skipped": 1
+    },
+    "clippy": "PASSED",
+    "formatting": "PASSED"
+  },
+  "wine_executed": false,
+  "steam_launched": false,
+  "game_launched": false,
+  "steam_registration_changed": false,
+  "production_runtime_selection_changed": false,
+  "gpu_execution_validation": "NOT_RUN",
+  "steam_execution_validation": "NOT_RUN",
+  "gameplay_validation": "NOT_RUN",
+  "performance_validation": "NOT_RUN",
+  "remaining": [
+    "Normal-runner graphics positive/negative execution controls",
+    "Steam controls when authorized",
+    "DMC5/DiRT gameplay and earlier failure classification",
+    "Fixed-scene performance measurements",
+    "Separate DXMT pairing/layout integration"
+  ]
+}

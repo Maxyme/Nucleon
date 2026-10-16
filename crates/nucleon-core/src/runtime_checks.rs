@@ -79,6 +79,20 @@ pub(crate) fn pe(path: Option<&Path>, is64: bool) -> bool {
     })
 }
 
+/// Only the explicitly declared graphics set may opt into ARM64EC.
+pub(crate) fn graphics_pe(
+    path: Option<&Path>,
+    is64: bool,
+    abi: crate::runtime::FrontendAbi,
+) -> bool {
+    if abi == crate::runtime::FrontendAbi::X64 {
+        return pe(path, is64);
+    }
+    is64 && path
+        .and_then(|p| fs::read(p).ok())
+        .is_some_and(|data| pe_abi(&data).is_ok_and(|abi| abi == PeAbi::Arm64Ec))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PeAbi {
     X86,
@@ -283,11 +297,25 @@ mod tests {
         assert_eq!(pe_abi(&data).unwrap(), PeAbi::X64);
         data[712..720].copy_from_slice(&0x140001100u64.to_le_bytes());
         assert_eq!(pe_abi(&data).unwrap(), PeAbi::Arm64Ec);
+        let image = tempfile::NamedTempFile::new().unwrap();
+        fs::write(image.path(), &data).unwrap();
+        assert!(graphics_pe(
+            Some(image.path()),
+            true,
+            crate::runtime::FrontendAbi::Arm64Ec
+        ));
+        assert!(!pe(Some(image.path()), true));
         data[132..134].copy_from_slice(&0xaa64u16.to_le_bytes());
         assert_eq!(pe_abi(&data).unwrap(), PeAbi::Arm64X);
         assert_eq!(pe_abi(&test_pe_image(0xaa64)).unwrap(), PeAbi::Arm64);
         data[512..516].copy_from_slice(&209u32.to_le_bytes());
         assert!(pe_abi(&data).is_err());
+        fs::write(image.path(), &data).unwrap();
+        assert!(!graphics_pe(
+            Some(image.path()),
+            true,
+            crate::runtime::FrontendAbi::Arm64Ec
+        ));
     }
 
     fn pe_image(is64: bool) -> Vec<u8> {

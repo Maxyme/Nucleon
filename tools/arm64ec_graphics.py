@@ -330,6 +330,12 @@ class Frontends:
         run([server, '-k'], env=env, log=log, timeout=10)
         run([server, '-w'], env=env, log=log, timeout=10)
 
+    def prepare_runtime(self, baseline=None):
+        from arm64ec_runtime import assemble
+        target = assemble(baseline or self.base.prepare_runtime(), self.work, self.pin)
+        print(target, flush=True)
+        return target
+
     def probe_tls(self):
         startup = self.darwin_startup()
         directory = self.work / 'tls-probe'
@@ -371,7 +377,8 @@ class Frontends:
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=['fetch','build','probe','probe-tls','doctor'])
+    parser.add_argument('action', choices=['fetch','build','probe','probe-tls','doctor','prepare-runtime'])
+    parser.add_argument('--base-runtime', type=Path, help='Existing descriptor-backed AMD64-frontend runtime to copy without rebuilding')
     parser.add_argument('--component', choices=['dxvk','vkd3d','dxmt'], default='vkd3d')
     parser.add_argument('--architecture', choices=['arm64ec','x64'], default='arm64ec')
     parser.add_argument('--api', choices=['dx11','dx11-vulkan','dx12'], default='dx12')
@@ -387,6 +394,7 @@ def main():
         elif args.action == 'doctor': print(json.dumps(experiment.dxmt_prerequisites(), indent=2))
         elif args.action == 'build': experiment.build(args.component, args.architecture)
         elif args.action == 'probe-tls': experiment.probe_tls()
+        elif args.action == 'prepare-runtime': experiment.prepare_runtime(args.base_runtime)
         else: experiment.probe(args.architecture, args.api)
 
 

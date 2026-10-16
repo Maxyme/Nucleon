@@ -1611,6 +1611,28 @@ mod tests {
         use std::fs;
         use tempfile::tempdir;
         let temp = tempdir().unwrap();
+        const CHILD_TEST: &str = "NUCLEON_BACKEND_STAGING_TEST_CHILD";
+        if env::var_os(CHILD_TEST).is_none() {
+            let output = Command::new(env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "tests::test_golden_path_backend_staging_isolation",
+                    "--nocapture",
+                ])
+                .env_clear()
+                .env(CHILD_TEST, "1")
+                .env("NUCLEON_SUPPORT_DIR", temp.path())
+                .output()
+                .unwrap();
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            assert!(
+                output.status.success() && stdout.contains("1 passed;"),
+                "Isolated backend staging test failed ({status}):\n{stdout}\n{stderr}",
+                status = output.status,
+                stderr = String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
         let pfx_dir = temp.path().join("pfx");
         let sys32 = pfx_dir.join("drive_c/windows/system32");
         let syswow64 = pfx_dir.join("drive_c/windows/syswow64");

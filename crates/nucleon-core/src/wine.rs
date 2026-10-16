@@ -964,6 +964,11 @@ mod tests {
 
     #[test]
     fn test_custom_crossover_registration_and_resolution() {
+        if crate::test_support::run_in_isolated_support(
+            "wine::tests::test_custom_crossover_registration_and_resolution",
+        ) {
+            return;
+        }
         let dir = tempdir().unwrap();
         let cx_app = dir.path().join("CrossOver 24.app");
         let inner_cx = cx_app.join("Contents/SharedSupport/CrossOver/bin");

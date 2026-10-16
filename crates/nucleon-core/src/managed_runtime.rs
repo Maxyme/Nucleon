@@ -564,6 +564,27 @@ fn import_archive_to(
 mod tests {
     use super::*;
     #[test]
+    fn arm64ec_pair_imports_relocates_and_rejects_damaged_companions() {
+        let (_temp, runtime) = crate::frontend::fixture();
+        let destination = tempfile::tempdir().unwrap();
+        let root = install_at(&runtime.root, destination.path()).unwrap();
+        verify(&root).unwrap();
+        let relocated = ResolvedRuntime::inspect(&root).unwrap();
+        assert_eq!(
+            relocated.graphics.frontend_abi,
+            crate::runtime::FrontendAbi::Arm64Ec
+        );
+        assert!(
+            crate::launch::GraphicsComponents::discover(&relocated, None, None)
+                .unwrap()
+                .available(&relocated, &crate::detector::GraphicsApi::DirectX12, true)
+                .vkd3d
+        );
+        fs::write(runtime.unix_dir.join("libarm64ecfex.so"), b"broken").unwrap();
+        assert!(install_at(&runtime.root, destination.path()).is_err());
+        verify(&root).unwrap();
+    }
+    #[test]
     fn installs_once_preserves_links_and_rejects_escaping_links() {
         let (_temp, runtime) = crate::runtime::fixture(ExecutionMode::Arm64Fex);
         fs::create_dir_all(runtime.root.join("share/licenses")).unwrap();

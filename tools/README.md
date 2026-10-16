@@ -146,6 +146,29 @@ user-data directory. Close an existing prototype game before relaunching.
 The bridge is a local prerequisite, not a new pinned build product; this helper
 does not claim to reproduce its build from the prototype recipe.
 
+### DiRT display and cursor troubleshooting
+
+The pinned Tolkara macOS cursor driver had an inverted registry-open check,
+which prevented per-resource native cursor mappings from being read. The
+`wine-tolkara-cursor-registry.patch` recipe patch fixes that check. Prefix setup
+maps DiRT's menu cursor (`dirtrally2.exe,104`) to the native arrow because the
+ARM64/FEX GDI route currently produces a blank color bitmap and opaque mask for
+that resource. Rebuild Wine and the runner for both parts of this workaround.
+
+The local display investigation also found a 1600×900 game drawable inside a
+2560×1440 fullscreen view. Matching the game's fullscreen resolution to that
+view is being tested as a display workaround; it is not yet a verified generic
+DXMT scaling fix. The original local game configuration is backed up at
+`target/arm64-fex/dx12/logs/dirt-display-original-20261016.xml`.
+The rebuilt developer runtime for this check is
+`target/arm64-fex/integrated/faa3ce6fd4fdfccb14f4`; the previous generation is
+retained. The follow-up game trace confirms
+`dirtrally2.exe,104 -> arrowCursor` and `cursor_frames 0x0`, so the driver is using
+the native pointer rather than the broken bitmap. The user confirmed the screen sizing is fixed. The subsequent user-run receipt
+used the original `7fd2ee63cb2cc9594fac` runtime, which still reports the cursor as
+unmapped, and exited normally with code zero. The rebuilt runtime cursor still
+needs visual confirmation; its mapping trace alone does not establish a visual fix. See `tools/dirt-display-validation.json` for evidence.
+
 ## Owned workload and evidence
 
 The probe compiles `runtime-probes/windows.c` as an x64 executable and tests
@@ -380,6 +403,37 @@ both no-draw and deliberately wrong-component controls. An x64 DXMT Unix build i
 rejected because it cannot serve as the ARM64 runtime's control. Use the existing
 paired DXMT probe for its AMD64 baseline. These are standalone graphics results;
 DXMT gameplay validation remains separate.
+
+### Assemble an unselected experimental Vulkan runtime
+
+The normal runner accepts an explicitly declared, paired ARM64EC DXVK/VKD3D set.
+This initial opt-in supports x64 guests and DX11/DX12 Vulkan only. AMD64 remains
+the default; DXMT promotion, Steam/game correctness and performance remain
+separate validation work.
+
+```sh
+python3 tools/arm64ec_graphics.py prepare-runtime --base-runtime /path/to/baseline
+```
+
+This copies an existing descriptor-backed baseline and retained frontend builds
+into `target/arm64-fex/arm64ec-integrated/<generation>`. With `--base-runtime`, it
+does not rebuild or execute Wine, launch Steam/games, or register/select a tool.
+It checks pinned source identities, both compiler TLS/thread-pointer options and
+the retained CRT/TLS objects. Original build receipts retain their originating
+recipe digests; later unrelated DXMT recipe additions do not replace that history.
+The generated manifest binds the selected DLLs and current native FEX companion
+alongside the Wine/Vulkan boundary. Modified inputs or an altered existing
+generation are rejected. A distinct prefix family keeps future experiments
+separate from existing prefixes.
+
+An optional local-artifact test imports, relocates and stages this generation
+without executing it. Supply a private support directory and the generated path:
+
+```sh
+NUCLEON_SUPPORT_DIR=/path/to/private-test-support \
+NUCLEON_TEST_ARM64EC_RUNTIME=/path/to/generated-runtime \
+cargo test -p nucleon-core --test arm64ec_runtime -- --ignored --nocapture
+```
 
 See [validation results and remaining work](arm64ec-graphics-validation.md).
 Policy tests require no Wine, compiler or GPU:

@@ -113,6 +113,14 @@ unreliable antivirus simulation or permission assumptions.
 
 ## 4. Improve executable-resolution errors
 
+Status: implemented on 2026-10-16. Canonicalization failures now identify the
+original executable argument while preserving the underlying I/O error. The
+helper-argument regression test covers missing absolute paths, broken symlinks,
+Windows-path passthrough and direct launches, alongside paths/arguments with
+spaces. Verification: 195 core tests passed (2 ignored) with an isolated support
+directory and serial execution; core/runner Clippy, formatting and diff whitespace
+checks passed.
+
 Add `with_context` around `canonicalize()` in `LaunchPlan::wine_args`, including
 the original executable argument. Continue rejecting unresolved absolute paths
 before invoking the Steam helper. The proposed change improves the error; it
@@ -124,6 +132,21 @@ and broken symlinks, asserting actionable path context. Existing space-containin
 paths and arguments continue to work.
 
 ## 5. Isolate tests from installed Steam and bridge files
+
+Status: implemented on 2026-10-16. VDF unit coverage uses a synthetic checked-in
+fixture; the real-Steam smoke test is explicitly ignored and reports read/parse
+errors when opted in. The bridge structure test uses an empty temporary bridge.
+Shader-cache and Wine-registration tests run in isolated subprocesses with private
+support directories. A broader test run found the same global-write dependency
+in the runner backend-staging test; that test now uses a private subprocess too.
+No process-wide environment mutation or production behavior changes were needed.
+Verification: the default parallel core/runner test command passed without a
+support-directory override: 195 core tests, 16 runner tests and 6 configuration
+integration tests passed; 6 local-artifact tests were ignored across the suites.
+Core/runner Clippy, formatting and diff whitespace checks passed. To opt into the
+real configuration check, run `cargo test -p nucleon-core --lib
+steam::vdf_mapping::tests::test_parse_real_config_vdf -- --exact --ignored` on a
+host with an accessible Steam configuration.
 
 The two reported sandbox failures did not reproduce in this review: both targeted
 tests passed. The bridge test took 23.80 seconds and depends on the installed
@@ -154,6 +177,17 @@ support paths. Optional host integration coverage is clearly distinguished from
 unit-test results.
 
 ## 6. Introduce ARM64EC graphics behind an explicit experimental contract
+
+Status: experimental Vulkan-only integration implemented on 2026-10-16; the
+production default and Steam registration remain unchanged. The defaulted
+graphics ABI, pairing manifest, strict selected-file checks and separate assembler
+are in place. The retained real runtime passed import, full integrity verification,
+relocation, DX11/DX12 staging and reimport without execution; final preflight and
+override rejection also passed. See [the integration receipt](tools/arm64ec-integration-validation.json)
+and [the detailed investigation](ARM64EC-PRODUCTION-INVESTIGATION.md). Core/runner
+tests (203 + 16 + 6), 14 Python tests, lint and formatting passed. GPU, Steam,
+gameplay and performance validation remain pending; Steam launch was explicitly
+excluded by the user. DXMT remains a separate integration.
 
 `tools/arm64ec-graphics-validation.md` records GPU and TLS probe success, including
 negative controls and a paired DXMT/native Metal experiment. It explicitly does
@@ -214,3 +248,12 @@ configuration-failure integration tests, formatting and appropriate lint checks.
 Keep real-GPU/game validation separate from unit-test success. This review ran
 only the two targeted existing tests mentioned above; it did not rerun the GPU
 experiments, launch games, or establish a full-suite baseline.
+
+## Installed-game follow-up (2026-10-16)
+
+[Four-game validation](tools/arm64ec-game-validation.md) completed with failures.
+DiRT and GoNNER reached their supervised time limits; DMC5 reached DX12 swapchain
+creation but required cancellation during a stack-exception loop; Braid exited
+255. All four independent prefix cleanup checks passed. Normal menu exits and
+gameplay remain unverified, so ARM64EC promotion and performance benchmarking
+remain blocked. Braid and GoNNER used the 32-bit-compatible baseline runtime.
