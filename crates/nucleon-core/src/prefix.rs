@@ -1,5 +1,5 @@
 use crate::paths;
-use anyhow::{Result, ensure};
+use anyhow::{Context, Result, ensure};
 use std::fs;
 use std::path::Path;
 use std::process::Command;
@@ -44,27 +44,7 @@ pub fn ensure_prefix_for_plan(plan: &crate::launch::LaunchPlan) -> Result<()> {
             "Valve redirect requires a genuine AMD64 steamclient64.dll.valve and an x64 guest"
         );
     }
-    let abi_marker = p.join(".nucleon-runtime-abi");
-    let abi = serde_json::to_string(&runtime.mode)?;
-    match fs::read_to_string(&abi_marker) {
-        Ok(previous) => ensure!(
-            previous == abi,
-            "Prefix belongs to {previous}; select a separate prefix for {abi}"
-        ),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            ensure!(
-                !p.join("drive_c").exists() || runtime.mode == crate::runtime::ExecutionMode::Intel,
-                "Existing prefix {} has no native runtime ABI record; use a new ARM64/FEX prefix",
-                p.display()
-            );
-        }
-        Err(error) => return Err(error.into()),
-    }
-    fs::create_dir_all(p)?;
-    // This records ABI ownership, not readiness; interrupted bootstrap can retry.
-    if fs::read_to_string(&abi_marker).ok().as_deref() != Some(&abi) {
-        crate::fs_util::atomic_write_file(&abi_marker, &abi)?;
-    }
+    ensure_runtime_abi(p, runtime.mode)?;
     let configured = p.join(".nucleon-configured-v3");
     let env = plan.bootstrap_env();
     let bootstrapped = p.join(".nucleon-bootstrapped-v1");
@@ -125,8 +105,7 @@ pub fn ensure_prefix_for_plan(plan: &crate::launch::LaunchPlan) -> Result<()> {
                 &env,
                 std::time::Duration::from_secs(30),
             )?;
-            fs::remove_file(reg)?;
-            crate::fs_util::atomic_write_file(&configured, b"1")
+            finish_registry_import(&reg, &configured)
         },
     )?;
     prepare_bridge_libraries_for_runtime(p, &plan.bridge, runtime)?;
@@ -175,6 +154,39 @@ pub fn ensure_prefix_for_plan(plan: &crate::launch::LaunchPlan) -> Result<()> {
                 crate::fs_util::atomic_write_file(&marker, b"1")
             },
         )?;
+    }
+    Ok(())
+}
+
+/// Record ABI ownership only when absent; formatting does not change ownership.
+fn ensure_runtime_abi(prefix: &Path, mode: crate::runtime::ExecutionMode) -> Result<()> {
+    let marker = prefix.join(".nucleon-runtime-abi");
+    match fs::read_to_string(&marker) {
+        Ok(previous) => {
+            let recorded: crate::runtime::ExecutionMode = serde_json::from_str(&previous)
+                .with_context(|| format!("Invalid prefix ABI marker {}", marker.display()))?;
+            ensure!(
+                recorded == mode,
+                "Prefix belongs to {}; select a separate prefix for {} (ABI marker {})",
+                previous.trim(),
+                serde_json::to_string(&mode)?,
+                marker.display()
+            );
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            ensure!(
+                !prefix.join("drive_c").exists() || mode == crate::runtime::ExecutionMode::Intel,
+                "Existing prefix {} has no native runtime ABI record; use a new ARM64/FEX prefix",
+                prefix.display()
+            );
+            fs::create_dir_all(prefix)?;
+            // This records ABI ownership, not readiness; interrupted bootstrap can retry.
+            crate::fs_util::atomic_write_file(&marker, serde_json::to_vec(&mode)?)?;
+        }
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("Read prefix ABI marker {}", marker.display()));
+        }
     }
     Ok(())
 }
@@ -319,10 +331,27 @@ pub fn configure_prefix_registry(prefix_dir: &Path, runner_dir: &Path) -> Result
             &plan.bootstrap_env(),
             std::time::Duration::from_secs(30),
         )?;
-        fs::remove_file(reg)?;
-        crate::fs_util::atomic_write_file(marker, b"1")?;
+        finish_registry_import(&reg, &marker)?;
     }
     Ok(())
+}
+
+/// Call only after a successful import: temporary-file cleanup is not readiness.
+fn finish_registry_import(reg: &Path, configured: &Path) -> Result<()> {
+    if let Err(error) = fs::remove_file(reg)
+        && error.kind() != std::io::ErrorKind::NotFound
+    {
+        log::warn!(
+            "Could not remove temporary registry file {} after successful import: {error}",
+            reg.display()
+        );
+    }
+    crate::fs_util::atomic_write_file(configured, b"1").with_context(|| {
+        format!(
+            "Publish registry configuration marker {}",
+            configured.display()
+        )
+    })
 }
 
 const PREFIX_REGISTRY: &str = r#"Windows Registry Editor Version 5.00
@@ -590,6 +619,92 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
+    fn runtime_abi_accepts_equivalent_json_without_rewriting_the_marker() {
+        use crate::runtime::ExecutionMode;
+        use std::os::unix::fs::MetadataExt;
+
+        let prefix = tempdir().unwrap();
+        let marker = prefix.path().join(".nucleon-runtime-abi");
+        for (mode, contents) in [
+            (ExecutionMode::Intel, "\"intel\""),
+            (ExecutionMode::Intel, "\"intel\"\n"),
+            (ExecutionMode::Arm64Fex, "\"arm64-fex\""),
+            (ExecutionMode::Arm64Fex, " \t\r\n\"arm64-fex\"\r\n "),
+            (ExecutionMode::Arm64Fex, r#""\u0061rm64-fex""#),
+        ] {
+            fs::write(&marker, contents).unwrap();
+            let inode = fs::metadata(&marker).unwrap().ino();
+            ensure_runtime_abi(prefix.path(), mode).unwrap();
+            assert_eq!(fs::read_to_string(&marker).unwrap(), contents);
+            assert_eq!(fs::metadata(&marker).unwrap().ino(), inode);
+        }
+    }
+
+    #[test]
+    fn runtime_abi_rejects_incompatible_invalid_and_unreadable_markers() {
+        use crate::runtime::ExecutionMode;
+
+        let prefix = tempdir().unwrap();
+        let marker = prefix.path().join(".nucleon-runtime-abi");
+        for (contents, expected) in [
+            ("\"intel\"\n", "Prefix belongs to"),
+            ("", "Invalid prefix ABI marker"),
+            ("arm64-fex", "Invalid prefix ABI marker"),
+            ("\"unknown\"", "Invalid prefix ABI marker"),
+            ("\"arm64-fex\" false", "Invalid prefix ABI marker"),
+        ] {
+            fs::write(&marker, contents).unwrap();
+            let error = ensure_runtime_abi(prefix.path(), ExecutionMode::Arm64Fex).unwrap_err();
+            let report = format!("{error:#}");
+            assert!(report.contains(expected), "{report}");
+            assert!(report.contains(&marker.display().to_string()), "{report}");
+            assert_eq!(fs::read_to_string(&marker).unwrap(), contents);
+        }
+        fs::write(&marker, b"\xff").unwrap();
+        let error = ensure_runtime_abi(prefix.path(), ExecutionMode::Arm64Fex).unwrap_err();
+        assert!(error.to_string().contains("Read prefix ABI marker"));
+        assert_eq!(fs::read(&marker).unwrap(), b"\xff");
+
+        fs::remove_file(&marker).unwrap();
+        // A directory guarantees a read failure without relying on Unix permissions.
+        fs::create_dir(&marker).unwrap();
+        let error = ensure_runtime_abi(prefix.path(), ExecutionMode::Arm64Fex).unwrap_err();
+        assert!(error.to_string().contains(&marker.display().to_string()));
+        assert!(marker.is_dir());
+    }
+
+    #[test]
+    fn runtime_abi_initializes_only_eligible_unmarked_prefixes() {
+        use crate::runtime::ExecutionMode;
+
+        let temp = tempdir().unwrap();
+        for mode in [ExecutionMode::Intel, ExecutionMode::Arm64Fex] {
+            let prefix = temp.path().join(format!("new-{mode:?}"));
+            ensure_runtime_abi(&prefix, mode).unwrap();
+            let marker = prefix.join(".nucleon-runtime-abi");
+            assert_eq!(
+                fs::read(&marker).unwrap(),
+                serde_json::to_vec(&mode).unwrap()
+            );
+            ensure_runtime_abi(&prefix, mode).unwrap();
+        }
+        let existing = temp.path().join("existing");
+        fs::create_dir_all(existing.join("drive_c")).unwrap();
+        let marker = existing.join(".nucleon-runtime-abi");
+        let error = ensure_runtime_abi(&existing, ExecutionMode::Arm64Fex).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("has no native runtime ABI record")
+        );
+        assert!(!marker.exists());
+        ensure_runtime_abi(&existing, ExecutionMode::Intel).unwrap();
+        assert_eq!(fs::read(&marker).unwrap(), b"\"intel\"");
+        assert!(ensure_runtime_abi(&existing, ExecutionMode::Arm64Fex).is_err());
+        assert_eq!(fs::read(&marker).unwrap(), b"\"intel\"");
+    }
+
+    #[test]
     fn native_staging_preserves_valve_image_and_uses_arm64_unix_bridge() {
         let (temp, mut runtime) = crate::runtime::fixture(crate::runtime::ExecutionMode::Arm64Fex);
         runtime.steam_protocol = crate::runtime::SteamProtocol::ValveRedirect;
@@ -690,6 +805,52 @@ mod tests {
         // The fixture's non-executable loader guarantees a setup error without Wine.
         assert!(configure_prefix_registry(&prefix, temp.path()).is_err());
         assert!(!prefix.join(".nucleon-configured-v3").exists());
+        assert!(prefix.join("nucleon_tweaks.reg").is_file());
+    }
+
+    #[test]
+    fn registry_readiness_does_not_depend_on_temporary_file_cleanup() {
+        let temp = tempdir().unwrap();
+        let reg = temp.path().join("nucleon_tweaks.reg");
+        let configured = temp.path().join(".nucleon-configured-v3");
+
+        fs::write(&reg, PREFIX_REGISTRY).unwrap();
+        finish_registry_import(&reg, &configured).unwrap();
+        assert!(!reg.exists());
+        assert_eq!(fs::read(&configured).unwrap(), b"1");
+
+        fs::remove_file(&configured).unwrap();
+        finish_registry_import(&reg, &configured).unwrap();
+        assert_eq!(fs::read(&configured).unwrap(), b"1");
+
+        fs::remove_file(&configured).unwrap();
+        // A directory produces a deterministic cleanup error without permission assumptions.
+        fs::create_dir(&reg).unwrap();
+        finish_registry_import(&reg, &configured).unwrap();
+        assert!(reg.is_dir());
+        assert_eq!(fs::read(&configured).unwrap(), b"1");
+    }
+
+    #[test]
+    fn registry_marker_publication_errors_remain_fatal_after_cleanup() {
+        let temp = tempdir().unwrap();
+        let reg = temp.path().join("nucleon_tweaks.reg");
+        let configured = temp.path().join(".nucleon-configured-v3");
+        fs::write(&reg, PREFIX_REGISTRY).unwrap();
+        fs::create_dir(&configured).unwrap();
+
+        let error = finish_registry_import(&reg, &configured).unwrap_err();
+        let report = format!("{error:#}");
+        assert!(
+            report.contains("Publish registry configuration marker"),
+            "{report}"
+        );
+        assert!(
+            report.contains(&configured.display().to_string()),
+            "{report}"
+        );
+        assert!(!reg.exists());
+        assert!(configured.is_dir());
     }
 
     #[test]
