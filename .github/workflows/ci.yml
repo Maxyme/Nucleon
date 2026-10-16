@@ -163,7 +163,8 @@ jobs:
 
       - name: Publish draft release for version tags
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.ref_name }}
         run: |
-          gh release edit "${{ github.ref_name }}" --draft=false --latest
+          gh release edit "$RELEASE_TAG" --draft=false --latest
 
