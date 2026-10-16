@@ -49,6 +49,43 @@ fn runner_log(support: &std::path::Path) -> String {
 }
 
 #[test]
+fn profile_type_errors_include_field_location_in_logs_and_receipts() {
+    let dir = tempfile::tempdir().unwrap();
+    let profile = dir.path().join("profile.json");
+    let receipt = dir.path().join("receipt.json");
+    fs::write(&profile, "{\n  \"hud\": \"yes\"\n}").unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_nucleon-runner"))
+        .env_clear()
+        .env("NUCLEON_SUPPORT_DIR", dir.path())
+        .env("NUCLEON_GAME_PROFILE", &profile)
+        .env("NUCLEON_RUN_RECEIPT", &receipt)
+        .args(["run", "/does-not-exist/game.exe"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let receipt: serde_json::Value = serde_json::from_slice(&fs::read(receipt).unwrap()).unwrap();
+    for report in [
+        runner_log(dir.path()),
+        receipt["error"].as_str().unwrap().to_string(),
+    ] {
+        for expected in [
+            profile.to_str().unwrap(),
+            "field `hud`",
+            "boolean",
+            "line 2",
+            "remove the file",
+        ] {
+            assert!(report.contains(expected), "{report}");
+        }
+    }
+    assert_eq!(
+        fs::read_to_string(profile).unwrap(),
+        "{\n  \"hud\": \"yes\"\n}"
+    );
+    assert!(!dir.path().join("default_prefix/pfx").exists());
+}
+
+#[test]
 fn invalid_environment_overrides_fail_before_prefix_setup_and_are_logged() {
     for (name, value, correction) in [
         ("NUCLEON_ENGINE", "dxmtt", "Choose auto"),

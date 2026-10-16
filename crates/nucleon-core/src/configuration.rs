@@ -43,6 +43,49 @@ pub fn optional_file(path: &Path) -> Result<Option<String>> {
     }
 }
 
+/// Decode one complete JSON document, preserving the field path and parser location.
+pub(crate) fn json<T: serde::de::DeserializeOwned>(text: &str, path: &Path) -> Result<T> {
+    let mut deserializer = serde_json::Deserializer::from_str(text);
+    let value = serde_path_to_error::deserialize(&mut deserializer)
+        .map_err(|error| parse_error(error, path, "JSON"))?;
+    // Deserializing a value alone does not reject a second value or trailing garbage.
+    deserializer.end().with_context(|| {
+        format!(
+            "Invalid JSON configuration {} after the document",
+            path.display()
+        )
+    })?;
+    Ok(value)
+}
+
+pub(crate) fn optional_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<Option<T>> {
+    optional_file(path)?
+        .map(|text| json(&text, path))
+        .transpose()
+}
+
+pub(crate) fn toml<T: serde::de::DeserializeOwned>(text: &str, path: &Path) -> Result<T> {
+    serde_path_to_error::deserialize(toml::Deserializer::new(text))
+        .map_err(|error| parse_error(error, path, "TOML"))
+}
+
+fn parse_error<E: std::error::Error + Send + Sync + 'static>(
+    error: serde_path_to_error::Error<E>,
+    path: &Path,
+    format: &str,
+) -> anyhow::Error {
+    let field = error.path().to_string();
+    let location = if field.is_empty() || field == "." {
+        "at document root".to_string()
+    } else {
+        format!("at field `{field}`")
+    };
+    anyhow::Error::new(error.into_inner()).context(format!(
+        "Invalid {format} configuration {} {location}",
+        path.display()
+    ))
+}
+
 pub fn vulkan_manifest(source: &str, path: &Path) -> Result<()> {
     let context = || {
         format!(
@@ -50,13 +93,23 @@ pub fn vulkan_manifest(source: &str, path: &Path) -> Result<()> {
             path.display()
         )
     };
-    let bytes = fs::read(path).with_context(context)?;
-    let json: serde_json::Value = serde_json::from_slice(&bytes).with_context(context)?;
-    let library = json["ICD"]["library_path"]
-        .as_str()
-        .filter(|s| !s.is_empty())
-        .with_context(|| format!("{}: missing ICD.library_path", context()))?;
-    let library = Path::new(library);
+    #[derive(serde::Deserialize)]
+    struct Manifest {
+        #[serde(rename = "ICD")]
+        icd: Icd,
+    }
+    #[derive(serde::Deserialize)]
+    struct Icd {
+        library_path: String,
+    }
+    let text = fs::read_to_string(path).with_context(context)?;
+    let manifest: Manifest = json(&text, path).with_context(context)?;
+    anyhow::ensure!(
+        !manifest.icd.library_path.is_empty(),
+        "{}: missing ICD.library_path",
+        context()
+    );
+    let library = Path::new(&manifest.icd.library_path);
     let library = if library.is_absolute() {
         library.to_path_buf()
     } else {
@@ -119,6 +172,84 @@ pub fn component_path(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn typed_documents_report_nested_fields_and_original_parser_locations() {
+        type Profiles = std::collections::BTreeMap<String, Vec<crate::profile::GameProfile>>;
+        let path = Path::new("/configuration/profiles.json");
+        let error = json::<Profiles>(r#"{"games":[{"hud":"yes"}]}"#, path).unwrap_err();
+        let report = format!("{error:#}");
+        for expected in [
+            "/configuration/profiles.json",
+            "games[0].hud",
+            "boolean",
+            "line 1",
+            "column",
+        ] {
+            assert!(report.contains(expected), "{report}");
+        }
+        let error = toml::<Profiles>(
+            "[[games]]\nhud = \"yes\"\n",
+            Path::new("/configuration/profiles.toml"),
+        )
+        .unwrap_err();
+        let report = format!("{error:#}");
+        for expected in [
+            "/configuration/profiles.toml",
+            "games[0].hud",
+            "boolean",
+            "line 2",
+        ] {
+            assert!(report.contains(expected), "{report}");
+        }
+    }
+
+    #[test]
+    fn optional_json_keeps_missing_files_optional_and_rejects_invalid_complete_documents() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("profile.json");
+        let load = || optional_json::<crate::profile::GameProfile>(&path);
+        assert!(load().unwrap().is_none());
+        for contents in [
+            "",
+            "{",
+            "{} {}",
+            "{} garbage",
+            r#"{"hdu":true}"#,
+            r#"{"hud":"yes"}"#,
+        ] {
+            fs::write(&path, contents).unwrap();
+            let error = load().unwrap_err();
+            assert!(format!("{error:#}").contains(&path.display().to_string()));
+            assert_eq!(fs::read_to_string(&path).unwrap(), contents);
+        }
+        fs::write(&path, "{\"hud\":false} \n\t").unwrap();
+        assert_eq!(load().unwrap().unwrap().hud, Some(false));
+        fs::remove_file(&path).unwrap();
+        fs::create_dir(&path).unwrap();
+        assert!(load().is_err());
+    }
+
+    #[test]
+    fn vulkan_schema_reports_exact_library_field_and_accepts_extension_fields() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("icd.json");
+        fs::write(&path, r#"{"ICD":{"library_path":42}}"#).unwrap();
+        let error = vulkan_manifest("VK_DRIVER_FILES", &path).unwrap_err();
+        let report = format!("{error:#}");
+        for expected in [
+            "VK_DRIVER_FILES",
+            "ICD.library_path",
+            "expected a string",
+            "line 1",
+        ] {
+            assert!(report.contains(expected), "{report}");
+        }
+        fs::write(temp.path().join("driver.dylib"), b"fixture").unwrap();
+        fs::write(&path, r#"{"file_format_version":"1.0.0","ICD":{"library_path":"driver.dylib","api_version":"1.4.0"}}"#).unwrap();
+        vulkan_manifest("VK_DRIVER_FILES", &path).unwrap();
+    }
+
     #[test]
     fn invalid_values_name_the_source_and_offer_a_correction() {
         let error = engine("NUCLEON_ENGINE", "dxmv").unwrap_err().to_string();

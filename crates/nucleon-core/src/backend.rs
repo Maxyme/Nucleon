@@ -154,7 +154,7 @@ fn parse_backend_configuration(contents: &str, path: &Path) -> Result<GraphicsBa
     struct Config {
         backend: String,
     }
-    let config: Config = toml::from_str(contents).with_context(|| format!(
+    let config: Config = crate::configuration::toml(contents, path).with_context(|| format!(
         "Invalid backend configuration {}. Set backend = \"auto\" (or dxvk, dxmt, d3dmetal, kosmickrisp), or remove the file to reset it", path.display()))?;
     GraphicsBackend::from_str(&config.backend).with_context(|| {
         format!(

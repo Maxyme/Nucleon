@@ -147,7 +147,7 @@ impl ResolvedRuntime {
     }
 
     fn from_descriptor(root: &Path, text: &str) -> Result<Self> {
-        let d: Descriptor = toml::from_str(text)?;
+        let d: Descriptor = crate::configuration::toml(text, &root.join(DESCRIPTOR))?;
         ensure!(
             d.schema == 1,
             "Unsupported runtime descriptor schema {}",

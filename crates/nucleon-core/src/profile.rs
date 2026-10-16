@@ -84,8 +84,9 @@ impl GameProfile {
     }
 
     pub fn load(path: &Path) -> Result<Option<Self>> {
-        crate::configuration::optional_file(path)?.map(|text| serde_json::from_str(&text)
-            .with_context(||format!("Invalid launch configuration {}. Correct its JSON field names/types or remove the file to reset it",path.display()))).transpose()
+        crate::configuration::optional_json(path).with_context(|| format!(
+            "Invalid launch configuration {}. Correct its JSON field names/types or remove the file to reset it", path.display()
+        ))
     }
 
     pub fn apply_protocol(&self, runtime: &mut ResolvedRuntime) -> Result<()> {
