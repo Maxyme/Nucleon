@@ -7,6 +7,26 @@ use std::path::PathBuf;
 
 #[derive(Subcommand, Debug, Clone)]
 pub enum WineAction {
+    /// Install a published Wine/FEX version, HTTPS archive, or local runtime
+    Install {
+        /// wine-fex, an HTTPS archive URL, a local archive, or a runtime directory
+        source: String,
+        /// Exact Wine/FEX release version (required when source is wine-fex)
+        #[arg(long)]
+        version: Option<String>,
+        /// Optional archive checksum; required for URLs without release metadata
+        #[arg(long)]
+        sha256: Option<String>,
+        /// Select the installed runtime for the experimental FEX Steam tool
+        #[arg(long)]
+        register: bool,
+    },
+    /// Validate a runtime descriptor and print resolved component paths
+    Inspect {
+        runtime: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
     /// Manage the opt-in native ARM64/FEX Steam tool
     Fex {
         #[command(subcommand)]
@@ -121,6 +141,22 @@ pub enum FexAction {
     },
 }
 
+fn install_runtime(
+    source: &str,
+    version: Option<&str>,
+    sha256: Option<&str>,
+    register: bool,
+) -> Result<()> {
+    ui::info("Verifying and installing Wine/FEX runtime components...");
+    let installed = nucleon_core::runtime_releases::install(source, version, sha256)?;
+    ui::success(format!("Installed runtime: {}", installed.display()));
+    if register {
+        steam::fex::register(&installed, &std::env::current_exe()?)?;
+        ui::success("Experimental FEX Steam option now uses this runtime.");
+    }
+    Ok(())
+}
+
 fn run_fex(action: FexAction) -> Result<()> {
     use nucleon_core::{paths, profile::GameProfile};
     match action {
@@ -129,34 +165,7 @@ fn run_fex(action: FexAction) -> Result<()> {
             sha256,
             register,
         } => {
-            ensure!(
-                !runtime.starts_with("http://"),
-                "Runtime downloads require HTTPS"
-            );
-            ui::info("Verifying and installing native runtime components...");
-            let installed = if runtime.starts_with("https://") {
-                nucleon_core::managed_runtime::install_url(
-                    &runtime,
-                    sha256
-                        .as_deref()
-                        .context("Runtime downloads require --sha256")?,
-                )?
-            } else if std::path::Path::new(&runtime).is_dir() {
-                ensure!(sha256.is_none(), "--sha256 applies to archive imports");
-                nucleon_core::managed_runtime::install(std::path::Path::new(&runtime))?
-            } else {
-                nucleon_core::managed_runtime::install_archive(
-                    std::path::Path::new(&runtime),
-                    sha256
-                        .as_deref()
-                        .context("Archive imports require --sha256")?,
-                )?
-            };
-            ui::success(format!("Installed native runtime: {}", installed.display()));
-            if register {
-                steam::fex::register(&installed, &std::env::current_exe()?)?;
-                ui::success("Experimental Steam option now uses the managed runtime.");
-            }
+            install_runtime(&runtime, None, sha256.as_deref(), register)?;
         }
         FexAction::Verify { runtime } => {
             let root = match runtime {
@@ -294,6 +303,26 @@ fn ensure_new_name(name: &str) -> Result<()> {
 
 pub fn run(action: WineAction) -> Result<()> {
     match action {
+        WineAction::Install {
+            source,
+            version,
+            sha256,
+            register,
+        } => {
+            install_runtime(&source, version.as_deref(), sha256.as_deref(), register)?;
+        }
+        WineAction::Inspect { runtime, json } => {
+            let runtime = nucleon_core::runtime::ResolvedRuntime::inspect(&runtime)?;
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string(&serde_json::json!({"schema": 1, "runtime": runtime}))?
+                );
+            } else {
+                ui::kv("Runtime", runtime.root.display());
+                ui::kv("Execution", format!("{:?}", runtime.mode));
+            }
+        }
         WineAction::Fex { action } => run_fex(action)?,
         WineAction::Fetch {
             version,

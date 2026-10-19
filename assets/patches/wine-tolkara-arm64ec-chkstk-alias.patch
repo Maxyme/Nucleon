@@ -1,7 +1,0 @@
---- a/dlls/ntdll/ntdll.spec
-+++ b/dlls/ntdll/ntdll.spec
-@@ -1537,3 +1537,4 @@
- @ cdecl -arch=!i386 -norelay __chkstk()
- @ cdecl -arch=arm64ec -norelay __chkstk_arm64ec()
-+@ cdecl -arch=arm64ec -norelay ___chkstk_ms() __chkstk_arm64ec
- @ cdecl __isascii(long)

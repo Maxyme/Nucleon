@@ -2,7 +2,7 @@
 use anyhow::{Context, Result, ensure};
 use std::{
     fs,
-    io::{self, BufReader, Read, Seek, Write},
+    io::{self, BufReader, Seek, Write},
     path::Path,
 };
 
@@ -10,33 +10,10 @@ pub fn digest(path: &Path) -> Result<String> {
     crate::staging::digest(path)
 }
 
-pub fn pe_identity(path: &Path) -> Result<String> {
-    use object::{
-        LittleEndian,
-        read::pe::{ImageNtHeaders, ImageOptionalHeader, PeFile64},
-    };
-    let bytes = fs::read(path)?;
-    let image = PeFile64::parse(bytes.as_slice())?;
-    let nt = image.nt_headers();
-    Ok(format!(
-        "{:08x}:{:08x}:{:08x}",
-        nt.file_header().time_date_stamp.get(LittleEndian),
-        nt.optional_header().size_of_image(),
-        nt.optional_header().check_sum()
-    ))
-}
-
-pub fn vulkan_library(manifest: &Path) -> Result<std::path::PathBuf> {
-    Ok(crate::configuration::resolve_vulkan_icd(manifest)?.library)
-}
 pub fn download(url: &str, limit: u64) -> Result<fs::File> {
     ensure!(url.starts_with("https://"), "Downloads require HTTPS");
     crate::downloads::download(url, limit)
 }
-pub fn publish_new(source: &Path, target: &Path) -> Result<()> {
-    crate::downloads::publish_new(source, target)
-}
-
 pub fn unpack(path: &Path, target: &Path, limit: u64) -> Result<()> {
     use crate::downloads::{ArchiveFormat, extract_with_limit};
     fs::create_dir_all(target)?;
@@ -125,14 +102,6 @@ pub fn copy_tree(source: &Path, target: &Path) -> Result<()> {
         }
     }
     Ok(())
-}
-
-/// Read a small archive component without loading an entire archive into memory.
-pub fn read_limited(reader: impl Read, limit: u64) -> Result<Vec<u8>> {
-    let mut bytes = Vec::new();
-    reader.take(limit + 1).read_to_end(&mut bytes)?;
-    ensure!(bytes.len() as u64 <= limit, "Component exceeds size limit");
-    Ok(bytes)
 }
 
 #[cfg(test)]

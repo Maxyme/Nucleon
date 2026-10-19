@@ -1,152 +1,56 @@
-# Prebuilt ARM64 Wine/FEX runtime releases
+# Wine/FEX runtime installation
 
-The publisher compiles the patched Wine/FEX runtime once. Users install the
-prebuilt archive with Nucleon; no Python, compiler, SDK, source checkout or
-Rosetta installation is needed for this runtime's installation and CPU execution.
-Steam integration still requires the separately installed Nucleon Steam bridge
-and helper. This does not certify that a game works.
-
-## Package scope
-
-The initial release is the **experimental Wine/FEX core**: native ARM64 Tolkara
-Wine, the x64 ARM64EC FEX emulator, the x86 WoW64 FEX emulator, both matching
-native companions, Wine's built-in WineD3D, notices and build provenance.
-Windows PE images have debug sections stripped; native Mach-O layout is retained
-and those binaries are ad-hoc signed. Exported entry points and Windows unwind
-metadata are retained.
-It uses the source pins and downstream patches in
-`assets/wine/recipes/arm64-fex.toml`, including the cursor-registry correction.
-The default graphics frontend remains x64; this is not the separate experimental
-ARM64EC DXVK/VKD3D graphics generation.
-
-Graphics add-ons, Vulkan loaders/drivers, reference-app graphics binaries, Apple
-GPTK/D3DMetal, Microsoft game DLLs and Valve/Steam libraries are not packaged.
-This core package does not provide the full graphics stack used by the local
-DiRT/DMC5 experiments. In particular, the current core build disables Vulkan;
-its release must not be advertised as a ready-to-run DX12/DXVK runtime.
-
-## Current validation (2026-10-16)
-
-Publisher regression tests pass, and the real archive passed managed import,
-full integrity/native-dependency verification and the owned x64 workload. The
-x86 workload passed memory, threading and exception checks, but
-`CreateProcessW` failed with error 998. The same failure reproduced in an
-unstripped runtime and in a control with exception handling removed. This is a
-current runtime blocker, not a packaging-only failure. The workflow deliberately
-fails its publication gate until the x86 workload also passes; this change has
-not published a runtime release. See `tools/arm64-fex-release-validation.json`.
-
-## Users
-
-Download the runtime archive and `SHA256SUMS.txt` from its GitHub prerelease.
-Use the exact checksum listed for the runtime archive, for example:
+Runtime builds and publishing now live in the separate [wine-fex repository](../wine-fex/README.md)
+(planned GitHub release source: `Maxyme/wine-fex`). Nucleon consumes its artifacts;
+it does not compile Wine/FEX, and has no dependency on the builder repository.
+The runtime's releases and versions are independent of Nucleon releases.
 
 ```sh
-nucleon wine fex install ./nucleon-arm64-fex-core-0.1.0-rc.1-macos-arm64.tar.gz \
-  --sha256 <published-64-character-SHA256> --register
+nucleon wine install wine-fex --version 0.1.0-rc.1 --register
+nucleon wine install ./wine-fex-0.1.0-rc.1-macos-arm64.tar.gz --register
+nucleon wine install /path/to/complete-runtime --register
+nucleon wine install https://github.com/Maxyme/wine-fex/releases/download/v0.1.0-rc.1/wine-fex-0.1.0-rc.1-macos-arm64.tar.gz --register
+```
+
+The named source requires an exact version. It downloads schema-2
+`runtime-release.json` from release tag `v<version>`, verifies the metadata version,
+component, filename and SHA256, then uses the ordinary managed importer. Explicit
+URLs use adjacent release metadata or `--sha256 <digest>`. A local archive's
+checksum is computed unless explicitly supplied. `--version` applies only to the
+named `wine-fex` source. No version automatically follows latest.
+
+Installation checks the descriptor, ABI, containment and native dependencies,
+retains immutable generations and preserves prior selections on import failure.
+`--register` selects the experimental FEX Steam tool and leaves the ordinary Intel
+Wine default alone. Without it the runtime is only installed.
+
+```sh
 nucleon wine fex verify
 nucleon wine fex status
+nucleon wine inspect /path/to/runtime --json
+nucleon launch 690790 --emulator fex
+nucleon launch 690790 --wine fex-preview
 ```
 
-The same command accepts an HTTPS release-asset URL instead of the local file.
-Installation verifies the checksum, runtime ABI and native dependencies, then
-retains an immutable generation. `--register` selects it only for the dedicated
-experimental FEX Steam tool, without changing ordinary Intel/Rosetta Wine.
+The existing `wine fex install` command remains a compatibility interface for
+explicit paths/URLs. Steam bridge/helper components remain separately installed.
+The core package includes native Tolkara Wine, both FEX emulators and companions,
+WineD3D, provenance and notices. It excludes developer graphics add-ons, Vulkan,
+Apple GPTK, Microsoft game DLLs and Valve/Steam binaries. Core installation does
+not certify DX12/DXVK or gameplay.
 
-## Publisher
+## Builder validation policy
 
-On native Apple Silicon macOS, install Xcode Command Line Tools, Rust, Python
-3.9+ (required by upstream FEX), current Bison/Flex, CMake and Ninja. Build the Rust publisher and run:
+The builder always runs x64 and x86 workloads. Temporarily, the existing x86
+`CreateProcessW` error 998 is recorded as an optional failure and does not prevent
+preview publishing. x64 execution, import/integrity/native closure and cleanup
+remain mandatory. `--require-x86` in the builder restores the full gate. Release
+notes and metadata disclose the result; optional failure is not reported as pass.
+The earlier blocked results in `tools/arm64-fex-release-validation.json` and
+`tools/rust-tooling-validation.json` are historical evidence from before this policy.
 
-```sh
-cargo build --release --locked -p nucleon-devtools
-target/release/nucleon-devtools release build --version 0.1.0-rc.1 \
-  --work target/runtime-release --output target/runtime-release-assets \
-  --jobs 2
-```
-
-Use a new output directory for each attempt. `package` can replace `build` to
-repackage an unchanged publisher build; it rejects source/product changes since
-that build. It cannot package a developer reference-app generation as a release.
-The publisher's compiler archive is checksum-pinned; it is not shipped in the
-runtime. The workflow uses a native ARM64 `macos-15` runner and verifies the host
-architecture before building.
-
-The output contains:
-
-- An installable runtime `.tar.gz` with a root `nucleon-runtime.toml`.
-- A corresponding-sources `.tar.gz`: patched Wine, FEX and initialized FEX
-  submodules, the original shared-data helper source tree, and Nucleon's sources,
-  patches, build scripts and notices. Each exported source file is hashed in
-  `SOURCE-MANIFEST.json`. Source archives contain working-tree bytes, not just an
-  unpatched upstream Git revision. Ignored build products and arbitrary untracked
-  publisher files are excluded.
-- `runtime-release.json`, `RELEASE-NOTES.md`, `SHA256SUMS.txt` and validation logs.
-
-The source bundle includes the complete patched compilation inputs and the
-scripts controlling compilation and installation. Its `sources/nucleon` tree
-contains the build recipes and publisher command above; that command fetches
-exact upstream revisions and the pinned compiler. The bundled patched sources
-remain available independently of those upstream servers for manual rebuilding
-with Wine's configure/make and FEX's CMake recipes in `crates/nucleon-devtools/src/build.rs`.
-
-Before publishing, the packager imports the archive through the same managed installer API as the normal CLI into a
-private temporary support directory, runs full installed integrity/dependency
-verification, executes the owned x64 and x86 memory/thread/exception/child-process
-workloads from that relocated installation, and waits for its Wine server to
-exit. These checks never use Steam or installed games. Failure publishes no
-release asset directory; publisher logs remain under the work directory.
-
-## Versioning and automation
-
-Commit the recipe, patches, publisher code and notices together. Create and push
-an explicit tag such as `runtime-arm64-fex-v0.1.0-rc.1` on that commit to trigger
-`.github/workflows/arm64-fex-runtime.yml`. The workflow publishes a GitHub
-**prerelease**, never marks it latest, and includes binary/source checksums. It
-uploads all assets to a draft before making the release public, so an upload
-failure cannot expose a binary-only release.
-The runtime tag is independent of application `v*` tags and its package version
-is independent of the content-based managed-install generation.
-
-Manual workflow dispatch builds/tests downloadable CI artifacts without creating
-a tag or publishing a release. No release has been published merely by adding
-this workflow. Failed releases are not automatically promoted or overwritten.
-
-## Distribution notices
-
-Wine and Wine-derived patches retain LGPL-2.1-or-later terms. Releases include
-corresponding patched source and build scripts, upstream copyright/license
-notices, and the recorded downstream patch set. Modified Wine/FEX compilation files receive
-prominent Nucleon modification notices and dates before compilation. The borrowed
-shared-data header is copied unchanged with its original notices. FEX retains MIT terms, with its
-bundled dependencies' own notices and the LLVM/MinGW runtime notices; Nucleon's scripts retain GPL-3.0-only terms.
-A source snapshot is not permission to redistribute unrelated proprietary
-binaries. Extending the package with graphics or SDK components requires adding
-their corresponding source and/or notices as applicable to those components.
-
-## Rust tooling migration (2026-10-18)
-
-The publisher and diagnostic/build workflows now use `nucleon-devtools`; see
-[the command guide](tools/README.md) and [simplification review](CODE-SIMPLIFICATION.md).
-Rust build/generation identities are schema 2; `publisher-build-rust.json` cannot
-be substituted with a Python build receipt. Runtime descriptors and pairing
-contracts retain schema 1. Source exports include patched tracked bytes and
-initialized pinned submodules; missing tracked files still fail, so commit the
-complete migration before building a tagged source-inclusive release.
-
-A local Rust packaging/import validation passed native closure/integrity and the
-x64 workload, then reproduced x86 `CreateProcessW` error 998. Cleanup passed.
-The [Rust migration validation record](tools/rust-tooling-validation.json)
-distinguishes executed checks from the remaining qualification work.
-This exercises the publication gates without weakening them or publishing assets.
-The updated GitHub publisher workflow has not been executed locally. To exercise
-the current built core independently, use a new diagnostic output directory:
-
-```sh
-target/release/nucleon-devtools release validate --version 0.1.0-rc.1 \
-  --work target/arm64-fex --output target/core-validation-attempt
-```
-
-This creates a temporary archive, imports it into isolated storage, runs both
-guest probes and retains logs. It deliberately exits nonzero on the known x86
-failure. It does not create release assets.
+The builder repository is local until separately pushed and configured. The named
+version command cannot download a release that has not been published. Local
+paths already exercise the same installation/registration flow. Publisher CI
+pins a Nucleon revision and invokes this CLI for validation, avoiding duplicate
+installer/ABI rules in the builder. The inspection JSON envelope is schema 1.

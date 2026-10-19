@@ -1,3 +1,5 @@
+> 2026-10-19 split: build and publisher implementations now live in `../wine-fex`; Nucleon retains installation/ABI validation and integration diagnostics. The builder calls a Nucleon executable for acceptance checks and has no Cargo dependency on it. Its 32-bit test now runs as an optional preview gate. The review below records the preceding migration.
+
 # Code simplification and library review
 
 Implemented on the ARM64/FEX branch alongside per-launch runtime selection and

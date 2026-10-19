@@ -1,0 +1,60 @@
+{
+  "schema": 1,
+  "date": "2026-10-19",
+  "nucleon_base_commit": "b171067",
+  "scope": "Standalone runtime builder and Nucleon release consumption; consumer changes remain in the working tree",
+  "portable": {
+    "nucleon_workspace_tests": {
+      "passed": 241,
+      "failed": 0,
+      "ignored": 10
+    },
+    "standalone_builder_tests": {
+      "passed": 18,
+      "failed": 0,
+      "ignored": 1
+    },
+    "strict_clippy_both_repositories": "PASSED",
+    "format_both_repositories": "PASSED",
+    "builder_workflow_yaml": "PARSED",
+    "moved_assets_and_probes_byte_preservation": 26,
+    "builder_cargo_depends_on_nucleon": false
+  },
+  "native_builder_validation": {
+    "report": "../wine-fex/target/split-native-validation/validation.json",
+    "inputs": "Existing pinned local build products; no fresh source rebuild",
+    "managed_import_via_real_nucleon_cli": "PASSED",
+    "full_integrity_native_dependencies": "PASSED",
+    "x64_cpu_workload": "PASSED",
+    "x86_cpu_workload": "FAILED_OPTIONAL",
+    "x86_error": "CreateProcessW error 998",
+    "x86_required": false,
+    "prefix_cleanup": "PASSED",
+    "overall": "PASSED_WITH_OPTIONAL_FAILURE",
+    "command_exit": 0,
+    "retained_archive": "../wine-fex/target/split-native-validation/diagnostic-runtime.tar.gz"
+  },
+  "consumer_cli_integration": {
+    "status": "PASSED",
+    "archive_install_without_explicit_checksum": "PASSED",
+    "checksum_rejection_before_registration": "PASSED",
+    "isolated_steam_registration": "PASSED",
+    "intel_default_preserved": "PASSED",
+    "full_managed_verification": "PASSED",
+    "inspection_schema": 1,
+    "home": "/var/folders/lk/0gjzzc817f17_5qrkx7yyqj40000gn/T/nucleon-wine-fex-install-8x80rvtc/home",
+    "support": "/var/folders/lk/0gjzzc817f17_5qrkx7yyqj40000gn/T/nucleon-wine-fex-install-8x80rvtc/support",
+    "steam_launched": false,
+    "wine_executed": false
+  },
+  "not_executed": [
+    "Fresh full from-source build",
+    "GitHub repository creation/push/release CI/publication",
+    "Named-version download from a published release",
+    "GPU, Steam or game execution"
+  ],
+  "publication": {
+    "github_release_published": false,
+    "diagnostic_archive_is_distribution_release": false
+  }
+}

@@ -33,7 +33,7 @@ pub enum SteamProtocol {
     ValveRedirect,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GraphicsPaths {
     #[serde(default)]
@@ -89,7 +89,7 @@ struct Descriptor {
     graphics: GraphicsPaths,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ResolvedRuntime {
     pub root: PathBuf,
     pub mode: ExecutionMode,

@@ -24,6 +24,42 @@ struct Cli {
 mod tests {
     use super::*;
     #[test]
+    fn wine_install_accepts_named_versions_and_explicit_sources() {
+        for args in [
+            vec![
+                "nucleon",
+                "wine",
+                "install",
+                "wine-fex",
+                "--version",
+                "0.1.0-rc.1",
+                "--register",
+            ],
+            vec![
+                "nucleon",
+                "wine",
+                "install",
+                "/tmp/runtime.tar.gz",
+                "--register",
+            ],
+            vec![
+                "nucleon",
+                "wine",
+                "install",
+                "https://example.invalid/runtime.tar.gz",
+                "--sha256",
+                &"a".repeat(64),
+            ],
+        ] {
+            assert!(matches!(
+                Cli::try_parse_from(args).unwrap().command,
+                Commands::Wine {
+                    action: WineAction::Install { .. }
+                }
+            ));
+        }
+    }
+    #[test]
     fn launch_parses_complete_runtime_and_emulator_constraints() {
         for emulator in ["rosetta", "fex"] {
             let cli = Cli::try_parse_from([

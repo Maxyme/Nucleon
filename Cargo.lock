@@ -1272,6 +1272,7 @@ dependencies = [
  "object",
  "plist",
  "rustix",
+ "semver",
  "serde",
  "serde_json",
  "serde_path_to_error",
@@ -1296,20 +1297,13 @@ dependencies = [
  "clap",
  "ctrlc",
  "env_logger",
- "flate2",
  "log",
  "nucleon-core",
  "rustix",
- "semver",
  "serde",
  "serde_json",
  "sha2",
- "shlex 2.0.1",
- "tar",
  "tempfile",
- "toml",
- "walkdir",
- "zip",
 ]
 
 [[package]]
