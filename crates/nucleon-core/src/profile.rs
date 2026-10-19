@@ -56,6 +56,8 @@ pub struct GameProfile {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wine: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub emulator: Option<crate::runtime_selection::Emulator>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub graphics_api: Option<GraphicsPreference>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub steam_protocol: Option<SteamProtocol>,
@@ -78,6 +80,7 @@ impl GameProfile {
             vulkan_icd: self.vulkan_icd.or(defaults.vulkan_icd),
             overlay: self.overlay.or(defaults.overlay),
             wine: self.wine.or(defaults.wine),
+            emulator: self.emulator.or(defaults.emulator),
             graphics_api: self.graphics_api.or(defaults.graphics_api),
             steam_protocol: self.steam_protocol.or(defaults.steam_protocol),
         }

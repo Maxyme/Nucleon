@@ -37,18 +37,18 @@ jobs:
           echo "$(brew --prefix flex)/bin" >> "$GITHUB_PATH"
           echo "$(brew --prefix python@3.13)/libexec/bin" >> "$GITHUB_PATH"
       - name: Test publisher packaging
-        run: python3 -m unittest discover -s tools -p test_arm64_fex_release.py -v
-      - name: Build the installer CLI
-        run: cargo build --release --locked -p nucleon-cli
+        run: cargo test --locked -p nucleon-devtools
+      - name: Build the Rust publisher
+        run: cargo build --release --locked -p nucleon-devtools
       - name: Compile, package and validate the installed runtime
         env:
           REQUESTED_VERSION: ${{ inputs.version || github.ref_name }}
         run: |
-          python3 tools/arm64_fex_release.py build \
+          target/release/nucleon-devtools release build \
             --version "$REQUESTED_VERSION" \
             --work target/runtime-release \
             --output target/runtime-release-assets \
-            --nucleon target/release/nucleon --jobs 2
+            --jobs 2
       - name: Retain release assets
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

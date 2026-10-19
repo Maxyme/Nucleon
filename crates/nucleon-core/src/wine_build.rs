@@ -3,16 +3,19 @@
 //! Download a reviewed Wine build or rebuild one matched PE module into a new
 //! runtime copy. No global environment, original runtime, or active selection
 //! is modified. Runtime artifacts retain Wine's LGPL license.
-use crate::{fs_util::atomic_write_file, paths, wine};
+use crate::{
+    artifacts::{copy_tree, digest},
+    fs_util::atomic_write_file,
+    paths, wine,
+};
 use anyhow::{Context, Result, bail, ensure};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fs;
-use std::io::{Read, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::Duration;
 
 pub const RECOMMENDED_VERSION: &str = "11.18";
 const RECIPE: &str = include_str!("../../../assets/wine/recipes/11.18.toml");
@@ -102,20 +105,6 @@ fn require_macos() -> Result<()> {
     Ok(())
 }
 
-fn digest(path: &Path) -> Result<String> {
-    let mut file = fs::File::open(path).with_context(|| format!("Read {}", path.display()))?;
-    let mut hasher = Sha256::new();
-    let mut buffer = [0u8; 65536];
-    loop {
-        let length = file.read(&mut buffer)?;
-        if length == 0 {
-            break;
-        }
-        hasher.update(&buffer[..length]);
-    }
-    Ok(format!("{:x}", hasher.finalize()))
-}
-
 fn verify(path: &Path, expected: &str) -> Result<()> {
     ensure!(
         digest(path)? == expected,
@@ -144,16 +133,9 @@ fn archive(
         return Ok(path);
     }
     log::info!("Downloading reviewed Wine {kind} archive: {url}");
-    let agent = ureq::AgentBuilder::new()
-        .timeout_connect(Duration::from_secs(20))
-        .timeout_read(Duration::from_secs(60))
-        .build();
-    let response = agent
-        .get(url)
-        .call()
-        .with_context(|| format!("Download {url}"))?;
+    let mut download = crate::artifacts::download(url, 2 * 1024 * 1024 * 1024)?;
     let mut temporary = tempfile::NamedTempFile::new_in(&dir)?;
-    std::io::copy(&mut response.into_reader(), &mut temporary)?;
+    std::io::copy(&mut download, &mut temporary)?;
     temporary.flush()?;
     verify(temporary.path(), expected)?;
     temporary
@@ -254,14 +236,7 @@ pub fn fetch(version: &str, output: &Path, supplied_archive: Option<&Path>) -> R
         .tempdir_in(output.parent().unwrap())?;
     let package = temporary.path().join("package");
     fs::create_dir(&package)?;
-    run(
-        clean_command("tar")
-            .arg("-xf")
-            .arg(&input)
-            .arg("-C")
-            .arg(&package),
-        "Extract Wine package",
-    )?;
+    crate::artifacts::unpack(&input, &package, 8 * 1024 * 1024 * 1024)?;
     let root = find_root(&package, 3)?;
     verify_core(&root, &recipe)?;
     for (file, expected) in &recipe.module_files {
@@ -274,29 +249,6 @@ pub fn fetch(version: &str, output: &Path, supplied_archive: Option<&Path>) -> R
     )?;
     publish(&package, &output)?;
     Ok(output.join(relative))
-}
-
-fn copy_tree(source: &Path, destination: &Path) -> Result<()> {
-    fs::create_dir(destination)?;
-    for entry in fs::read_dir(source)? {
-        let entry = entry?;
-        let source = entry.path();
-        let destination = destination.join(entry.file_name());
-        let kind = entry.file_type()?;
-        if kind.is_dir() {
-            copy_tree(&source, &destination)?;
-        } else if kind.is_symlink() {
-            #[cfg(unix)]
-            std::os::unix::fs::symlink(fs::read_link(&source)?, &destination)?;
-            #[cfg(not(unix))]
-            bail!("Runtime symlinks require Unix");
-        } else if kind.is_file() {
-            fs::copy(&source, &destination)?;
-        } else {
-            bail!("Unsupported runtime filesystem entry: {}", source.display());
-        }
-    }
-    Ok(())
 }
 
 /// Create artifact directories without following symlinks inherited from Wine.
@@ -389,14 +341,7 @@ pub fn build(options: &BuildOptions) -> Result<PathBuf> {
     let work = tempfile::Builder::new()
         .prefix("nucleon-wine-build-")
         .tempdir()?;
-    run(
-        clean_command("tar")
-            .arg("-xf")
-            .arg(&input)
-            .arg("-C")
-            .arg(work.path()),
-        "Extract matching Wine source",
-    )?;
+    crate::artifacts::unpack(&input, work.path(), 8 * 1024 * 1024 * 1024)?;
     let source = work.path().join(format!("wine-{}", recipe.version));
     let patch_path = work.path().join("nucleon.patch");
     fs::write(&patch_path, options.patch.payload())?;

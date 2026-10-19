@@ -1,5 +1,9 @@
 # Native ARM64 Wine + FEX on macOS
 
+> Historical investigation: Python command examples below describe the tooling at
+> the time of the experiment. The maintained Rust commands are in
+> [tools/README.md](tools/README.md). Recorded results remain historical evidence.
+
 Investigation and prototype date: 2026-10-15. This is an isolated experimental
 runtime. DiRT Rally 2.0 and DMC5 reached their title screen/menu through native
 Steam, confirmed by the user. Gameplay and performance remain unverified;

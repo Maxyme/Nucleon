@@ -27,27 +27,8 @@ fn resolve_wine_override(
     game_profile: &LaunchOverride,
     profile_source: &str,
 ) -> Result<Option<PathBuf>> {
-    let selected = if let Some(value) = config::environment("NUCLEON_WINE")? {
-        Some(("NUCLEON_WINE".to_string(), value))
-    } else if let Some(value) = config::environment("NUCLEON_WINE_PATH")? {
-        Some(("NUCLEON_WINE_PATH".to_string(), value))
-    } else if let Some(value) = config::environment("WINE_PATH")? {
-        Some(("WINE_PATH".to_string(), value))
-    } else {
-        game_profile
-            .wine
-            .clone()
-            .map(|v| (format!("{profile_source}: wine"), v))
-    };
-    if let Some((source, value)) = selected {
-        let runtime = (!value.trim().is_empty()).then(|| nucleon_core::wine::resolve_wine_runtime_by_query(&value)).flatten()
-            .ok_or_else(|| config::invalid(&source, &value, "Wine runtime was not found",
-                "Run 'nucleon wine list' and choose an installed name or path, or remove this override."))?;
-        trace_runner(&format!(
-            "Wine selection from {source}: '{}' -> {}",
-            runtime.name,
-            runtime.root.display()
-        ));
+    if let Some(value) = &game_profile.wine {
+        let runtime = nucleon_core::runtime_selection::named(value).with_context(|| format!("Invalid {profile_source}: wine={value:?}; run 'nucleon wine list' and choose an exact installed ID or path"))?;
         return Ok(Some(runtime.root));
     }
     // A stale saved global selection must not silently select a different runtime.
@@ -62,7 +43,7 @@ fn resolve_wine_override(
                 "Run 'nucleon wine list', then 'nucleon wine use <name>', or 'nucleon wine reset'.",
             ));
         }
-        return Ok(None);
+        return Ok(nucleon_core::wine::resolve_wine_runtime_by_query(value).map(|r| r.root));
     }
     config::component_path(
         &[],
@@ -104,9 +85,34 @@ fn environment_boolean(name: &str) -> Result<Option<bool>> {
         .transpose()
 }
 
-fn validate_graphics_paths(profile: &LaunchOverride, source: &str) -> Result<()> {
+fn validate_graphics_paths(
+    profile: &LaunchOverride,
+    source: &str,
+    runtime: Option<&ResolvedRuntime>,
+    engine: Option<nucleon_core::detector::TargetEngine>,
+) -> Result<()> {
+    use nucleon_core::detector::TargetEngine;
+    let automatic = engine.is_none_or(|e| e == TargetEngine::Auto);
+    let uses_dxmt = automatic || engine == Some(TargetEngine::Dxmt);
+    let uses_dxvk = automatic
+        || matches!(
+            engine,
+            Some(TargetEngine::Dxvk | TargetEngine::Vkd3d | TargetEngine::KosmicKrisp)
+        );
+    let uses_vkd3d = automatic
+        || matches!(
+            engine,
+            Some(TargetEngine::Vkd3d | TargetEngine::KosmicKrisp)
+        );
+    let uses_d7vk = automatic || engine == Some(TargetEngine::KosmicKrisp);
+    let uses_vulkan = uses_dxvk || uses_vkd3d || uses_d7vk;
+    let bundled = runtime.map(|r| &r.graphics);
     use nucleon_core::{d7vk, dxmt, dxvk, vkd3d};
-    if config::environment("DXVK_PATH")?.is_some() || profile.dxvk_path.is_none() {
+    if config::environment("DXVK_PATH")?.is_some()
+        || (uses_dxvk
+            && profile.dxvk_path.is_none()
+            && bundled.and_then(|b| b.dxvk.as_ref()).is_none())
+    {
         config::component_path(
             &["DXVK_PATH"],
             &dxvk::custom_dxvk_path_file(),
@@ -115,27 +121,39 @@ fn validate_graphics_paths(profile: &LaunchOverride, source: &str) -> Result<()>
             |p| dxvk::inspect_candidate_dir(p).is_some(),
         )?;
     }
-    config::component_path(
-        &["DXMT_PATH"],
-        &dxmt::custom_dxmt_path_file(),
-        "DXMT bundle was not found (expected d3d11.dll and Metal components)",
-        "nucleon dxmt clear-path",
-        |p| dxmt::inspect_candidate_dir(p).is_some(),
-    )?;
-    config::component_path(
-        &["VKD3D_PROTON_PATH", "VKD3D_PATH"],
-        &vkd3d::custom_vkd3d_path_file(),
-        "VKD3D-Proton bundle was not found (expected d3d12.dll)",
-        "nucleon vkd3d clear-path",
-        |p| vkd3d::inspect_candidate_dir(p).is_some(),
-    )?;
-    config::component_path(
-        &["D7VK_PATH"],
-        &d7vk::custom_d7vk_path_file(),
-        "D7VK bundle was not found (expected ddraw.dll)",
-        "nucleon d7vk clear-path",
-        |p| d7vk::inspect_candidate_dir(p).is_some(),
-    )?;
+    if (uses_dxmt && bundled.and_then(|b| b.dxmt.as_ref()).is_none())
+        || env::var_os("DXMT_PATH").is_some()
+    {
+        config::component_path(
+            &["DXMT_PATH"],
+            &dxmt::custom_dxmt_path_file(),
+            "DXMT bundle was not found (expected d3d11.dll and Metal components)",
+            "nucleon dxmt clear-path",
+            |p| dxmt::inspect_candidate_dir(p).is_some(),
+        )?;
+    }
+    if (uses_vkd3d && bundled.and_then(|b| b.vkd3d.as_ref()).is_none())
+        || ["VKD3D_PROTON_PATH", "VKD3D_PATH"]
+            .iter()
+            .any(|n| env::var_os(n).is_some())
+    {
+        config::component_path(
+            &["VKD3D_PROTON_PATH", "VKD3D_PATH"],
+            &vkd3d::custom_vkd3d_path_file(),
+            "VKD3D-Proton bundle was not found (expected d3d12.dll)",
+            "nucleon vkd3d clear-path",
+            |p| vkd3d::inspect_candidate_dir(p).is_some(),
+        )?;
+    }
+    if uses_d7vk || env::var_os("D7VK_PATH").is_some() {
+        config::component_path(
+            &["D7VK_PATH"],
+            &d7vk::custom_d7vk_path_file(),
+            "D7VK bundle was not found (expected ddraw.dll)",
+            "nucleon d7vk clear-path",
+            |p| d7vk::inspect_candidate_dir(p).is_some(),
+        )?;
+    }
     if config::environment("DXVK_PATH")?.is_none()
         && let Some(path) = &profile.dxvk_path
         && dxvk::inspect_candidate_dir(path).is_none()
@@ -174,7 +192,11 @@ fn validate_graphics_paths(profile: &LaunchOverride, source: &str) -> Result<()>
             driver_override = true;
         }
     }
-    if !driver_override && profile.vulkan_icd.is_none() {
+    if uses_vulkan
+        && !driver_override
+        && profile.vulkan_icd.is_none()
+        && bundled.and_then(|b| b.vulkan_icd.as_ref()).is_none()
+    {
         let saved = runner::custom_kosmickrisp_path_file();
         if let Some(value) = config::optional_file(&saved)? {
             let info = runner::inspect_kosmickrisp_candidate(Path::new(value.trim()), None)
@@ -613,35 +635,7 @@ fn run_with_args_inner(args: &[String], session: &mut RunSession) -> Result<RunO
     // that dialog with no input pump, presenting as an engine-independent hang before Direct3D is
     // ever touched. It also silently mutates a Steam-managed game directory.
 
-    let fex_selection = config::environment(nucleon_core::steam::fex::SELECTION_ENV)?
-        .map(|path| nucleon_core::steam::fex::load_selection(Path::new(&path)))
-        .transpose()?;
     let explicit_profile = config::environment("NUCLEON_GAME_PROFILE")?.map(PathBuf::from);
-    let profile_path = explicit_profile.clone().or_else(|| {
-        compat_appid
-            .as_ref()
-            .map(|id| paths::game_profiles_dir(fex_selection.is_some()).join(format!("{id}.json")))
-    });
-    let profile_source = profile_path
-        .as_ref()
-        .map(|p| p.display().to_string())
-        .unwrap_or_else(|| "game profile".into());
-    let loaded_profile = profile_path
-        .as_deref()
-        .map(load_launch_settings)
-        .transpose()?
-        .flatten();
-    if explicit_profile.is_some() && loaded_profile.is_none() {
-        bail!("Explicit game profile was not found: {profile_source}");
-    }
-    let game_profile =
-        loaded_profile
-            .unwrap_or_default()
-            .with_defaults(if fex_selection.is_some() {
-                LaunchOverride::fex_default(compat_appid.as_deref().unwrap_or(""))
-            } else {
-                LaunchOverride::default()
-            });
     let override_path = compat_appid
         .as_ref()
         .map(|id| paths::support_dir().join(format!("launch_override_{id}.json")));
@@ -658,6 +652,126 @@ fn run_with_args_inner(args: &[String], session: &mut RunSession) -> Result<RunO
             .transpose()?
             .flatten()
     };
+    let cli_request = launch_override
+        .as_ref()
+        .is_some_and(|p| p.wine.is_some() || p.emulator.is_some());
+    let environment_wine = if cli_request {
+        None
+    } else {
+        ["NUCLEON_WINE", "NUCLEON_WINE_PATH", "WINE_PATH"]
+            .iter()
+            .map(|key| config::environment(key).map(|value| value.map(|v| ((*key).to_string(), v))))
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .flatten()
+            .next()
+    };
+    let emulator_env = if cli_request {
+        None
+    } else {
+        config::environment("NUCLEON_EMULATOR")?
+    };
+    let emulator = launch_override
+        .as_ref()
+        .and_then(|p| p.emulator)
+        .or(emulator_env
+            .as_deref()
+            .map(str::parse)
+            .transpose()
+            .context("Invalid NUCLEON_EMULATOR")?);
+    let wine_request = launch_override
+        .as_ref()
+        .and_then(|p| p.wine.as_deref())
+        .or(environment_wine.as_ref().map(|(_, value)| value.as_str()));
+    let request_source = environment_wine
+        .as_ref()
+        .map(|(name, _)| name.as_str())
+        .unwrap_or(&override_source);
+    let explicit_runtime = nucleon_core::runtime_selection::resolve(wine_request, emulator)
+        .with_context(|| format!("Invalid runtime request from {request_source}"))?;
+    let explicit_runtime_request = explicit_runtime.is_some();
+    // An explicit launch request supersedes tool defaults, including a stale FEX pin.
+    let fex_selection = if explicit_runtime_request {
+        None
+    } else {
+        config::environment(nucleon_core::steam::fex::SELECTION_ENV)?
+            .map(|path| nucleon_core::steam::fex::load_selection(Path::new(&path)))
+            .transpose()?
+    };
+    let mut selected_runtime = explicit_runtime.or(fex_selection);
+    let mut is_fex = selected_runtime
+        .as_ref()
+        .is_some_and(|r| r.mode == nucleon_core::runtime::ExecutionMode::Arm64Fex);
+    let loaded_native_profile = is_fex;
+    let mut profile_path = explicit_profile.clone().or_else(|| {
+        compat_appid
+            .as_ref()
+            .map(|id| paths::game_profiles_dir(is_fex).join(format!("{id}.json")))
+    });
+    let mut profile_source = profile_path
+        .as_ref()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| "game profile".into());
+    let loaded_profile = profile_path
+        .as_deref()
+        .map(load_launch_settings)
+        .transpose()?
+        .flatten();
+    if explicit_profile.is_some() && loaded_profile.is_none() {
+        bail!("Explicit game profile was not found: {profile_source}");
+    }
+    let mut game_profile = loaded_profile.unwrap_or_default();
+    let wine_override_root = if let Some(runtime) = &selected_runtime {
+        if !explicit_runtime_request && let Some(query) = &game_profile.wine {
+            let actual = nucleon_core::runtime_selection::named(query)?;
+            if actual.root != runtime.root {
+                bail!(
+                    "ARM64/FEX Steam tool pins {}. Remove the conflicting wine field from {} or register the intended native runtime",
+                    runtime.root.display(),
+                    profile_source
+                );
+            }
+        }
+        Some(runtime.root.clone())
+    } else {
+        let root = if game_profile.emulator.is_some() {
+            nucleon_core::runtime_selection::resolve(
+                game_profile.wine.as_deref(),
+                game_profile.emulator,
+            )?
+            .map(|r| r.root)
+        } else {
+            resolve_wine_override(&game_profile, &profile_source)?
+        };
+        if let Some(root) = &root {
+            let runtime = ResolvedRuntime::inspect(root)?;
+            is_fex = runtime.mode == nucleon_core::runtime::ExecutionMode::Arm64Fex;
+            selected_runtime = Some(runtime);
+        }
+        root
+    };
+    // A legacy ordinary profile may select a native runtime. Its graphics settings
+    // come from the native namespace, exactly as with an explicit CLI selection.
+    if is_fex && !loaded_native_profile && explicit_profile.is_none() {
+        profile_path = compat_appid
+            .as_ref()
+            .map(|id| paths::game_profiles_dir(true).join(format!("{id}.json")));
+        profile_source = profile_path
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "game profile".into());
+        game_profile = profile_path
+            .as_deref()
+            .map(load_launch_settings)
+            .transpose()?
+            .flatten()
+            .unwrap_or_default();
+    }
+    if is_fex {
+        game_profile = game_profile.with_defaults(LaunchOverride::fex_default(
+            compat_appid.as_deref().unwrap_or(""),
+        ));
+    }
     let engine_env = if launch_override
         .as_ref()
         .and_then(|o| o.engine.as_ref())
@@ -678,7 +792,7 @@ fn run_with_args_inner(args: &[String], session: &mut RunSession) -> Result<RunO
         requested_engine,
         None | Some(nucleon_core::detector::TargetEngine::Auto)
     ) {
-        if fex_selection.is_some()
+        if (is_fex || explicit_runtime_request)
             && env::var_os("NUCLEON_BACKEND").is_none()
             && env::var_os("NUCLEON_GRAPHICS_BACKEND").is_none()
         {
@@ -689,27 +803,12 @@ fn run_with_args_inner(args: &[String], session: &mut RunSession) -> Result<RunO
     } else {
         nucleon_core::backend::GraphicsBackend::Auto
     };
-    let wine_override_root = if let Some(pinned) = &fex_selection {
-        if let Some(selected) = launch_override
-            .as_ref()
-            .and_then(|p| p.wine.as_ref())
-            .or(game_profile.wine.as_ref())
-        {
-            let actual = nucleon_core::wine::resolve_wine_runtime_by_query(selected)
-                .context("Profile Wine runtime was not found")?;
-            if actual.root.canonicalize()? != pinned.root {
-                bail!(
-                    "ARM64/FEX Steam tool pins {}. Remove the conflicting wine field from {} or register the intended native runtime",
-                    pinned.root.display(),
-                    profile_source
-                );
-            }
-        }
-        Some(pinned.root.clone())
-    } else {
-        resolve_wine_override(&game_profile, &profile_source)?
-    };
-    validate_graphics_paths(&game_profile, &profile_source)?;
+    validate_graphics_paths(
+        &game_profile,
+        &profile_source,
+        selected_runtime.as_ref(),
+        requested_engine,
+    )?;
     let enable_hud = match launch_override
         .as_ref()
         .and_then(|o| o.hud)
@@ -731,7 +830,7 @@ fn run_with_args_inner(args: &[String], session: &mut RunSession) -> Result<RunO
     };
 
     let mut resolved_graphics = None;
-    let mut resolved_runtime = fex_selection.clone();
+    let mut resolved_runtime = selected_runtime.clone();
     let detection = nucleon_core::detector::detect_target_engine(&target_exe);
     let mut effective_profile = game_profile.clone();
     effective_profile.graphics_api = launch_override
@@ -745,7 +844,9 @@ fn run_with_args_inner(args: &[String], session: &mut RunSession) -> Result<RunO
     let graphics_api = effective_profile.graphics_api(&target_exe, &detection.api)?;
     let (engine, api_desc) = match requested_engine {
         Some(nucleon_core::detector::TargetEngine::Auto) | None => {
-            let custom_wine = game_profile.wine.is_some()
+            let custom_wine = explicit_runtime_request
+                || is_fex
+                || game_profile.wine.is_some()
                 || ["NUCLEON_WINE", "NUCLEON_WINE_PATH", "WINE_PATH"]
                     .iter()
                     .any(|key| env::var_os(key).is_some());
@@ -769,7 +870,7 @@ fn run_with_args_inner(args: &[String], session: &mut RunSession) -> Result<RunO
                         None
                     };
                     root.map(|root| -> Result<_> {
-                        let runtime = match &fex_selection {
+                        let runtime = match &selected_runtime {
                             Some(pinned) => pinned.clone(),
                             None => ResolvedRuntime::inspect(&root)?,
                         };
@@ -815,7 +916,12 @@ fn run_with_args_inner(args: &[String], session: &mut RunSession) -> Result<RunO
         }
     };
 
-    if fex_selection.is_some() && engine == nucleon_core::detector::TargetEngine::Gptk {
+    if explicit_runtime_request && engine == nucleon_core::detector::TargetEngine::Gptk {
+        bail!(
+            "An explicit Wine selection cannot use the separate GPTK runner; choose auto, dxmt, dxvk, vkd3d, kosmickrisp or wine"
+        );
+    }
+    if is_fex && engine == nucleon_core::detector::TargetEngine::Gptk {
         bail!(
             "ARM64/FEX cannot use the Intel GPTK engine. Choose auto, dxmt, vkd3d, dxvk or wine in its profile"
         );
@@ -826,13 +932,6 @@ fn run_with_args_inner(args: &[String], session: &mut RunSession) -> Result<RunO
         api_desc,
         engine
     ));
-
-    if launch_override.is_some()
-        && let Some(path) = override_path
-    {
-        fs::remove_file(&path)
-            .with_context(|| format!("Cannot consume launch override {}", path.display()))?;
-    }
 
     // Per-game Wine is already resolved; use it for execution as well as preflight.
     let (runner_dir, active_engine) = if engine != nucleon_core::detector::TargetEngine::Gptk
@@ -852,6 +951,7 @@ fn run_with_args_inner(args: &[String], session: &mut RunSession) -> Result<RunO
         Some(runtime) if runtime.root == runner_dir.canonicalize()? => runtime,
         _ => ResolvedRuntime::inspect(&runner_dir)?,
     };
+    nucleon_core::runtime_selection::check_host(&runtime)?;
     effective_profile.apply_protocol(&mut runtime)?;
     let pfx_dir = paths::game_prefix(&compat_data_path, &runtime);
     let runner_dir = runtime.root.clone();
@@ -889,6 +989,13 @@ fn run_with_args_inner(args: &[String], session: &mut RunSession) -> Result<RunO
         plan.runtime.mode,
         plan.runtime.unix_dir.display()
     ));
+
+    if launch_override.is_some()
+        && let Some(path) = override_path
+    {
+        fs::remove_file(&path)
+            .with_context(|| format!("Cannot consume launch override {}", path.display()))?;
+    }
 
     let term_flag = termination_flag()?;
     let _runtime_lease = nucleon_core::managed_runtime::lease(&plan.runtime.root)?;

@@ -1,5 +1,9 @@
 # Integrating the ARM64/FEX prototype into Nucleon
 
+> Historical investigation: Python command examples below describe the tooling at
+> the time of the experiment. The maintained Rust commands are in
+> [tools/README.md](tools/README.md). Recorded results remain historical evidence.
+
 Investigation: 2026-10-15, against `44e07ca`. Source inspection and existing
 local test receipts only; no game was launched or runtime selection changed.
 

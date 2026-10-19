@@ -37,7 +37,7 @@ The descriptor records:
   override runtime search paths, prefix selection or disable memory ordering.
 
 The descriptor describes a complete runtime directory. It cannot reference
-build-tree siblings using `../`. The Python build tools can assemble a complete local developer generation.
+build-tree siblings using `../`. The Rust developer tools can assemble a complete local developer generation.
 The managed installer imports them outside the build tree; compilation stays a developer action.
 
 `nucleon wine status` reports resolved execution capabilities or the descriptor
@@ -50,7 +50,7 @@ that complete runtime (none of these commands starts Steam or a game):
 
 ```sh
 cargo build -p nucleon-cli -p nucleon-runner
-python3 tools/arm64_fex_dx12.py prepare-runtime
+cargo run --release -p nucleon-devtools -- dx12 prepare-runtime
 ./target/debug/nucleon wine fex install /absolute/path/printed/by/prepare-runtime --register
 ./target/debug/nucleon wine fex status
 ```
@@ -208,7 +208,7 @@ preparation. Managed import verifies the same contract after relocation.
 These local provenance records establish pairing and integrity; they are not a
 signed certification of arbitrary binaries or gameplay compatibility.
 
-`tools/arm64ec_graphics.py prepare-runtime --base-runtime /path/to/baseline`
+`nucleon-devtools frontend prepare-runtime --base-runtime /path/to/baseline`
 copies an existing descriptor-backed runtime into a separate
 `target/arm64-fex/arm64ec-integrated/<generation>` directory. It packages retained
 ARM64EC Vulkan builds and gives them an experimental prefix family. With an
@@ -325,3 +325,24 @@ cargo test -p nucleon-core --test native_runtime -- --ignored
 
 These changes do not establish DMC5 gameplay stability or resolve the prototype's
 two sparse-depth driver failures.
+
+## Per-launch runtime selection
+
+`nucleon launch <appid> --wine <exact-id-or-path>` chooses one complete runtime.
+`--emulator rosetta` selects the configured Intel Wine default; `--emulator fex`
+selects the registered native FEX generation (`fex-preview`). Combining the flags
+constrains that Wine's mode. `--engine` remains the graphics choice.
+
+Explicit CLI requests are resolved and pinned into the one-shot launch file,
+so an already-running Steam client receives them. They supersede inherited tool
+defaults for that launch, including a stale FEX tool pin. Mode-specific profiles
+are selected from the effective runtime, not the tool name. Failed preflight
+retains the request; no prefix is created. Incompatible guest ABIs, emulators and
+separate GPTK runner requests fail rather than changing the selected Wine.
+
+`nucleon wine list` includes managed native generations. `wine use <native-id-or-path>`
+and `wine set-path <native-path>` update the FEX registration while preserving the
+Intel default. No per-launch request changes either saved default. Invalid unused
+saved graphics paths no longer block a selected bundled/independent route; explicit
+invalid overrides still report their source. A broken experimental registration
+is reported without aborting refresh of unrelated Steam tools.

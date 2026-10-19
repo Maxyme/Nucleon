@@ -102,6 +102,7 @@ fn invalid_environment_overrides_fail_before_prefix_setup_and_are_logged() {
             "Select a readable ICD",
         ),
         ("NUCLEON_WINE", "", "nucleon wine list"),
+        ("NUCLEON_EMULATOR", "box64", "choose rosetta or fex"),
     ] {
         let dir = tempfile::tempdir().unwrap();
         let output = Command::new(env!("CARGO_BIN_EXE_nucleon-runner"))
@@ -115,6 +116,102 @@ fn invalid_environment_overrides_fail_before_prefix_setup_and_are_logged() {
         let log = runner_log(dir.path());
         assert!(log.contains(name) && log.contains(correction), "{log}");
         assert!(!dir.path().join("default_prefix/pfx").exists());
+    }
+}
+
+#[test]
+fn one_shot_wine_takes_precedence_over_environment_and_saved_defaults() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("launch_override_123.json");
+    fs::write(
+        &path,
+        r#"{"wine":"/missing/explicit-runtime","engine":"wine"}"#,
+    )
+    .unwrap();
+    fs::write(dir.path().join("active_wine.txt"), "").unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_nucleon-runner"))
+        .env_clear()
+        .env("NUCLEON_SUPPORT_DIR", dir.path())
+        .env("STEAM_COMPAT_APP_ID", "123")
+        .env("NUCLEON_WINE", "/missing/environment-runtime")
+        .env("NUCLEON_EMULATOR", "box64")
+        .env("NUCLEON_FEX_SELECTION", "/missing/tool-pin")
+        .args(["run", "/missing/game.exe"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let log = runner_log(dir.path());
+    assert!(log.contains("/missing/explicit-runtime"), "{log}");
+    assert!(!log.contains("saved Wine runtime was not found"), "{log}");
+    assert!(path.is_file());
+    assert!(!dir.path().join("default_prefix").exists());
+}
+
+#[test]
+#[ignore = "requires NUCLEON_TEST_ARM64_RUNTIME; preflight only, never executes Wine"]
+fn native_requests_use_scoped_profiles_ignore_unused_saved_paths_and_preserve_overrides() {
+    let root = std::path::PathBuf::from(std::env::var_os("NUCLEON_TEST_ARM64_RUNTIME").unwrap())
+        .canonicalize()
+        .unwrap();
+    let exe = root.join("lib/wine/aarch64-windows/wineboot.exe");
+    assert!(exe.is_file());
+    for case in [
+        "control",
+        "stale-paths",
+        "mode-conflict",
+        "native-profile",
+        "stale-tool",
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let mut request = serde_json::json!({"wine":root,"emulator":"fex","engine":"wine"});
+        if case == "mode-conflict" {
+            request["emulator"] = "rosetta".into();
+        }
+        if case == "stale-paths" {
+            for source in [
+                nucleon_core::dxvk::custom_dxvk_path_file(),
+                nucleon_core::dxmt::custom_dxmt_path_file(),
+                nucleon_core::vkd3d::custom_vkd3d_path_file(),
+                nucleon_core::d7vk::custom_d7vk_path_file(),
+                nucleon_core::runner::custom_kosmickrisp_path_file(),
+            ] {
+                fs::write(
+                    dir.path().join(source.file_name().unwrap()),
+                    "/missing/unrelated-component",
+                )
+                .unwrap();
+            }
+        }
+        if case == "native-profile" {
+            let profiles = dir.path().join("game_profiles/arm64-fex");
+            fs::create_dir_all(&profiles).unwrap();
+            fs::write(profiles.join("123.json"), r#"{"overlay":"wrong-type"}"#).unwrap();
+        }
+        let override_file = dir.path().join("launch_override_123.json");
+        fs::write(&override_file, request.to_string()).unwrap();
+        let mut command = Command::new(env!("CARGO_BIN_EXE_nucleon-runner"));
+        command
+            .env_clear()
+            .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+            .env("NUCLEON_SUPPORT_DIR", dir.path())
+            .env("STEAM_COMPAT_APP_ID", "123")
+            .env("NUCLEON_RUN_SECONDS", "0");
+        if case == "stale-tool" {
+            command
+                .env("NUCLEON_FEX_SELECTION", "/missing/old-tool-pin")
+                .env("NUCLEON_ENGINE", "gptk");
+        }
+        let output = command.arg("run").arg(&exe).output().unwrap();
+        assert!(!output.status.success());
+        let log = runner_log(dir.path());
+        let expected = match case {
+            "mode-conflict" => "Requested emulator rosetta",
+            "native-profile" => "field `overlay`",
+            _ => "NUCLEON_RUN_SECONDS must be a positive number",
+        };
+        assert!(log.contains(expected), "{case}: {log}");
+        assert!(override_file.is_file());
+        assert!(!dir.path().join("default_prefix").exists());
     }
 }
 

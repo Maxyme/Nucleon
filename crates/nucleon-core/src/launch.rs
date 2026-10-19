@@ -74,12 +74,18 @@ impl GraphicsComponents {
                 Ok(VulkanDriver { manifest, library })
             })
             .collect::<Result<Vec<_>>>()?;
+        let dxmt_override = std::env::var_os("DXMT_PATH").map(PathBuf::from);
+        let vkd3d_override = std::env::var_os("VKD3D_PROTON_PATH")
+            .or_else(|| std::env::var_os("VKD3D_PATH"))
+            .map(PathBuf::from);
         let mut selected = Self {
             dxmt: if runtime.graphics.frontend_abi == crate::runtime::FrontendAbi::Arm64Ec {
                 None
             } else {
                 bundle(
-                    runtime.graphics.dxmt.as_deref(),
+                    dxmt_override
+                        .as_deref()
+                        .or(runtime.graphics.dxmt.as_deref()),
                     crate::dxmt::inspect_candidate_dir,
                     crate::dxmt::find_dxmt,
                 )?
@@ -90,7 +96,9 @@ impl GraphicsComponents {
                 crate::dxvk::find_dxvk,
             )?,
             vkd3d: bundle(
-                runtime.graphics.vkd3d.as_deref(),
+                vkd3d_override
+                    .as_deref()
+                    .or(runtime.graphics.vkd3d.as_deref()),
                 crate::vkd3d::inspect_candidate_dir,
                 crate::vkd3d::find_vkd3d_proton,
             )?,

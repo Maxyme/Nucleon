@@ -27,6 +27,7 @@ zip = { workspace = true }
 tar = { workspace = true }
 flate2 = { workspace = true }
 zstd = { workspace = true }
+lzma-rs = "0.3"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics = { workspace = true }

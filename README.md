@@ -52,6 +52,25 @@ Prebuilt ARM64 Wine/FEX core runtime prereleases are built separately from the
 Nucleon CLI. See [runtime releases](RUNTIME-RELEASES.md) for publisher automation,
 source/license contents, installation commands and the current graphics limits.
 
+Select a complete installed Wine runtime per launch:
+
+```sh
+nucleon launch 690790 --wine fex-preview --engine dxmt
+nucleon launch 690790 --emulator fex --engine dxmt
+nucleon launch 690790 --emulator rosetta --engine dxvk
+```
+
+`--wine` accepts an exact installed ID or runtime path. `--emulator rosetta`
+uses the ordinary configured Intel Wine; `--emulator fex` uses the runtime
+registered with `nucleon wine fex register` or `install --register`.
+Combining them constrains the selected runtime's mode. These options select
+complete compatible Wine builds, and do not change either default for one launch.
+Run `nucleon wine list` to see available IDs. The current FEX core prerelease
+remains blocked by its x86 execution check and omits the developer graphics stack.
+
+Developer builds, packaging and isolated diagnostics use the separate Rust
+[`nucleon-devtools` CLI](tools/README.md).
+
 ## Development
 
 ```sh

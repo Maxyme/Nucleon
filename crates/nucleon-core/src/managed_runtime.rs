@@ -482,6 +482,16 @@ pub fn install_archive(path: &Path, expected: &str) -> Result<PathBuf> {
     import_archive(fs::File::open(path)?, &path.to_string_lossy(), expected)
 }
 
+/// The normal importer with an explicit store for isolated publisher validation.
+pub fn install_archive_at(path: &Path, expected: &str, store: &Path) -> Result<PathBuf> {
+    import_archive_to(
+        fs::File::open(path)?,
+        &path.to_string_lossy(),
+        expected,
+        store,
+    )
+}
+
 pub fn install_url(url: &str, expected: &str) -> Result<PathBuf> {
     ensure!(
         url.starts_with("https://"),

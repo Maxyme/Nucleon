@@ -175,7 +175,7 @@ pub(crate) fn extract_with_limit(
     Ok(())
 }
 
-fn extract_tar(reader: impl Read, directory: &Path, limit: u64) -> Result<()> {
+pub(crate) fn extract_tar(reader: impl Read, directory: &Path, limit: u64) -> Result<()> {
     let mut archive = tar::Archive::new(reader);
     let mut size = 0u64;
     for entry in archive.entries()? {

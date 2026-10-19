@@ -5,6 +5,7 @@ members = [
     "crates/nucleon-runner",
     "crates/nucleon-hook",
     "crates/nucleon-cli",
+    "crates/nucleon-devtools",
 ]
 
 [workspace.package]

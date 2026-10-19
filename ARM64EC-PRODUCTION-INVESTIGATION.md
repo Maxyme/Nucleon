@@ -1,5 +1,9 @@
 # ARM64EC frontend production investigation
 
+> Historical investigation: Python command examples below describe the tooling at
+> the time of the experiment. The maintained Rust commands are in
+> [tools/README.md](tools/README.md). Recorded results remain historical evidence.
+
 Investigated 2026-10-16 on `codex/arm64-fex-dx12`, HEAD `322becd`, with the
 uncommitted fixes for recommendations 4–5 present. This investigation changes
 documentation only. No Wine, Steam, game, GPU probe, or installed runtime was run

@@ -1,3 +1,4 @@
+pub mod artifacts;
 pub mod backend;
 pub mod backend_files;
 mod binary_image;
@@ -22,6 +23,7 @@ pub mod process;
 pub mod profile;
 pub mod runner;
 pub mod runtime;
+pub mod runtime_selection;
 pub mod shader_cache;
 pub(crate) mod staging;
 pub mod steam;

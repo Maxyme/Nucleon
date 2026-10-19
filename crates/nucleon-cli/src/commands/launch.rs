@@ -1,10 +1,17 @@
-use anyhow::Result;
+use anyhow::{Result, ensure};
 use nucleon_core::{guard, paths, steam, validator};
 use std::process::Command;
 
-pub fn run_launch(appid: u32, hud: bool, engine: Option<String>) -> Result<()> {
-    if let Some(value) = engine.as_deref() {
-        nucleon_core::configuration::engine("--engine", value)?;
+pub fn run_launch(
+    appid: u32,
+    hud: bool,
+    engine: Option<String>,
+    wine: Option<String>,
+    emulator: Option<nucleon_core::runtime_selection::Emulator>,
+) -> Result<()> {
+    let request = prepare_request(hud, engine.as_deref(), wine.as_deref(), emulator)?;
+    if let Some(path) = &request.wine {
+        println!("  Wine: {path}");
     }
     println!("==> Launching game AppID {}...", appid);
 
@@ -17,27 +24,43 @@ pub fn run_launch(appid: u32, hud: bool, engine: Option<String>) -> Result<()> {
 
     // Persist launch overrides so nucleon-runner reads them even with running Steam
     let override_file = paths::support_dir().join(format!("launch_override_{appid}.json"));
-    let mut ov = serde_json::json!({
-        "hud": hud,
-    });
-    if let Some(ref eng) = engine {
-        ov["engine"] = serde_json::Value::String(eng.clone());
-    }
     paths::ensure_dirs()?;
-    nucleon_core::fs_util::atomic_write_file(&override_file, ov.to_string())?;
+    nucleon_core::fs_util::atomic_write_file(&override_file, serde_json::to_vec(&request)?)?;
 
     let mut cmd = Command::new("open");
     cmd.arg(format!("steam://run/{}", appid));
-    if hud {
-        cmd.env("MTL_HUD_ENABLED", "1");
-    }
-    if let Some(eng) = engine {
-        cmd.env("NUCLEON_ENGINE", eng);
-    }
-    cmd.status()?;
+    ensure!(cmd.status()?.success(), "Steam launch request failed");
     println!("  ✓ Sent launch command to Steam");
 
     Ok(())
+}
+
+fn prepare_request(
+    hud: bool,
+    engine: Option<&str>,
+    wine: Option<&str>,
+    emulator: Option<nucleon_core::runtime_selection::Emulator>,
+) -> Result<nucleon_core::profile::GameProfile> {
+    let selected_engine = engine
+        .map(|value| nucleon_core::configuration::engine("--engine", value))
+        .transpose()?;
+    let runtime = nucleon_core::runtime_selection::resolve(wine, emulator)?;
+    if let Some(runtime) = &runtime {
+        nucleon_core::runtime_selection::check_host(runtime)?;
+        ensure!(
+            selected_engine != Some(nucleon_core::detector::TargetEngine::Gptk),
+            "An explicit Wine selection cannot use the separate GPTK runner; choose auto, dxmt, dxvk, vkd3d, kosmickrisp or wine"
+        );
+    }
+    Ok(nucleon_core::profile::GameProfile {
+        hud: Some(hud),
+        engine: engine
+            .map(str::to_owned)
+            .or_else(|| runtime.as_ref().map(|_| "auto".into())),
+        wine: runtime.map(|r| r.root.to_string_lossy().into_owned()),
+        emulator,
+        ..Default::default()
+    })
 }
 
 pub fn run_validate(appid: u32) -> Result<()> {
@@ -63,4 +86,20 @@ pub fn run_validate(appid: u32) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn requests_keep_explicit_auto_and_reject_invalid_selectors_before_side_effects() {
+        let request = prepare_request(false, Some("auto"), None, None).unwrap();
+        assert_eq!(request.engine.as_deref(), Some("auto"));
+        assert_eq!(request.hud, Some(false));
+        assert!(request.wine.is_none());
+        assert!(prepare_request(false, Some("typo"), None, None).is_err());
+        let error =
+            prepare_request(false, None, Some("/missing/requested-runtime"), None).unwrap_err();
+        assert!(error.to_string().contains("/missing/requested-runtime"));
+    }
 }

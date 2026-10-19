@@ -56,13 +56,13 @@ experimental FEX Steam tool, without changing ordinary Intel/Rosetta Wine.
 ## Publisher
 
 On native Apple Silicon macOS, install Xcode Command Line Tools, Rust, Python
-3.12+, current Bison/Flex, CMake and Ninja. Build the CLI and run:
+3.9+ (required by upstream FEX), current Bison/Flex, CMake and Ninja. Build the Rust publisher and run:
 
 ```sh
-cargo build --release --locked -p nucleon-cli
-python3 tools/arm64_fex_release.py build --version 0.1.0-rc.1 \
+cargo build --release --locked -p nucleon-devtools
+target/release/nucleon-devtools release build --version 0.1.0-rc.1 \
   --work target/runtime-release --output target/runtime-release-assets \
-  --nucleon target/release/nucleon --jobs 2
+  --jobs 2
 ```
 
 Use a new output directory for each attempt. `package` can replace `build` to
@@ -88,9 +88,9 @@ scripts controlling compilation and installation. Its `sources/nucleon` tree
 contains the build recipes and publisher command above; that command fetches
 exact upstream revisions and the pinned compiler. The bundled patched sources
 remain available independently of those upstream servers for manual rebuilding
-with Wine's configure/make and FEX's CMake recipes in `tools/arm64_fex.py`.
+with Wine's configure/make and FEX's CMake recipes in `crates/nucleon-devtools/src/build.rs`.
 
-Before publishing, the packager imports the archive with the normal CLI into a
+Before publishing, the packager imports the archive through the same managed installer API as the normal CLI into a
 private temporary support directory, runs full installed integrity/dependency
 verification, executes the owned x64 and x86 memory/thread/exception/child-process
 workloads from that relocated installation, and waits for its Wine server to
@@ -123,3 +123,30 @@ bundled dependencies' own notices and the LLVM/MinGW runtime notices; Nucleon's 
 A source snapshot is not permission to redistribute unrelated proprietary
 binaries. Extending the package with graphics or SDK components requires adding
 their corresponding source and/or notices as applicable to those components.
+
+## Rust tooling migration (2026-10-18)
+
+The publisher and diagnostic/build workflows now use `nucleon-devtools`; see
+[the command guide](tools/README.md) and [simplification review](CODE-SIMPLIFICATION.md).
+Rust build/generation identities are schema 2; `publisher-build-rust.json` cannot
+be substituted with a Python build receipt. Runtime descriptors and pairing
+contracts retain schema 1. Source exports include patched tracked bytes and
+initialized pinned submodules; missing tracked files still fail, so commit the
+complete migration before building a tagged source-inclusive release.
+
+A local Rust packaging/import validation passed native closure/integrity and the
+x64 workload, then reproduced x86 `CreateProcessW` error 998. Cleanup passed.
+The [Rust migration validation record](tools/rust-tooling-validation.json)
+distinguishes executed checks from the remaining qualification work.
+This exercises the publication gates without weakening them or publishing assets.
+The updated GitHub publisher workflow has not been executed locally. To exercise
+the current built core independently, use a new diagnostic output directory:
+
+```sh
+target/release/nucleon-devtools release validate --version 0.1.0-rc.1 \
+  --work target/arm64-fex --output target/core-validation-attempt
+```
+
+This creates a temporary archive, imports it into isolated storage, runs both
+guest probes and retains logs. It deliberately exits nonzero on the known x86
+failure. It does not create release assets.

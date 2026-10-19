@@ -46,7 +46,7 @@ pub enum WineAction {
     },
     /// List all discovered Wine runtimes and show the currently active desired version
     List,
-    /// Select desired active Wine version for Steam (e.g. 'crossover', 'staging', 'dxmt', or path)
+    /// Select the Intel default, or register a FEX default without changing Intel Wine
     Use {
         /// Wine identifier, name keyword, or custom path
         version: String,
@@ -437,8 +437,7 @@ pub fn run(action: WineAction) -> Result<()> {
             ui::success(format!("Root path:  {}", rt.root.display()));
 
             if use_now {
-                let _ = wine::set_active_wine(&rt.id);
-                ui::success("Set as active Wine runtime for Steam.");
+                return run(WineAction::Use { version: rt.id });
             } else {
                 println!("\nTo switch to this Wine: nucleon wine use {}", rt.id);
             }
@@ -453,6 +452,18 @@ pub fn run(action: WineAction) -> Result<()> {
         }
         WineAction::Use { version } => {
             ui::header(format!("Setting active Wine runtime to '{}'...", version));
+            let requested = if version == "fex-preview" {
+                nucleon_core::runtime_selection::named(&version)?
+            } else {
+                wine::resolve_wine_runtime_by_query(&version)
+                    .context("Wine runtime was not found; run 'nucleon wine list'")?
+                    .capabilities()?
+            };
+            if requested.mode == nucleon_core::runtime::ExecutionMode::Arm64Fex {
+                steam::fex::register(&requested.root, &std::env::current_exe()?)?;
+                ui::success("FEX default updated. The Intel/Rosetta default is unchanged.");
+                return Ok(());
+            }
             let rt = wine::set_active_wine(&version)?;
             ui::success(format!(
                 "Active Wine set to: {} [{}]",
@@ -479,6 +490,12 @@ pub fn run(action: WineAction) -> Result<()> {
         }
         WineAction::SetPath { path } => {
             ui::header(format!("Registering custom Wine path: {}", path.display()));
+            let capabilities = nucleon_core::runtime_selection::named(&path.to_string_lossy())?;
+            if capabilities.mode == nucleon_core::runtime::ExecutionMode::Arm64Fex {
+                steam::fex::register(&capabilities.root, &std::env::current_exe()?)?;
+                ui::success("FEX default updated. The Intel/Rosetta default is unchanged.");
+                return Ok(());
+            }
             let rt = wine::set_custom_wine_path(&path)?;
             ui::success(format!(
                 "Registered custom Wine: {} [{}]",
