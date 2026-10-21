@@ -128,7 +128,7 @@ impl ShaderCaches {
                             .with_context(|| format!("Create shader cache {}", path.display()))?;
                         let path = path.canonicalize()?;
                         if windows {
-                            format!("Z:{}", path.display().to_string().replace('/', "\\"))
+                            short_windows_path(&plan.prefix, &root, &path)?
                         } else {
                             path.display().to_string()
                         }
@@ -151,6 +151,32 @@ impl ShaderCaches {
     }
 }
 
+fn short_windows_path(prefix: &Path, root: &Path, path: &Path) -> Result<String> {
+    use std::os::unix::fs::symlink;
+    let root = root.canonicalize()?;
+    let relative = path
+        .strip_prefix(&root)
+        .context("Cache path is outside its namespace")?;
+    let namespace = staging::key(&root)?;
+    let parent = prefix.join("drive_c/nucleon-shader-cache");
+    fs::create_dir_all(&parent)?;
+    let alias = parent.join(&namespace);
+    match fs::symlink_metadata(&alias) {
+        Ok(metadata) => anyhow::ensure!(
+            metadata.file_type().is_symlink() && alias.canonicalize()? == root,
+            "Managed shader-cache alias conflicts with an existing path: {}",
+            alias.display()
+        ),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => symlink(&root, &alias)?,
+        Err(error) => return Err(error.into()),
+    }
+    Ok(format!(
+        "C:\\nucleon-shader-cache\\{}\\{}",
+        namespace,
+        relative.display().to_string().replace('/', "\\")
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -158,6 +184,40 @@ mod tests {
         launch::{GraphicsComponents, VulkanDriver},
         runtime::{self, ExecutionMode},
     };
+    #[test]
+    fn long_host_cache_paths_use_short_aliases_and_preserve_existing_entries() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut root = temp.path().to_path_buf();
+        for _ in 0..6 {
+            root.push("long-host-directory-for-a-persistent-game-cache");
+        }
+        root.push("namespace");
+        let cache = root.join("dxvk");
+        fs::create_dir_all(&cache).unwrap();
+        let prefix = temp.path().join("prefix");
+        let path = short_windows_path(&prefix, &root, &cache.canonicalize().unwrap()).unwrap();
+        assert!(cache.as_os_str().len() > 260);
+        assert!(path.len() + 32 < 260);
+        let alias = prefix
+            .join("drive_c")
+            .join(path.strip_prefix("C:\\").unwrap().replace('\\', "/"));
+        fs::write(alias.join("shader.bin"), b"persistent cached bytes").unwrap();
+        assert_eq!(
+            fs::read(cache.join("shader.bin")).unwrap(),
+            b"persistent cached bytes"
+        );
+        assert_eq!(
+            short_windows_path(&prefix, &root, &cache.canonicalize().unwrap()).unwrap(),
+            path
+        );
+        let link = alias.parent().unwrap();
+        fs::remove_file(link).unwrap();
+        fs::create_dir(link).unwrap();
+        fs::write(link.join("user-file"), b"preserve").unwrap();
+        assert!(short_windows_path(&prefix, &root, &cache.canonicalize().unwrap()).is_err());
+        assert_eq!(fs::read(link.join("user-file")).unwrap(), b"preserve");
+    }
+
     #[test]
     fn compatible_wine_moves_keep_cached_bytes_and_changed_graphics_or_abi_use_new_namespaces() {
         if crate::test_support::run_in_isolated_support(
@@ -237,7 +297,9 @@ mod tests {
                 .unwrap();
         assert_ne!(changed_translator.root, other_game.root);
         assert!(warmed.exists());
-        assert!(cache.environment["DXVK_SHADER_CACHE_PATH"].starts_with("Z:\\"));
+        assert!(
+            cache.environment["DXVK_SHADER_CACHE_PATH"].starts_with("C:\\nucleon-shader-cache\\")
+        );
         assert!(cache.environment["MESA_SHADER_CACHE_DIR"].starts_with('/'));
     }
 }

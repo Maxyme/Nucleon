@@ -1,4 +1,4 @@
-> Runtime building and assembly now live in the sibling `wine-fex` repository. Nucleon owns this installation/ABI contract; use `nucleon wine install <source> --register`. Historical developer build commands below have moved to `wine-fex-builder`.
+> Runtime building and assembly now live in the sibling `isotope` repository. Nucleon owns this installation/ABI contract; use `nucleon wine install <source> --register`. Historical developer build commands below have moved to `isotope`.
 
 # Runtime capabilities and launch preparation
 
@@ -10,7 +10,7 @@ Wine version strings do not select the execution mode.
 ## Native runtime descriptor
 
 An ARM64/FEX runtime requires `nucleon-runtime.toml` at its root. The
-[example descriptor](../wine-fex/assets/wine/runtime-arm64-fex.example.toml) documents the
+[example descriptor](../isotope/assets/wine/runtime-arm64-fex.example.toml) documents the
 complete layout. Ordinary Intel Wine installations can still be inferred from
 their binaries. A native runtime without a descriptor fails with a configuration
 error; Nucleon does not guess which emulator to use.
@@ -31,7 +31,7 @@ The descriptor records:
   must export `vkGetInstanceProcAddr`.
 - Steam bridge protocol (`bridge` or `valve-redirect`) and whether to use the
   Windows Steam helper by default. An explicit per-game helper choice wins.
-- Required native prefix family and ABI (`[prefix] family = "tolkara-fex"`,
+- Required native prefix family and ABI (`[prefix] family = "isotope-fex"`,
   `abi = 1`). Families contain lowercase letters, digits, `_` or `-`; the ABI
   is positive and changes when an existing prefix cannot be safely reused.
 - Correctness settings `FEX_TSOENABLED=1` and, for Wine builds that need the
@@ -52,7 +52,7 @@ that complete runtime (none of these commands starts Steam or a game):
 
 ```sh
 cargo build -p nucleon-cli -p nucleon-runner
-../wine-fex/target/release/wine-fex-builder dx12 prepare-runtime
+../isotope/target/release/isotope dx12 prepare-runtime
 ./target/debug/nucleon wine fex install /absolute/path/printed/by/prepare-runtime --register
 ./target/debug/nucleon wine fex status
 ```
@@ -210,7 +210,7 @@ preparation. Managed import verifies the same contract after relocation.
 These local provenance records establish pairing and integrity; they are not a
 signed certification of arbitrary binaries or gameplay compatibility.
 
-`wine-fex-builder frontend prepare-runtime --base-runtime /path/to/baseline`
+`isotope frontend prepare-runtime --base-runtime /path/to/baseline`
 copies an existing descriptor-backed runtime into a separate
 `target/arm64-fex/arm64ec-integrated/<generation>` directory. It packages retained
 ARM64EC Vulkan builds and gives them an experimental prefix family. With an

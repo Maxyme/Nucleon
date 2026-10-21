@@ -312,8 +312,12 @@ impl ResolvedRuntime {
         }
         for (key, value) in &d.environment {
             ensure!(
-                matches!(key.as_str(), "FEX_TSOENABLED" | "NUCLEON_EMULATE_KUSD") && value == "1",
-                "Unsupported runtime environment setting {key}; descriptor environment only enables validated FEX correctness options"
+                (matches!(key.as_str(), "FEX_TSOENABLED" | "NUCLEON_EMULATE_KUSD") && value == "1")
+                    || (key == "MESA_KK_EXPERIMENTAL"
+                        && value == "image_view_min_lod"
+                        && d.backends.contains(&GraphicsBackend::KosmicKrisp)
+                        && d.graphics.vulkan_icd.is_some()),
+                "Unsupported runtime environment setting {key}; descriptor environment only enables validated runtime options"
             );
         }
         let mut environment = d.environment;
@@ -656,6 +660,40 @@ mod tests {
             format!("{:#}", ResolvedRuntime::inspect(temp.path()).unwrap_err())
                 .contains("Wrong FEX emulator ABI")
         );
+    }
+
+    #[test]
+    fn minimum_lod_requires_exact_setting_and_bundled_kosmickrisp() {
+        let (temp, runtime) = fixture(ExecutionMode::Arm64Fex);
+        let root = temp.path();
+        let path = root.join(DESCRIPTOR);
+        let original = fs::read_to_string(&path).unwrap();
+        fs::create_dir_all(root.join("lib/vulkan")).unwrap();
+        fs::copy(
+            runtime.unix_dir.join("ntdll.so"),
+            root.join("lib/vulkan/driver.dylib"),
+        )
+        .unwrap();
+        fs::write(root.join("lib/vulkan/icd.json"),
+            r#"{"file_format_version":"1.0.1","ICD":{"library_path":"driver.dylib","api_version":"1.4.0"}}"#).unwrap();
+        let descriptor = format!(
+            "{original}\n[environment]\nMESA_KK_EXPERIMENTAL='image_view_min_lod'\n[graphics]\nvulkan_icd='lib/vulkan/icd.json'\n"
+        );
+        fs::write(&path, &descriptor).unwrap();
+        assert_eq!(
+            ResolvedRuntime::inspect(root).unwrap().environment["MESA_KK_EXPERIMENTAL"],
+            "image_view_min_lod"
+        );
+        for invalid in [
+            descriptor.replace("image_view_min_lod", "all"),
+            descriptor.replace("image_view_min_lod", "image_view_min_lod,custom_border"),
+            descriptor.replace(",'kosmickrisp'", ""),
+            descriptor.replace("vulkan_icd='lib/vulkan/icd.json'", ""),
+        ] {
+            assert_ne!(invalid, descriptor);
+            fs::write(&path, invalid).unwrap();
+            assert!(ResolvedRuntime::inspect(root).is_err());
+        }
     }
 
     #[test]

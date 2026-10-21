@@ -30,7 +30,7 @@ mod tests {
                 "nucleon",
                 "wine",
                 "install",
-                "wine-fex",
+                "isotope",
                 "--version",
                 "0.1.0-rc.1",
                 "--register",

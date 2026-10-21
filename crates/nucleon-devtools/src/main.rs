@@ -7,7 +7,7 @@ use clap::{Args, Parser, Subcommand};
 use std::{num::NonZeroU64, path::PathBuf, sync::atomic::Ordering};
 #[derive(Parser)]
 #[command(
-    about = "Nucleon integration diagnostics; runtime builds live in ../wine-fex",
+    about = "Nucleon integration diagnostics; runtime builds live in ../isotope",
     version
 )]
 struct Cli {

@@ -1,6 +1,6 @@
 # Runtime tooling split
 
-- [x] Standalone `../wine-fex` Rust builder; no Nucleon source dependency.
+- [x] Standalone `../isotope` Rust builder; no Nucleon source dependency.
 - [x] Move Wine/FEX/graphics builds, assembly, recipes, patches and probes.
 - [x] Keep Nucleon game diagnostics and Steam-route integration probe here.
 - [x] Named/versioned and explicit path/URL `nucleon wine install` interface.

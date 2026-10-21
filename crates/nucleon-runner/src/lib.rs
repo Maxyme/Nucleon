@@ -262,15 +262,6 @@ fn log_runner(msg: &str) {
     session::log(msg);
 }
 
-fn activate_frontmost_window() {
-    let _ = Command::new("osascript")
-        .args([
-            "-e",
-            r#"tell application "System Events" to set frontmost of first process whose bundle identifier is "com.valvesoftware.steam" to true"#,
-        ])
-        .status();
-}
-
 fn set_runner_lib_env(cmd: &mut Command, runner_dir: &Path) {
     let lib_dir = runner_dir.join("lib");
     let lib_unix = ResolvedRuntime::inspect(runner_dir)
@@ -1174,12 +1165,6 @@ fn run_with_args_inner(args: &[String], session: &mut RunSession) -> Result<RunO
 
     session.started()?;
     let started = std::time::Instant::now();
-
-    // Focus activation after slight delay
-    thread::spawn(|| {
-        thread::sleep(Duration::from_millis(2500));
-        activate_frontmost_window();
-    });
 
     // Supervision watchdog
     let mut primary_exited = false;

@@ -1,0 +1,51 @@
+name: Isotope release integration
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Published Isotope version (for example 0.1.0-rc.1)'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  import:
+    runs-on: macos-latest
+    timeout-minutes: 30
+    env:
+      ISOTOPE_VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # v1
+        with:
+          toolchain: stable
+      - name: Build the consumer
+        run: |
+          test "$(uname -m)" = arm64
+          cargo build --release --locked -p nucleon-cli
+      - name: Import and verify the published runtime
+        env:
+          NUCLEON_SUPPORT_DIR: ${{ runner.temp }}/isotope-consumer
+        run: |
+          target/release/nucleon wine install isotope --version "$ISOTOPE_VERSION"
+          receipts=("$NUCLEON_SUPPORT_DIR"/runtimes/arm64-fex/*/.nucleon-install.json)
+          test "${#receipts[@]}" = 1
+          test -f "${receipts[0]}"
+          runtime_root="$(dirname "${receipts[0]}")"
+          target/release/nucleon wine fex verify "$runtime_root"
+          target/release/nucleon wine inspect "$runtime_root" --json > "$RUNNER_TEMP/isotope-inspection.json"
+      - name: Retain consumer evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: isotope-consumer-validation
+          path: |
+            ${{ runner.temp }}/isotope-inspection.json
+            ${{ runner.temp }}/isotope-consumer/runtimes/arm64-fex/*/.nucleon-install.json
+          include-hidden-files: true
+          if-no-files-found: warn

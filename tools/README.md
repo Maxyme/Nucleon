@@ -1,8 +1,8 @@
 # Nucleon integration diagnostics
 
 Wine/FEX builds, runtime assembly, CPU/GPU probes and source-inclusive publishing
-have moved to the standalone sibling [wine-fex repository](../../wine-fex/README.md).
-Its `wine-fex-builder` executable has no Cargo dependency on Nucleon. Production
+have moved to the standalone sibling [isotope repository](../../isotope/README.md).
+Its `isotope` executable has no Cargo dependency on Nucleon. Production
 Nucleon consumes release archives through [wine install](../RUNTIME-RELEASES.md).
 
 The remaining Rust `nucleon-devtools` crate contains Nucleon-specific diagnostics:

@@ -6,7 +6,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-const RELEASES: &str = "https://github.com/Maxyme/wine-fex/releases/download";
+const RELEASES: &str = "https://github.com/Maxyme/isotope/releases/download";
 const MAX_MANIFEST: u64 = 1024 * 1024;
 
 #[derive(Debug, Deserialize)]
@@ -41,7 +41,7 @@ fn manifest(url: &str) -> Result<Release> {
 
 fn asset<'a>(release: &'a Release, expected_version: Option<&str>) -> Result<&'a Asset> {
     ensure!(
-        release.schema == 2 && release.component == "wine-fex-core",
+        release.schema == 2 && release.component == "isotope-core",
         "Unsupported Wine/FEX release metadata"
     );
     version(&release.version)?;
@@ -79,9 +79,9 @@ pub fn install(
     if let Some(sha) = sha256 {
         checksum(sha)?;
     }
-    if source == "wine-fex" {
+    if matches!(source, "isotope" | "wine-fex") {
         let requested = version(
-            requested_version.context("wine-fex requires --version <exact-release-version>")?,
+            requested_version.context("isotope requires --version <exact-release-version>")?,
         )?;
         let base = format!("{RELEASES}/v{requested}");
         let release = manifest(&format!("{base}/runtime-release.json"))?;
@@ -99,7 +99,7 @@ pub fn install(
     }
     ensure!(
         requested_version.is_none(),
-        "--version is only used with the named wine-fex release; paths and URLs select their own artifact"
+        "--version is only used with the named isotope release; paths and URLs select their own artifact"
     );
     ensure!(
         !source.starts_with("http://"),
@@ -146,7 +146,7 @@ mod tests {
     use super::*;
     #[test]
     fn releases_are_exact_and_assets_cannot_escape_the_release() {
-        let mut release: Release = serde_json::from_value(serde_json::json!({"schema":2,"version":"0.1.0-rc.1","component":"wine-fex-core","binary":{"file":"wine-fex-0.1.0-rc.1-macos-arm64.tar.gz","sha256":"a".repeat(64)}})).unwrap();
+        let mut release: Release = serde_json::from_value(serde_json::json!({"schema":2,"version":"0.1.0-rc.1","component":"isotope-core","binary":{"file":"isotope-0.1.0-rc.1-macos-arm64.tar.gz","sha256":"a".repeat(64)}})).unwrap();
         assert!(asset(&release, Some("0.1.0-rc.1")).is_ok());
         assert!(asset(&release, Some("0.1.0-rc.2")).is_err());
         release.binary.file = "../other.tar.gz".into();
@@ -154,6 +154,7 @@ mod tests {
         for value in ["latest", "../0.1.0", "0.1.0?token", "0.1.0/other"] {
             assert!(version(value).is_err());
         }
+        assert!(install("isotope", None, None).is_err());
         assert!(install("wine-fex", None, None).is_err());
         assert!(install("/missing/runtime", Some("0.1.0"), None).is_err());
         assert!(install("http://example.invalid/file.tar.gz", None, None).is_err());

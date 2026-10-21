@@ -9,9 +9,9 @@ use std::path::PathBuf;
 pub enum WineAction {
     /// Install a published Wine/FEX version, HTTPS archive, or local runtime
     Install {
-        /// wine-fex, an HTTPS archive URL, a local archive, or a runtime directory
+        /// isotope, an HTTPS archive URL, a local archive, or a runtime directory
         source: String,
-        /// Exact Wine/FEX release version (required when source is wine-fex)
+        /// Exact Wine/FEX release version (required when source is isotope)
         #[arg(long)]
         version: Option<String>,
         /// Optional archive checksum; required for URLs without release metadata

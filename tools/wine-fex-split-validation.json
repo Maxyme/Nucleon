@@ -21,7 +21,7 @@
     "builder_cargo_depends_on_nucleon": false
   },
   "native_builder_validation": {
-    "report": "../wine-fex/target/split-native-validation/validation.json",
+    "report": "../isotope/target/split-native-validation/validation.json",
     "inputs": "Existing pinned local build products; no fresh source rebuild",
     "managed_import_via_real_nucleon_cli": "PASSED",
     "full_integrity_native_dependencies": "PASSED",
@@ -32,7 +32,7 @@
     "prefix_cleanup": "PASSED",
     "overall": "PASSED_WITH_OPTIONAL_FAILURE",
     "command_exit": 0,
-    "retained_archive": "../wine-fex/target/split-native-validation/diagnostic-runtime.tar.gz"
+    "retained_archive": "../isotope/target/split-native-validation/diagnostic-runtime.tar.gz"
   },
   "consumer_cli_integration": {
     "status": "PASSED",
