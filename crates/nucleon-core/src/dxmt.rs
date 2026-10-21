@@ -2,8 +2,8 @@
 
 use crate::paths;
 use anyhow::{Context, Result};
-use std::fs;
 use std::path::{Path, PathBuf};
+use std::{fs, io::Read};
 
 /// Default release version from the embedded download catalog.
 pub fn default_version() -> Result<&'static str> {
@@ -25,14 +25,39 @@ pub struct DxmtBundle {
     pub version: Option<String>,
 }
 
+fn is_builtin_dll(path: &Path) -> bool {
+    let mut header = [0; 80];
+    fs::File::open(path)
+        .and_then(|mut file| file.read_exact(&mut header))
+        .is_ok()
+        && &header[64..80] == b"Wine builtin DLL"
+}
+
 impl DxmtBundle {
     /// Wine-built DLLs must be resolved from WINEDLLPATH as builtins, not as native PE files.
     pub fn uses_builtin_dlls(&self) -> bool {
         self.x64_d3d11
-            .as_ref()
-            .or(self.x86_d3d11.as_ref())
-            .and_then(|path| fs::read(path).ok())
-            .is_some_and(|bytes| bytes.get(64..80) == Some(b"Wine builtin DLL"))
+            .as_deref()
+            .or(self.x86_d3d11.as_deref())
+            .is_some_and(is_builtin_dll)
+    }
+
+    /// Prepend lookup may replace staging only when every supplied PE is a builtin.
+    pub(crate) fn all_builtin_dlls(&self) -> bool {
+        self.has_d3d11()
+            && [
+                &self.x64_d3d11,
+                &self.x64_d3d10core,
+                &self.x64_dxgi,
+                &self.x64_winemetal,
+                &self.x86_d3d11,
+                &self.x86_d3d10core,
+                &self.x86_dxgi,
+                &self.x86_winemetal,
+            ]
+            .into_iter()
+            .flatten()
+            .all(|path| is_builtin_dll(path))
     }
 
     pub fn has_d3d11(&self) -> bool {

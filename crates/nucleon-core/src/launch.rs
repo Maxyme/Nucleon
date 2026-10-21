@@ -263,6 +263,27 @@ impl GraphicsComponents {
     }
 }
 
+/// Optional producer extensions, detected from the native ntdll image once per plan.
+#[derive(Debug, Default)]
+pub struct RuntimeFeatures {
+    pub dll_search_prepend: bool,
+    pub guest_supervisor: bool,
+}
+impl RuntimeFeatures {
+    fn inspect(runtime: &ResolvedRuntime) -> Self {
+        let Ok(image) = fs::read(runtime.unix_dir.join("ntdll.so")) else {
+            return Self::default();
+        };
+        Self {
+            dll_search_prepend: runtime_checks::has_export(
+                &image,
+                &["isotope_dll_search_prepend_v1"],
+            ),
+            guest_supervisor: runtime_checks::has_export(&image, &["isotope_guest_supervisor_v1"]),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct LaunchPlan {
     pub runtime: ResolvedRuntime,
@@ -274,6 +295,7 @@ pub struct LaunchPlan {
     pub use_steam_helper: bool,
     pub log_directory: Option<PathBuf>,
     pub diagnostics: bool,
+    pub runtime_features: RuntimeFeatures,
 }
 
 impl LaunchPlan {
@@ -317,7 +339,9 @@ impl LaunchPlan {
             runtime.mode
         );
         let use_steam_helper = helper.unwrap_or(runtime.steam_helper || !is64);
+        let runtime_features = RuntimeFeatures::inspect(&runtime);
         Ok(Self {
+            runtime_features,
             runtime,
             prefix: std::path::absolute(prefix)?,
             engine,
@@ -334,6 +358,16 @@ impl LaunchPlan {
 
     pub fn prepare_prefix(&self) -> Result<()> {
         crate::prefix::ensure_prefix_for_plan(self)
+    }
+
+    fn search_dxmt_builtins(&self) -> bool {
+        self.runtime_features.dll_search_prepend
+            && self.engine == TargetEngine::Dxmt
+            && self
+                .graphics
+                .dxmt
+                .as_ref()
+                .is_some_and(|b| b.all_builtin_dlls())
     }
 
     pub fn stage_graphics(&self) -> Result<usize> {
@@ -385,7 +419,7 @@ impl LaunchPlan {
                 }
             }
         };
-        if self.engine == TargetEngine::Dxmt {
+        if self.engine == TargetEngine::Dxmt && !self.search_dxmt_builtins() {
             let b = self
                 .graphics
                 .dxmt
@@ -522,6 +556,17 @@ impl LaunchPlan {
             );
         }
         env.extend(r.environment.iter().map(|(k, v)| (k.clone(), v.clone())));
+        // Set ownership after the descriptor environment: a runtime cannot redirect
+        // the watcher to an inherited or unrelated PID.
+        if self.runtime_features.guest_supervisor {
+            env.insert(
+                "ISOTOPE_SUPERVISOR_PID".into(),
+                std::process::id().to_string(),
+            );
+        }
+        if self.diagnostics {
+            env.insert("ISOTOPE_FAULT_DIAGNOSTICS".into(), "1".into());
+        }
         env
     }
 
@@ -580,11 +625,23 @@ impl LaunchPlan {
                 if let Some(so) = &b.x64_winemetal_so {
                     libs.insert(0, so.parent().unwrap().to_path_buf());
                 }
-                overrides.push_str(if b.uses_builtin_dlls() && r.mode == ExecutionMode::Intel {
-                    ";d3d11,dxgi,d3d10core,winemetal=b"
-                } else {
-                    ";d3d11,dxgi,d3d10core,winemetal=n,b"
-                });
+                if self.search_dxmt_builtins() {
+                    let paths: Vec<_> = dlls
+                        .iter()
+                        .filter(|p| p.starts_with(&b.root))
+                        .cloned()
+                        .collect();
+                    env.insert("WINEDLLPATH_PREPEND".into(), join(&paths));
+                }
+                overrides.push_str(
+                    if b.uses_builtin_dlls()
+                        && (r.mode == ExecutionMode::Intel || self.search_dxmt_builtins())
+                    {
+                        ";d3d11,dxgi,d3d10core,winemetal=b"
+                    } else {
+                        ";d3d11,dxgi,d3d10core,winemetal=n,b"
+                    },
+                );
             }
             TargetEngine::Dxvk | TargetEngine::Vkd3d | TargetEngine::KosmicKrisp => {
                 let icds = self
@@ -807,6 +864,9 @@ const DIAGNOSTIC_VARIABLES: &[&str] = &[
     "DXMT_LOG_LEVEL",
     "DXMT_LOG_PATH",
     "NUCLEON_TRACE_PROCESS_EXIT",
+    "ISOTOPE_SUPERVISOR_PID",
+    "ISOTOPE_FAULT_DIAGNOSTICS",
+    "WINEDLLPATH_PREPEND",
 ];
 
 /// Strip foreign Wine/FEX/dyld state without changing the parent's environment.
@@ -817,9 +877,16 @@ pub fn clean_command(command: &mut Command) {
     }
     for (key, _) in std::env::vars_os() {
         let name = key.to_string_lossy();
-        if ["WINE", "DYLD_", "FEX_", "MACRUNNER_", "ROSETTA_"]
-            .iter()
-            .any(|p| name.starts_with(p))
+        if [
+            "WINE",
+            "DYLD_",
+            "FEX_",
+            "MACRUNNER_",
+            "ROSETTA_",
+            "ISOTOPE_",
+        ]
+        .iter()
+        .any(|p| name.starts_with(p))
             || name == "STEAM_DYLD_INSERT_LIBRARIES"
             || FEATURE_OVERRIDES.contains(&name.as_ref())
             || DIAGNOSTIC_VARIABLES.contains(&name.as_ref())
@@ -832,6 +899,24 @@ pub fn clean_command(command: &mut Command) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn optional_runtime_extensions_are_detected_from_native_symbols() {
+        let (_temp, runtime) = runtime::fixture(ExecutionMode::Arm64Fex);
+        let path = runtime.unix_dir.join("ntdll.so");
+        fs::write(&path, test_image("isotope_guest_supervisor_v1", 1)).unwrap();
+        let features = RuntimeFeatures::inspect(&runtime);
+        assert!(features.guest_supervisor);
+        assert!(!features.dll_search_prepend);
+        fs::write(&path, test_image("isotope_dll_search_prepend_v1", 1)).unwrap();
+        let features = RuntimeFeatures::inspect(&runtime);
+        assert!(!features.guest_supervisor);
+        assert!(features.dll_search_prepend);
+        fs::write(&path, b"ISOTOPE_SUPERVISOR_PID=1").unwrap();
+        let features = RuntimeFeatures::inspect(&runtime);
+        assert!(!features.guest_supervisor);
+        assert!(!features.dll_search_prepend);
+    }
 
     #[test]
     fn diagnostics_and_native_capability_forcing_require_explicit_opt_in() {
@@ -919,7 +1004,7 @@ mod tests {
         fs::write(&descriptor, text).unwrap();
         let runtime = ResolvedRuntime::inspect(temp.path()).unwrap();
         assert!(crate::dxmt::validate_runtime(&dxmt, Some(temp.path())).is_ok());
-        let plan = LaunchPlan::new(
+        let mut plan = LaunchPlan::new(
             runtime,
             temp.path().join("prefix"),
             TargetEngine::Dxmt,
@@ -936,6 +1021,45 @@ mod tests {
         assert!(env["WINEDLLOVERRIDES"].contains("d3d11,dxgi,d3d10core,winemetal=n,b"));
         assert!(env["WINEDLLPATH"].contains("x86_64-windows"));
         assert!(env["DYLD_LIBRARY_PATH"].contains("aarch64-unix"));
+        assert!(!env.contains_key("WINEDLLPATH_PREPEND"));
+        assert!(!env.contains_key("ISOTOPE_SUPERVISOR_PID"));
+
+        // Switching a prepared prefix to search-based loading restores its Wine
+        // builtins, so a previously staged backend cannot shadow the new one.
+        let system32 = plan.prefix.join("drive_c/windows/system32");
+        fs::create_dir_all(&system32).unwrap();
+        let builtin = plan.runtime.windows_dirs[0].join("d3d11.dll");
+        fs::write(&builtin, b"original Wine builtin").unwrap();
+        plan.stage_graphics().unwrap();
+        assert_eq!(fs::read(system32.join("d3d11.dll")).unwrap(), pe);
+        plan.runtime_features.dll_search_prepend = true;
+        plan.runtime_features.guest_supervisor = true;
+        plan.stage_graphics().unwrap();
+        assert_eq!(
+            fs::read(system32.join("d3d11.dll")).unwrap(),
+            b"original Wine builtin"
+        );
+        assert!(!system32.join("winemetal.dll").exists());
+        assert_eq!(plan.stage_graphics().unwrap(), 0);
+        let env = plan.execution_env(false, false);
+        assert!(env["WINEDLLPATH_PREPEND"].contains("x86_64-windows"));
+        assert!(env["WINEDLLOVERRIDES"].contains("d3d11,dxgi,d3d10core,winemetal=b"));
+        assert_eq!(
+            env["ISOTOPE_SUPERVISOR_PID"],
+            std::process::id().to_string()
+        );
+        assert!(!env.contains_key("ISOTOPE_FAULT_DIAGNOSTICS"));
+        plan.diagnostics = true;
+        assert_eq!(plan.bootstrap_env()["ISOTOPE_FAULT_DIAGNOSTICS"], "1");
+        let bundle = plan.graphics.dxmt.as_ref().unwrap();
+        fs::write(bundle.x64_dxgi.as_ref().unwrap(), test_pe_image(0x8664)).unwrap();
+        assert!(bundle.uses_builtin_dlls());
+        assert!(!bundle.all_builtin_dlls());
+        assert!(
+            !plan
+                .execution_env(false, false)
+                .contains_key("WINEDLLPATH_PREPEND")
+        );
     }
     use crate::{
         runtime,
