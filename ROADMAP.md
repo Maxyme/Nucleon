@@ -6,6 +6,14 @@ Priority: a reliable native Steam flow, automatic Windows architecture handling,
 and preserved working configurations. These are planned tasks, not implemented
 support claims.
 
+## Standalone applications
+
+- [x] Run x86/x64 Windows EXEs with explicit Wine/engine selection and isolated data.
+- [x] Prepare standalone prefixes without Steam or bridge files.
+- [x] Named bottles with pinned runtimes, configurable defaults and saved application entries.
+- [x] Owned console probes for installer/game state sharing, child handoff, locking,
+  cancellation and Unicode paths/arguments. These do not establish game compatibility.
+
 ## Reliability and safety
 
 - [ ] Recheck GoNNER and supported GPTK pairings without the copied overlay.

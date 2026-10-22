@@ -1,12 +1,35 @@
 # Nucleon
 
-Nucleon allows running Windows games from the native macOS Steam client using a combination of runtimes (Wine, GPTK4) and different graphical backends.  
+Nucleon runs Windows games and programs on Apple Silicon macOS, directly or from
+the native Steam client, using Wine (including Isotope/FEX), GPTK and different
+graphics backends.
 
 The goal is to launch Steam games with minimal configuration, automatic 32/64-bit
 handling, and reproducible per-game runtimes. 
 Compatibility depends on the game, Wine build, backend, and driver; support is experimental.
 
 Note: **CrossOver** is optional but can be used like other wine runtimes.
+
+## Standalone EXEs and named environments
+
+Build the CLI with `cargo build --release -p nucleon-cli`. Standalone launches
+need a complete Wine runtime; Steam setup and bridge files are unnecessary.
+
+```sh
+nucleon run /path/Game.exe --wine /path/to/runtime --engine auto -- --fullscreen
+
+# Share one environment between an installer and its installed game.
+nucleon bottle create my-game --wine /path/to/runtime
+nucleon run /path/setup.exe --bottle my-game
+nucleon bottle show my-game
+nucleon bottle add my-game game /path/to/installed/Game.exe
+nucleon bottle run my-game game
+```
+
+Without `--bottle`, each canonical EXE path gets its own environment. Bottles keep
+their selected runtime, preferences, installed files and saves across launches.
+See [standalone usage](STANDALONE.md) for saved applications, configuration and
+runtime selection.
 
 ## Running locally
 
@@ -24,7 +47,7 @@ backend configuration, and bridge staging.
 
 ## Build and setup
 
-You need Apple Silicon macOS, native Steam, a current Rust toolchain supporting
+For Steam integration, you need Apple Silicon macOS, native Steam, a current Rust toolchain supporting
 edition 2024, Xcode Command Line Tools, and `just`. Runtime requirements vary;
 obtain Wine, graphics backends, and bridge components under their own licenses.
 

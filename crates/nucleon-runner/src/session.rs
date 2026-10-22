@@ -75,6 +75,8 @@ struct Receipt {
     schema: u32,
     run_id: String,
     appid: Option<String>,
+    origin: &'static str,
+    application: Option<String>,
     executable: Option<PathBuf>,
     started_at: String,
     finished_at: Option<String>,
@@ -107,11 +109,19 @@ pub struct RunSession {
     previous: Option<(File, bool)>,
 }
 impl RunSession {
+    pub fn standalone(args: &[String], identity: &str) -> Result<Self> {
+        Self::create_with_identity(
+            &paths::support_dir(),
+            args,
+            None,
+            &format!("standalone/{identity}"),
+            Some(identity.into()),
+        )
+    }
     pub fn create(args: &[String]) -> Result<Self> {
         Self::create_at(&paths::support_dir(), args)
     }
     fn create_at(support: &Path, args: &[String]) -> Result<Self> {
-        let start = Instant::now();
         let appid = std::env::var("STEAM_COMPAT_APP_ID")
             .ok()
             .or_else(|| std::env::var("SteamAppId").ok())
@@ -126,7 +136,18 @@ impl RunSession {
                 !id.is_empty() && id.len() <= 20 && id.bytes().all(|b| b.is_ascii_digit())
             });
         let group = appid.as_deref().unwrap_or("manual").to_string();
-        let parent = support.join("logs").join(&group);
+        Self::create_with_identity(support, args, appid, &group, None)
+    }
+
+    fn create_with_identity(
+        support: &Path,
+        args: &[String],
+        appid: Option<String>,
+        group: &str,
+        application: Option<String>,
+    ) -> Result<Self> {
+        let start = Instant::now();
+        let parent = support.join("logs").join(group);
         fs::create_dir_all(&parent)?;
         static NEXT: AtomicU64 = AtomicU64::new(0);
         let run_id = format!(
@@ -149,6 +170,12 @@ impl RunSession {
             schema: 1,
             run_id: run_id.clone(),
             appid: appid.clone(),
+            origin: if application.is_some() {
+                "standalone"
+            } else {
+                "steam"
+            },
+            application,
             executable: args.get(2).map(PathBuf::from),
             started_at: chrono::Utc::now().to_rfc3339(),
             finished_at: None,

@@ -7,6 +7,52 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
+/// Validate a standalone target before creating or updating a Wine prefix.
+pub fn executable_guest(path: &Path) -> anyhow::Result<crate::runtime::GuestAbi> {
+    use anyhow::{Context, ensure};
+    use object::endian::LittleEndian as LE;
+    let file =
+        fs::File::open(path).with_context(|| format!("Read executable {}", path.display()))?;
+    let cache = object::read::ReadCache::new(file);
+    let image = object::File::parse(&cache)
+        .with_context(|| format!("Invalid Windows executable {}", path.display()))?;
+    ensure!(
+        image.format() == object::BinaryFormat::Pe
+            && image.kind() == object::ObjectKind::Executable,
+        "Expected a Windows executable (PE), not a library or other file: {}",
+        path.display()
+    );
+    // Hybrid AMD64 headers still contain ARM64 code. Do not classify them as an
+    // ordinary x64 application merely because the COFF machine says AMD64.
+    if let object::File::Pe64(pe) = &image
+        && let Some(directory) = pe.data_directory(object::pe::IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG)
+        && directory.virtual_address.get(LE) != 0
+    {
+        let config = directory.data(&cache, &pe.section_table())?;
+        let size = config
+            .get(..4)
+            .map(|b| u32::from_le_bytes(b.try_into().unwrap()) as usize)
+            .context("Truncated executable load configuration")?;
+        ensure!(
+            size <= config.len(),
+            "Truncated executable load configuration"
+        );
+        ensure!(
+            size < 208 || !config[200..208].iter().any(|b| *b != 0),
+            "Unsupported ARM64EC/ARM64X executable: {}; choose an x86 or x64 executable",
+            path.display()
+        );
+    }
+    match image.architecture() {
+        object::Architecture::I386 => Ok(crate::runtime::GuestAbi::X86),
+        object::Architecture::X86_64 => Ok(crate::runtime::GuestAbi::X64),
+        other => anyhow::bail!(
+            "Unsupported executable architecture {other:?}: {}; choose an x86 or x64 executable",
+            path.display()
+        ),
+    }
+}
+
 fn dll_matcher<'a>(dlls: impl IntoIterator<Item = &'a str>) -> AhoCorasick {
     AhoCorasick::builder()
         .ascii_case_insensitive(true)

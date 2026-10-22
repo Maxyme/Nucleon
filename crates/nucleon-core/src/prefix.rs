@@ -8,41 +8,43 @@ use std::process::Command;
 pub fn ensure_prefix_for_plan(plan: &crate::launch::LaunchPlan) -> Result<()> {
     let runtime = &plan.runtime;
     let p = &plan.prefix;
-    let source = plan
-        .bridge
-        .join(runtime.unix_name())
-        .join("lsteamclient.so");
-    ensure!(
-        crate::runtime_checks::native_arch(&source, runtime.arch()),
-        "Missing or incompatible {:?} Steam Unix bridge: {}",
-        runtime.mode,
-        source.display()
-    );
-    let pe = plan
-        .bridge
-        .join(if plan.is64 {
-            "x86_64-windows"
-        } else {
-            "i386-windows"
-        })
-        .join("lsteamclient.dll");
-    ensure!(
-        crate::runtime_checks::pe(Some(&pe), plan.is64),
-        "Steam PE bridge has the wrong guest ABI: {}",
-        pe.display()
-    );
-    if plan.use_steam_helper {
-        plan.validate_steam_helper()?;
-    }
-    if runtime.steam_protocol == crate::runtime::SteamProtocol::ValveRedirect {
+    if plan.steam_integration {
+        let source = plan
+            .bridge
+            .join(runtime.unix_name())
+            .join("lsteamclient.so");
         ensure!(
-            plan.is64
-                && crate::runtime_checks::pe(
-                    Some(&plan.bridge.join("steamclient64.dll.valve")),
-                    true
-                ),
-            "Valve redirect requires a genuine AMD64 steamclient64.dll.valve and an x64 guest"
+            crate::runtime_checks::native_arch(&source, runtime.arch()),
+            "Missing or incompatible {:?} Steam Unix bridge: {}",
+            runtime.mode,
+            source.display()
         );
+        let pe = plan
+            .bridge
+            .join(if plan.is64 {
+                "x86_64-windows"
+            } else {
+                "i386-windows"
+            })
+            .join("lsteamclient.dll");
+        ensure!(
+            crate::runtime_checks::pe(Some(&pe), plan.is64),
+            "Steam PE bridge has the wrong guest ABI: {}",
+            pe.display()
+        );
+        if plan.use_steam_helper {
+            plan.validate_steam_helper()?;
+        }
+        if runtime.steam_protocol == crate::runtime::SteamProtocol::ValveRedirect {
+            ensure!(
+                plan.is64
+                    && crate::runtime_checks::pe(
+                        Some(&plan.bridge.join("steamclient64.dll.valve")),
+                        true
+                    ),
+                "Valve redirect requires a genuine AMD64 steamclient64.dll.valve and an x64 guest"
+            );
+        }
     }
     ensure_runtime_abi(p, runtime.mode)?;
     let configured = p.join(".nucleon-configured-v3");
@@ -92,14 +94,19 @@ pub fn ensure_prefix_for_plan(plan: &crate::launch::LaunchPlan) -> Result<()> {
         "Wine bootstrap did not create a Windows directory"
     );
     isolate_user_shell_folders(p)?;
+    let registry = if plan.steam_integration {
+        format!("{PREFIX_REGISTRY}\n{STEAM_REGISTRY}")
+    } else {
+        PREFIX_REGISTRY.to_owned()
+    };
     crate::staging::component(
         &p.join(".nucleon-prepared/registry.json"),
-        crate::staging::key(&(PREFIX_REGISTRY, &runtime.root))?,
+        crate::staging::key(&(&registry, &runtime.root))?,
         &runtime_inputs,
         std::slice::from_ref(&configured),
         || {
             let reg = p.join("nucleon_tweaks.reg");
-            crate::fs_util::atomic_write_file(&reg, PREFIX_REGISTRY)?;
+            crate::fs_util::atomic_write_file(&reg, &registry)?;
             run_prefix_command(
                 runtime.command(&runtime.loader).arg("regedit").arg(&reg),
                 &env,
@@ -108,8 +115,12 @@ pub fn ensure_prefix_for_plan(plan: &crate::launch::LaunchPlan) -> Result<()> {
             finish_registry_import(&reg, &configured)
         },
     )?;
-    prepare_bridge_libraries_for_runtime(p, &plan.bridge, runtime)?;
-    if runtime.steam_protocol == crate::runtime::SteamProtocol::ValveRedirect {
+    if plan.steam_integration {
+        prepare_bridge_libraries_for_runtime(p, &plan.bridge, runtime)?;
+    }
+    if plan.steam_integration
+        && runtime.steam_protocol == crate::runtime::SteamProtocol::ValveRedirect
+    {
         let marker = p.join(".nucleon-steam-redirect-v1");
         crate::staging::component(
             &p.join(".nucleon-prepared/steam-registry.json"),
@@ -198,6 +209,7 @@ pub(crate) fn run_prefix_command(
 ) -> Result<()> {
     use crate::process::{OwnedChild, TERMINATION_GRACE};
     crate::launch::clean_command(command);
+    crate::launch::clean_standalone_command(command);
     command.envs(env);
     if let Some(path) = env.get("NUCLEON_SETUP_LOG") {
         let file = fs::OpenOptions::new()
@@ -322,7 +334,7 @@ pub fn configure_prefix_registry(prefix_dir: &Path, runner_dir: &Path) -> Result
     let marker = prefix_dir.join(".nucleon-configured-v3");
     if !marker.is_file() {
         let reg = prefix_dir.join("nucleon_tweaks.reg");
-        crate::fs_util::atomic_write_file(&reg, PREFIX_REGISTRY)?;
+        crate::fs_util::atomic_write_file(&reg, format!("{PREFIX_REGISTRY}\n{STEAM_REGISTRY}"))?;
         run_prefix_command(
             plan.runtime
                 .command(&plan.runtime.loader)
@@ -371,12 +383,6 @@ const PREFIX_REGISTRY: &str = r#"Windows Registry Editor Version 5.00
 "DefaultCapture"=""
 "DefaultVoiceCapture"=""
 
-[HKEY_LOCAL_MACHINE\Software\Classes\steam]
-"URL Protocol"=""
-
-[HKEY_LOCAL_MACHINE\Software\Classes\steam\shell\open\command]
-@="\"C:\\Program Files (x86)\\Steam\\steam.exe\" \"%1\""
-
 [HKEY_LOCAL_MACHINE\Software\Microsoft\Windows NT\CurrentVersion\AeDebug]
 "Auto"="0"
 
@@ -396,6 +402,15 @@ const PREFIX_REGISTRY: &str = r#"Windows Registry Editor Version 5.00
 "My Music"="%USERPROFILE%\\Music"
 "My Pictures"="%USERPROFILE%\\Pictures"
 "My Video"="%USERPROFILE%\\Videos"
+"#;
+
+const STEAM_REGISTRY: &str = r#"
+[HKEY_LOCAL_MACHINE\Software\Classes\steam]
+"URL Protocol"=""
+
+[HKEY_LOCAL_MACHINE\Software\Classes\steam\shell\open\command]
+@="\"C:\\Program Files (x86)\\Steam\\steam.exe\" \"%1\""
+
 "#;
 
 pub fn stage_bridge_libraries(prefix_dir: &Path) -> Result<()> {
@@ -621,6 +636,59 @@ fn stage_bridge_layout(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn standalone_bootstrap_has_no_steam_requirement_and_failed_setup_can_retry() {
+        use crate::{
+            detector::{GraphicsApi, TargetEngine},
+            launch::{GraphicsComponents, LaunchPlan},
+            runtime::{self, ExecutionMode, SteamProtocol},
+        };
+        use std::os::unix::fs::PermissionsExt;
+        let (temp, mut runtime) = runtime::fixture(ExecutionMode::Arm64Fex);
+        runtime.steam_protocol = SteamProtocol::ValveRedirect;
+        runtime.steam_helper = true;
+        let script = r#"#!/bin/sh
+case "$1" in
+wineboot)
+  test ! -f "$WINEPREFIX/fail" || exit 9
+  mkdir -p "$WINEPREFIX/drive_c/windows/system32"
+  touch "$WINEPREFIX/user.reg" "$WINEPREFIX/system.reg"
+  ;;
+regedit) cp "$2" "$WINEPREFIX/imported.reg" ;;
+esac
+"#;
+        fs::write(&runtime.loader, script).unwrap();
+        fs::set_permissions(&runtime.loader, fs::Permissions::from_mode(0o755)).unwrap();
+        fs::write(&runtime.server, "#!/bin/sh\nexit 0\n").unwrap();
+        fs::set_permissions(&runtime.server, fs::Permissions::from_mode(0o755)).unwrap();
+        let prefix = temp.path().join("standalone-prefix");
+        fs::create_dir(&prefix).unwrap();
+        fs::write(prefix.join("fail"), b"1").unwrap();
+        let plan = LaunchPlan::new(
+            runtime,
+            prefix.clone(),
+            TargetEngine::WineStaging,
+            GraphicsComponents::default(),
+            true,
+            None,
+            &GraphicsApi::Unknown,
+        )
+        .unwrap()
+        .without_steam();
+        assert!(plan.prepare_prefix().is_err());
+        assert!(!prefix.join(".nucleon-configured-v3").exists());
+        fs::remove_file(prefix.join("fail")).unwrap();
+        plan.prepare_prefix().unwrap();
+        assert!(prefix.join(".nucleon-configured-v3").is_file());
+        assert!(
+            !fs::read_to_string(prefix.join("imported.reg"))
+                .unwrap()
+                .contains("Classes\\steam")
+        );
+        assert!(!prefix.join("drive_c/Program Files (x86)/Steam").exists());
+        assert!(!prefix.join(".nucleon-steam-redirect-v1").exists());
+    }
     use tempfile::tempdir;
 
     #[test]

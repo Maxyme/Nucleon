@@ -19,8 +19,10 @@ use sysinfo::{ProcessesToUpdate, System};
 
 mod process;
 mod session;
+mod standalone;
 use process::{OwnedChild, TERMINATION_GRACE};
 use session::{RunSession, trace as trace_runner};
+pub use standalone::{StandaloneRequest, run_standalone};
 
 /// Resolve once so compatibility checks and execution use the same Wine.
 fn resolve_wine_override(
@@ -501,6 +503,15 @@ pub fn wine_process_pids(prefix: &Path) -> Vec<i32> {
 }
 
 pub fn is_wine_game_process_running(runner_dir: &Path, target_exe: &Path, prefix: &Path) -> bool {
+    is_wine_process_running(runner_dir, target_exe, prefix, false)
+}
+
+fn is_wine_process_running(
+    runner_dir: &Path,
+    target_exe: &Path,
+    prefix: &Path,
+    standalone: bool,
+) -> bool {
     let prefix_env = format!("WINEPREFIX={}", prefix.display());
     let runner = runner_dir.to_string_lossy().to_lowercase();
     let target = target_exe
@@ -534,7 +545,11 @@ pub fn is_wine_game_process_running(runner_dir: &Path, target_exe: &Path, prefix
             process.name().to_string_lossy(),
             command
         );
-        is_wine_game_process_line(&line, std::process::id(), &runner, &target)
+        if standalone {
+            standalone::is_application_process_line(&line, std::process::id(), &runner, &target)
+        } else {
+            is_wine_game_process_line(&line, std::process::id(), &runner, &target)
+        }
     })
 }
 
@@ -555,6 +570,10 @@ pub fn run_with_args(args: &[String]) -> Result<()> {
     let result = session
         .configure()
         .and_then(|()| run_with_args_inner(args, &mut session));
+    finish_run(&mut session, result)
+}
+
+fn finish_run(session: &mut RunSession, result: Result<RunOutcome>) -> Result<()> {
     match result {
         Ok(outcome) => {
             session.finish(outcome.status, Some(outcome.code), None)?;
@@ -945,7 +964,6 @@ fn run_with_args_inner(args: &[String], session: &mut RunSession) -> Result<RunO
     nucleon_core::runtime_selection::check_host(&runtime)?;
     effective_profile.apply_protocol(&mut runtime)?;
     let pfx_dir = paths::game_prefix(&compat_data_path, &runtime);
-    let runner_dir = runtime.root.clone();
     let graphics = match resolved_graphics {
         Some(components) => components,
         None => GraphicsComponents::discover(
@@ -954,7 +972,7 @@ fn run_with_args_inner(args: &[String], session: &mut RunSession) -> Result<RunO
             game_profile.dxvk_path.as_deref(),
         )?,
     };
-    let mut plan = LaunchPlan::new(
+    let plan = LaunchPlan::new(
         runtime,
         pfx_dir.clone(),
         active_engine,
@@ -963,6 +981,50 @@ fn run_with_args_inner(args: &[String], session: &mut RunSession) -> Result<RunO
         user_shim_override,
         &graphics_api,
     )?;
+    execute_launch(
+        PreparedLaunch {
+            plan,
+            data_path: compat_data_path,
+            appid: compat_appid,
+            arguments: game_args,
+            cwd: None,
+            hud: enable_hud,
+            overlay: enable_overlay,
+            wait: verb == "waitforexitandrun",
+            consume_override: override_path.filter(|_| launch_override.is_some()),
+        },
+        session,
+    )
+}
+
+struct PreparedLaunch {
+    plan: LaunchPlan,
+    data_path: PathBuf,
+    appid: Option<String>,
+    arguments: Vec<String>,
+    cwd: Option<PathBuf>,
+    hud: bool,
+    overlay: bool,
+    wait: bool,
+    consume_override: Option<PathBuf>,
+}
+
+fn execute_launch(prepared: PreparedLaunch, session: &mut RunSession) -> Result<RunOutcome> {
+    let PreparedLaunch {
+        mut plan,
+        data_path: compat_data_path,
+        appid: compat_appid,
+        arguments: game_args,
+        cwd,
+        hud: enable_hud,
+        overlay: enable_overlay,
+        wait,
+        consume_override,
+    } = prepared;
+    let target_exe = PathBuf::from(&game_args[0]);
+    let runner_dir = plan.runtime.root.clone();
+    let pfx_dir = plan.prefix.clone();
+    let active_engine = plan.engine;
     plan.log_directory = Some(session.directory.clone());
     plan.diagnostics = session.debug;
     session.resolved(&plan, None, None)?;
@@ -981,25 +1043,31 @@ fn run_with_args_inner(args: &[String], session: &mut RunSession) -> Result<RunO
         plan.runtime.unix_dir.display()
     ));
 
-    if launch_override.is_some()
-        && let Some(path) = override_path
-    {
+    if let Some(path) = consume_override {
         fs::remove_file(&path)
             .with_context(|| format!("Cannot consume launch override {}", path.display()))?;
     }
 
     let term_flag = termination_flag()?;
     let _runtime_lease = nucleon_core::managed_runtime::lease(&plan.runtime.root)?;
-    let _prefix_session = PrefixSession::acquire(
-        &compat_data_path,
-        &plan.runtime,
-        if verb == "waitforexitandrun" {
-            Duration::from_secs(5)
-        } else {
-            Duration::ZERO
-        },
-        || term_flag.load(Ordering::SeqCst),
-    )?;
+    let _prefix_session = if !plan.steam_integration
+        && plan.prefix != paths::game_prefix(&compat_data_path, &plan.runtime)
+    {
+        PrefixSession::acquire_existing(&pfx_dir, &plan.runtime, || {
+            term_flag.load(Ordering::SeqCst)
+        })?
+    } else {
+        PrefixSession::acquire(
+            &compat_data_path,
+            &plan.runtime,
+            if wait {
+                Duration::from_secs(5)
+            } else {
+                Duration::ZERO
+            },
+            || term_flag.load(Ordering::SeqCst),
+        )?
+    };
     let mut prefix_cleanup = PrefixCleanup {
         runtime: plan.runtime.clone(),
         prefix: pfx_dir.clone(),
@@ -1013,7 +1081,7 @@ fn run_with_args_inner(args: &[String], session: &mut RunSession) -> Result<RunO
         plan.runtime.prefix.abi
     ));
     // Wait for previous instance if requested
-    if verb == "waitforexitandrun" {
+    if wait {
         wait_wineserver(&plan.runtime, &pfx_dir, 5000);
     }
 
@@ -1076,19 +1144,12 @@ fn run_with_args_inner(args: &[String], session: &mut RunSession) -> Result<RunO
     }
 
     // Working directory is the parent of the exe if available
-    let game_cwd = if let Some(exe_path) = game_args.first().map(Path::new) {
-        if let Some(parent) = exe_path.parent() {
-            if parent.is_dir() {
-                Some(parent.to_path_buf())
-            } else {
-                None
-            }
-        } else {
-            None
-        }
-    } else {
-        None
-    };
+    let game_cwd = cwd.or_else(|| {
+        target_exe
+            .parent()
+            .filter(|p| p.is_dir())
+            .map(Path::to_path_buf)
+    });
 
     let is_64 = nucleon_core::detector::is_pe_file_64_bit(&target_exe);
 
@@ -1142,6 +1203,9 @@ fn run_with_args_inner(args: &[String], session: &mut RunSession) -> Result<RunO
 
     let mut cmd = plan.runtime.command(&wine_bin);
     nucleon_core::launch::clean_command(&mut cmd);
+    if !plan.steam_integration {
+        nucleon_core::launch::clean_standalone_command(&mut cmd);
+    }
     cmd.args(&wine_args);
     // Clear parent injection; exec_env supplies only the native renderer on opt-in.
     cmd.env_remove("DYLD_INSERT_LIBRARIES")
@@ -1211,7 +1275,12 @@ fn run_with_args_inner(args: &[String], session: &mut RunSession) -> Result<RunO
                     // poll for up to 5 seconds to detect the background Wine game process before deciding to exit.
                     let mut found_game = false;
                     for _ in 0..25 {
-                        if is_wine_game_process_running(&runner_dir, &target_exe, &pfx_dir) {
+                        if is_wine_process_running(
+                            &runner_dir,
+                            &target_exe,
+                            &pfx_dir,
+                            !plan.steam_integration,
+                        ) {
                             found_game = true;
                             break;
                         }
@@ -1220,7 +1289,9 @@ fn run_with_args_inner(args: &[String], session: &mut RunSession) -> Result<RunO
 
                     if found_game {
                         log_runner("Detected active Wine game process; continuing supervision");
-                        exit_code = 0;
+                        if plan.steam_integration {
+                            exit_code = 0;
+                        }
                     } else {
                         log_runner(
                             "No Wine game processes detected after primary launcher exit, shutting down",
@@ -1253,9 +1324,15 @@ fn run_with_args_inner(args: &[String], session: &mut RunSession) -> Result<RunO
         } else {
             // Check if any background Wine game processes are still running.
             // Require two consecutive negative checks (500ms apart) to avoid false positives during process state changes.
-            if !is_wine_game_process_running(&runner_dir, &target_exe, &pfx_dir) {
+            if !is_wine_process_running(&runner_dir, &target_exe, &pfx_dir, !plan.steam_integration)
+            {
                 thread::sleep(Duration::from_millis(500));
-                if !is_wine_game_process_running(&runner_dir, &target_exe, &pfx_dir) {
+                if !is_wine_process_running(
+                    &runner_dir,
+                    &target_exe,
+                    &pfx_dir,
+                    !plan.steam_integration,
+                ) {
                     log_runner("All Wine game processes have terminated, exiting cleanly");
                     stop_game(
                         session,

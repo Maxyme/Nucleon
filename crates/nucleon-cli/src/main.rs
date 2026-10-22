@@ -12,7 +12,7 @@ use std::path::PathBuf;
 #[derive(Parser)]
 #[command(name = "nucleon")]
 #[command(
-    about = "Nucleon: High-performance standalone Windows game translation on macOS using Wine & Apple GPTK"
+    about = "Nucleon: Windows games and programs on macOS with Wine, Isotope/FEX and Steam integration"
 )]
 #[command(version)]
 struct Cli {
@@ -23,6 +23,72 @@ struct Cli {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn standalone_cli_parses_options_and_preserves_forwarded_arguments() {
+        let cli = Cli::try_parse_from([
+            "nucleon",
+            "run",
+            "Game with ünicode.exe",
+            "--bottle",
+            "my-game",
+            "--wine",
+            "fex-preview",
+            "--engine",
+            "dxvk",
+            "--hud=false",
+            "--",
+            "--wine",
+            "a game option",
+            "",
+        ])
+        .unwrap();
+        let Commands::Run(args) = cli.command else {
+            panic!("expected Run");
+        };
+        assert_eq!(args.bottle.as_deref(), Some("my-game"));
+        assert_eq!(args.arguments, ["--wine", "a game option", ""]);
+        assert_eq!(args.executable, PathBuf::from("Game with ünicode.exe"));
+        let help = Cli::try_parse_from(["nucleon", "run", "--help"])
+            .err()
+            .unwrap();
+        assert_eq!(help.kind(), clap::error::ErrorKind::DisplayHelp);
+        for args in [
+            vec![
+                "nucleon",
+                "bottle",
+                "create",
+                "my-game",
+                "--emulator",
+                "fex",
+            ],
+            vec![
+                "nucleon",
+                "bottle",
+                "configure",
+                "my-game",
+                "--clear",
+                "wine",
+                "--clear",
+                "hud",
+            ],
+            vec![
+                "nucleon",
+                "bottle",
+                "add",
+                "my-game",
+                "game",
+                "Game.exe",
+                "--",
+                "--fullscreen",
+            ],
+            vec![
+                "nucleon", "bottle", "run", "my-game", "game", "--engine", "wine",
+            ],
+        ] {
+            assert!(Cli::try_parse_from(args).is_ok());
+        }
+    }
     #[test]
     fn wine_install_accepts_named_versions_and_explicit_sources() {
         for args in [
@@ -91,6 +157,13 @@ mod tests {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Run a Windows EXE directly, without Steam; use -- to pass program arguments
+    Run(commands::application::RunArgs),
+    /// Manage named environments shared by installers and installed programs
+    Bottle {
+        #[command(subcommand)]
+        action: commands::application::BottleAction,
+    },
     /// Perform idempotent setup check or remediate missing prerequisites ('nucleon setup fix')
     Setup {
         #[command(subcommand)]
@@ -286,6 +359,8 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
+        Commands::Run(args) => commands::application::run(args),
+        Commands::Bottle { action } => commands::application::bottle(action),
         Commands::Setup {
             action,
             non_interactive,

@@ -52,8 +52,44 @@ impl FromStr for Emulator {
 }
 
 pub fn fex_default() -> Result<ResolvedRuntime> {
-    steam::fex::load_selection(&paths::steam_fex_compat_tools_dir().join(steam::fex::SELECTION_FILE))
-        .context("No usable FEX default. Run 'nucleon wine fex install <runtime> --register' or 'nucleon wine fex register <runtime>'")
+    let saved = fex_default_file();
+    let path = if saved.try_exists()? {
+        saved
+    } else {
+        paths::steam_fex_compat_tools_dir().join(steam::fex::SELECTION_FILE)
+    };
+    steam::fex::load_selection(&path)
+        .context("No usable FEX default. Run 'nucleon wine fex select <runtime>' for standalone use, or 'nucleon wine fex register <runtime>' for Steam")
+}
+
+pub fn fex_default_file() -> std::path::PathBuf {
+    paths::support_dir().join("fex-runtime.json")
+}
+
+/// Use the same validated identity as a Steam tool, stored independently of Steam.
+pub fn set_fex_default(runtime: &ResolvedRuntime) -> Result<()> {
+    Emulator::Fex.check(runtime)?;
+    std::fs::create_dir_all(paths::support_dir())?;
+    crate::fs_util::atomic_write_file(
+        fex_default_file(),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "schema": 1, "root": runtime.root, "prefix": runtime.prefix,
+            "managed": runtime.root.join(crate::managed_runtime::RECEIPT).is_file(),
+        }))?,
+    )
+}
+
+/// Prefer the deliberately selected native default; a broken selection is an error.
+pub fn standalone_default() -> Result<ResolvedRuntime> {
+    if fex_default_file().try_exists()?
+        || paths::steam_fex_compat_tools_dir()
+            .join(steam::fex::SELECTION_FILE)
+            .try_exists()?
+    {
+        fex_default()
+    } else {
+        rosetta_default()
+    }
 }
 
 /// Exact names and paths only: a version substring must not change execution mode.
@@ -139,6 +175,25 @@ pub fn check_host(runtime: &ResolvedRuntime) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_default_is_independent_of_steam_and_invalid_selection_is_not_ignored() {
+        if crate::test_support::run_in_isolated_support(
+            "runtime_selection::tests::native_default_is_independent_of_steam_and_invalid_selection_is_not_ignored",
+        ) {
+            return;
+        }
+        let (_temp, runtime) = crate::runtime::fixture(ExecutionMode::Arm64Fex);
+        set_fex_default(&runtime).unwrap();
+        assert_eq!(standalone_default().unwrap().root, runtime.root);
+        assert!(
+            !paths::steam_fex_compat_tools_dir()
+                .join(steam::fex::SELECTION_FILE)
+                .exists()
+        );
+        std::fs::write(fex_default_file(), b"broken").unwrap();
+        assert!(standalone_default().is_err());
+    }
     #[test]
     fn requests_validate_modes_and_do_not_guess_from_version_strings() {
         for (mode, emulator) in [

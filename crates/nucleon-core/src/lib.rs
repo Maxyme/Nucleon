@@ -1,3 +1,4 @@
+pub mod application;
 pub mod artifacts;
 pub mod backend;
 pub mod backend_files;

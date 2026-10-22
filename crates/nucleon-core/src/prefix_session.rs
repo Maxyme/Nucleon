@@ -24,6 +24,49 @@ struct Identity {
 }
 
 impl PrefixSession {
+    /// Reuse a caller-selected Intel prefix without moving it into managed storage.
+    pub fn acquire_existing(
+        prefix: &Path,
+        runtime: &ResolvedRuntime,
+        cancelled: impl Fn() -> bool,
+    ) -> Result<Self> {
+        ensure!(
+            runtime.mode == ExecutionMode::Intel,
+            "Existing external prefixes require Intel/Rosetta Wine; use a separate managed prefix for FEX"
+        );
+        ensure!(!cancelled(), "Prefix launch cancelled");
+        ensure!(
+            prefix.join("drive_c").is_dir()
+                && prefix.join("system.reg").is_file()
+                && prefix.join("user.reg").is_file(),
+            "Not an initialized Wine prefix: {}",
+            prefix.display()
+        );
+        let marker = prefix.join(".nucleon-runtime-abi");
+        if let Some(value) = crate::configuration::optional_file(&marker)? {
+            let mode: ExecutionMode =
+                serde_json::from_str(&value).context("Invalid existing prefix ABI marker")?;
+            ensure!(
+                mode == ExecutionMode::Intel,
+                "Existing prefix belongs to FEX; select its original runtime or a separate prefix"
+            );
+        }
+        let lock = fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(prefix.join(".nucleon-launch.lock"))?;
+        rustix::fs::flock(&lock, rustix::fs::FlockOperation::NonBlockingLockExclusive)
+            .with_context(|| {
+                format!(
+                    "Another Nucleon launch is using prefix {}",
+                    prefix.display()
+                )
+            })?;
+        Ok(Self { _lock: lock })
+    }
+
     pub fn acquire(
         compat_data: &Path,
         runtime: &ResolvedRuntime,
@@ -109,6 +152,27 @@ impl PrefixSession {
 mod tests {
     use super::*;
     use crate::runtime;
+
+    #[test]
+    fn existing_intel_prefixes_are_locked_independently_and_reject_fex() {
+        let (temp, intel) = runtime::fixture(ExecutionMode::Intel);
+        let (_fex_temp, fex) = runtime::fixture(ExecutionMode::Arm64Fex);
+        let prefix = temp.path().join("heroic/game");
+        let other = temp.path().join("heroic/other-game");
+        for path in [&prefix, &other] {
+            fs::create_dir_all(path.join("drive_c")).unwrap();
+            fs::write(path.join("system.reg"), b"registry").unwrap();
+            fs::write(path.join("user.reg"), b"registry").unwrap();
+        }
+        let lease = PrefixSession::acquire_existing(&prefix, &intel, || false).unwrap();
+        assert!(PrefixSession::acquire_existing(&prefix, &intel, || false).is_err());
+        drop(PrefixSession::acquire_existing(&other, &intel, || false).unwrap());
+        assert!(PrefixSession::acquire_existing(&prefix, &fex, || false).is_err());
+        assert_eq!(fs::read(prefix.join("system.reg")).unwrap(), b"registry");
+        drop(lease);
+        fs::write(prefix.join(".nucleon-runtime-abi"), b"\"arm64-fex\"").unwrap();
+        assert!(PrefixSession::acquire_existing(&prefix, &intel, || false).is_err());
+    }
 
     #[test]
     fn compatible_updates_reuse_native_prefix_while_abi_changes_are_rejected() {

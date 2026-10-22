@@ -107,6 +107,8 @@ pub enum WineAction {
 
 #[derive(Subcommand, Debug, Clone)]
 pub enum FexAction {
+    /// Select native Wine for standalone launches without registering a Steam tool
+    Select { runtime: String },
     /// Install a complete local runtime outside the build tree, retaining earlier generations
     Install {
         runtime: String,
@@ -160,6 +162,14 @@ fn install_runtime(
 fn run_fex(action: FexAction) -> Result<()> {
     use nucleon_core::{paths, profile::GameProfile};
     match action {
+        FexAction::Select { runtime } => {
+            let runtime = nucleon_core::runtime_selection::named(&runtime)?;
+            nucleon_core::runtime_selection::set_fex_default(&runtime)?;
+            ui::success(format!(
+                "Standalone FEX default: {}",
+                runtime.root.display()
+            ));
+        }
         FexAction::Install {
             runtime,
             sha256,
@@ -170,12 +180,7 @@ fn run_fex(action: FexAction) -> Result<()> {
         FexAction::Verify { runtime } => {
             let root = match runtime {
                 Some(path) => path,
-                None => {
-                    steam::fex::load_selection(
-                        &paths::steam_fex_compat_tools_dir().join(steam::fex::SELECTION_FILE),
-                    )?
-                    .root
-                }
+                None => nucleon_core::runtime_selection::fex_default()?.root,
             };
             nucleon_core::managed_runtime::verify(&root)?;
             ui::success(format!(
@@ -198,6 +203,10 @@ fn run_fex(action: FexAction) -> Result<()> {
             );
         }
         FexAction::Status => {
+            if nucleon_core::runtime_selection::fex_default_file().try_exists()? {
+                let runtime = nucleon_core::runtime_selection::fex_default()?;
+                ui::kv("Standalone FEX default", runtime.root.display());
+            }
             let path = paths::steam_fex_compat_tools_dir().join(steam::fex::SELECTION_FILE);
             if path.exists() {
                 let runtime = steam::fex::load_selection(&path)?;

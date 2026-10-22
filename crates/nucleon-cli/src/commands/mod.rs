@@ -1,3 +1,4 @@
+pub mod application;
 pub mod backends;
 pub mod d7vk;
 pub mod detect;

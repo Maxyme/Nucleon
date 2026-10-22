@@ -31,6 +31,23 @@ pub struct GraphicsComponents {
 }
 
 impl GraphicsComponents {
+    /// Standalone GPTK may use only the selected runtime's own matched components.
+    pub fn bundled_gptk(runtime: &ResolvedRuntime) -> bool {
+        runtime.mode == ExecutionMode::Intel
+            && crate::runner::missing_d3dmetal_exports(&runtime.root).is_empty()
+            && crate::runner::inspect_gptk_dir(&runtime.root).is_some_and(|(framework, shared)| {
+                runtime_checks::native_arch(&framework.join("D3DMetal"), runtime.arch())
+                    && runtime_checks::native_arch(&shared, runtime.arch())
+                    && crate::runner::gptk_windows_binaries_dir(&framework, &shared).is_some_and(
+                        |dir| {
+                            ["d3d11.dll", "dxgi.dll", "d3d12.dll"]
+                                .iter()
+                                .all(|name| runtime_checks::pe(Some(&dir.join(name)), true))
+                        },
+                    )
+            })
+    }
+
     pub fn discover(
         runtime: &ResolvedRuntime,
         icd: Option<&Path>,
@@ -293,6 +310,8 @@ pub struct LaunchPlan {
     pub bridge: PathBuf,
     pub is64: bool,
     pub use_steam_helper: bool,
+    /// Runtime Steam capabilities are used only for Steam-origin launches.
+    pub steam_integration: bool,
     pub log_directory: Option<PathBuf>,
     pub diagnostics: bool,
     pub runtime_features: RuntimeFeatures,
@@ -351,6 +370,7 @@ impl LaunchPlan {
                 .unwrap_or_else(paths::bridge_dir),
             is64,
             use_steam_helper,
+            steam_integration: true,
             log_directory: None,
             diagnostics: false,
         })
@@ -358,6 +378,12 @@ impl LaunchPlan {
 
     pub fn prepare_prefix(&self) -> Result<()> {
         crate::prefix::ensure_prefix_for_plan(self)
+    }
+
+    pub fn without_steam(mut self) -> Self {
+        self.steam_integration = false;
+        self.use_steam_helper = false;
+        self
     }
 
     fn search_dxmt_builtins(&self) -> bool {
@@ -556,6 +582,13 @@ impl LaunchPlan {
             );
         }
         env.extend(r.environment.iter().map(|(k, v)| (k.clone(), v.clone())));
+        // Wineboot may start the prefix's persistent server. Its synchronization
+        // mode must match the subsequent game process, especially older GPTK Wine.
+        if r.mode == ExecutionMode::Intel {
+            env.insert("ROSETTA_ADVERTISE_AVX".into(), "1".into());
+            env.insert("WINEMSYNC".into(), "1".into());
+            env.insert("WINEESYNC".into(), "1".into());
+        }
         // Set ownership after the descriptor environment: a runtime cannot redirect
         // the watcher to an inherited or unrelated PID.
         if self.runtime_features.guest_supervisor {
@@ -575,39 +608,54 @@ impl LaunchPlan {
         let r = &self.runtime;
         let steam = self.prefix.join("drive_c/Program Files (x86)/Steam");
         let client = paths::steam_data_dir().join("Steam.AppBundle/Steam/Contents/MacOS");
-        env.insert(
-            "STEAM_COMPAT_CLIENT_INSTALL_PATH".into(),
-            std::env::var("STEAM_COMPAT_CLIENT_INSTALL_PATH")
-                .ok()
-                .filter(|s| !s.is_empty())
-                .unwrap_or_else(|| client.display().to_string()),
-        );
-        if r.mode == ExecutionMode::Intel {
-            env.insert("ROSETTA_ADVERTISE_AVX".into(), "1".into());
-            env.insert("WINEMSYNC".into(), "1".into());
-            env.insert("WINEESYNC".into(), "1".into());
+        if self.steam_integration {
+            env.insert(
+                "STEAM_COMPAT_CLIENT_INSTALL_PATH".into(),
+                std::env::var("STEAM_COMPAT_CLIENT_INSTALL_PATH")
+                    .ok()
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or_else(|| client.display().to_string()),
+            );
         }
-        let mut dlls = vec![steam.clone()];
-        dlls.extend(r.windows_dirs.clone());
-        let mut libs = vec![
-            steam.clone(),
-            r.unix_dir.clone(),
-            r.root.join("lib"),
-            client.clone(),
-        ];
-        let mut overrides = if r.mode == ExecutionMode::Arm64Fex {
+        let mut dlls = r.windows_dirs.clone();
+        let mut libs = vec![r.unix_dir.clone(), r.root.join("lib")];
+        if self.steam_integration {
+            dlls.insert(0, steam.clone());
+            libs.insert(0, steam.clone());
+            libs.push(client.clone());
+        }
+        let mut overrides = if !self.steam_integration {
+            String::new()
+        } else if r.mode == ExecutionMode::Arm64Fex {
             "steamclient=n,b;steamclient64=n,b;lsteamclient=n,b".to_string()
         } else {
             "steamclient=n,b;steamclient64=n,b;lsteamclient=b".to_string()
         };
         match self.engine {
-            TargetEngine::Gptk => crate::runner::apply_gptk_execution_env(
-                &mut env,
-                &r.root,
-                &steam,
-                &client.to_string_lossy(),
-                hud,
-            ),
+            TargetEngine::Gptk => {
+                crate::runner::apply_gptk_execution_env(
+                    &mut env,
+                    &r.root,
+                    &steam,
+                    &client.to_string_lossy(),
+                    hud,
+                );
+                if !self.steam_integration {
+                    env.insert(
+                        "WINEDLLOVERRIDES".into(),
+                        "d3d11,dxgi,d3d12,d3d10core,d3dcompiler_47=n,b;nvapi64,nvngx=n,b".into(),
+                    );
+                    let native = vec![
+                        r.root.join("lib/external"),
+                        r.root
+                            .join("lib/external/D3DMetal.framework/Versions/Current/Resources"),
+                        r.unix_dir.clone(),
+                        r.root.join("lib"),
+                    ];
+                    env.insert("DYLD_FALLBACK_LIBRARY_PATH".into(), join(&native));
+                    env.insert("DYLD_LIBRARY_PATH".into(), join(&native));
+                }
+            }
             TargetEngine::Dxmt => {
                 let b = self.graphics.dxmt.as_ref().expect("preflight DXMT");
                 dlls.insert(0, b.root.clone());
@@ -681,9 +729,12 @@ impl LaunchPlan {
             _ => overrides.push_str(";d3d9,d3d10,d3d10_1,d3d10core=b,n"),
         }
         if self.engine != TargetEngine::Gptk {
-            env.insert("WINEDLLOVERRIDES".into(), overrides);
+            env.insert(
+                "WINEDLLOVERRIDES".into(),
+                overrides.trim_start_matches(';').into(),
+            );
         }
-        if r.steam_protocol == SteamProtocol::ValveRedirect {
+        if self.steam_integration && r.steam_protocol == SteamProtocol::ValveRedirect {
             env.insert("NUCLEON_STEAMCLIENT_REDIRECT".into(), "1".into());
             env.entry("WINEDLLOVERRIDES".into())
                 .or_default()
@@ -692,6 +743,17 @@ impl LaunchPlan {
         if self.engine != TargetEngine::Gptk {
             env.insert("DYLD_LIBRARY_PATH".into(), join(&libs));
             env.insert("DYLD_FALLBACK_LIBRARY_PATH".into(), join(&libs));
+        }
+        // Complete toolkit bundles resolve their matched native framework through
+        // their own loader paths. Generic Wine paths can break that resolution
+        // (notably GPTK 4's dxgi initialization on older bundled Wine).
+        if !self.steam_integration
+            && self.engine == TargetEngine::WineStaging
+            && r.mode == ExecutionMode::Intel
+            && r.root.join("lib/external/D3DMetal.framework").is_dir()
+        {
+            env.remove("DYLD_LIBRARY_PATH");
+            env.remove("DYLD_FALLBACK_LIBRARY_PATH");
         }
         env.insert("WINEDLLPATH".into(), join(&dlls));
         env.insert(
@@ -708,7 +770,8 @@ impl LaunchPlan {
         if hud {
             env.insert("MTL_HUD_ENABLED".into(), "1".into());
         }
-        if overlay
+        if self.steam_integration
+            && overlay
             && client.join("gameoverlayrenderer.dylib").is_file()
             && runtime_checks::native_arch(&client.join("gameoverlayrenderer.dylib"), r.arch())
         {
@@ -782,6 +845,17 @@ impl LaunchPlan {
             );
             env.insert("WINEDEBUG".into(), value);
         }
+        if let Some(value) = setting("NUCLEON_WINEDLLOVERRIDES")? {
+            anyhow::ensure!(
+                !value.trim().is_empty(),
+                "NUCLEON_WINEDLLOVERRIDES must name DLL overrides"
+            );
+            let overrides = env.entry("WINEDLLOVERRIDES".into()).or_default();
+            if !overrides.is_empty() {
+                overrides.push(';');
+            }
+            overrides.push_str(&value);
+        }
         if let Some(value) = setting("NUCLEON_TRACE_PROCESS_EXIT")? {
             if crate::configuration::boolean("NUCLEON_TRACE_PROCESS_EXIT", &value)? {
                 env.insert("NUCLEON_TRACE_PROCESS_EXIT".into(), "1".into());
@@ -806,7 +880,7 @@ impl LaunchPlan {
     }
 
     pub fn wine_args(&self, args: &[String]) -> Result<Vec<String>> {
-        if !self.use_steam_helper {
+        if !self.steam_integration || !self.use_steam_helper {
             return Ok(args.to_vec());
         }
         self.validate_steam_helper()?;
@@ -848,6 +922,9 @@ fn join(paths: &[PathBuf]) -> String {
 }
 
 pub const FEATURE_OVERRIDES: &[&str] = &[
+    "ROSETTA_ADVERTISE_AVX_COPY",
+    "D3DM_MTL4",
+    "D3DM_SUPPORT_DXR",
     "VKD3D_CONFIG",
     "VKD3D_FEATURE_LEVEL",
     "VKD3D_SHADER_MODEL",
@@ -896,9 +973,133 @@ pub fn clean_command(command: &mut Command) {
     }
 }
 
+/// Standalone children must not acquire a parent's Steam identity or bridge settings.
+pub fn clean_standalone_command(command: &mut Command) {
+    for (key, _) in std::env::vars_os() {
+        let name = key.to_string_lossy();
+        if name.starts_with("STEAM_") || name.starts_with("Steam") {
+            command.env_remove(key);
+        }
+    }
+    for key in [
+        "SteamAppId",
+        "SteamGameId",
+        "NUCLEON_STEAMCLIENT_REDIRECT",
+        "NUCLEON_STEAM_SHIM",
+        "NUCLEON_FEX_SELECTION",
+        "NUCLEON_GAME_PROFILE",
+        "NUCLEON_OVERLAY",
+        "MTL_HUD_ENABLED",
+    ] {
+        command.env_remove(key);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn standalone_gptk_environment_keeps_metal_and_removes_steam() {
+        let (_temp, mut runtime) = runtime::fixture(ExecutionMode::Intel);
+        assert!(!GraphicsComponents::bundled_gptk(&runtime));
+        runtime.backends.push(GraphicsBackend::D3DMetal);
+        let plan = LaunchPlan::new(
+            runtime,
+            PathBuf::from("/tmp/test-prefix"),
+            TargetEngine::Gptk,
+            GraphicsComponents::default(),
+            true,
+            Some(false),
+            &GraphicsApi::DirectX12,
+        )
+        .unwrap()
+        .without_steam();
+        let environment = plan.execution_env(false, false);
+        assert!(environment["WINEDLLOVERRIDES"].contains("d3d12"));
+        assert!(environment["DYLD_FALLBACK_LIBRARY_PATH"].contains("D3DMetal.framework"));
+        for key in [
+            "WINEDLLOVERRIDES",
+            "DYLD_LIBRARY_PATH",
+            "DYLD_FALLBACK_LIBRARY_PATH",
+            "WINEDLLPATH",
+        ] {
+            assert!(!environment[key].to_lowercase().contains("steam"));
+        }
+        assert!(!environment.contains_key("STEAM_COMPAT_CLIENT_INSTALL_PATH"));
+        let bootstrap = plan.bootstrap_env();
+        for key in ["WINEESYNC", "WINEMSYNC", "ROSETTA_ADVERTISE_AVX"] {
+            assert_eq!(bootstrap[key], "1");
+            assert_eq!(bootstrap[key], environment[key]);
+        }
+        let mut configured = environment.clone();
+        plan.configure_environment(&mut configured, |key| {
+            Ok(match key {
+                "NUCLEON_WINEDLLOVERRIDES" => Some("d3dcompiler_47=n,b".into()),
+                "NUCLEON_ROSETTA_ADVERTISE_AVX_COPY" => Some("1".into()),
+                _ => None,
+            })
+        })
+        .unwrap();
+        assert!(configured["WINEDLLOVERRIDES"].contains("d3d12"));
+        assert!(configured["WINEDLLOVERRIDES"].ends_with("d3dcompiler_47=n,b"));
+        assert_eq!(configured["ROSETTA_ADVERTISE_AVX_COPY"], "1");
+    }
+
+    #[test]
+    fn standalone_toolkit_preserves_bundled_native_library_resolution() {
+        let (_temp, runtime) = runtime::fixture(ExecutionMode::Intel);
+        fs::create_dir_all(runtime.root.join("lib/external/D3DMetal.framework")).unwrap();
+        let plan = LaunchPlan::new(
+            runtime,
+            PathBuf::from("/tmp/standalone-prefix"),
+            TargetEngine::WineStaging,
+            GraphicsComponents::default(),
+            true,
+            None,
+            &GraphicsApi::Unknown,
+        )
+        .unwrap()
+        .without_steam();
+        let env = plan.execution_env(true, false);
+        assert!(!env.contains_key("DYLD_LIBRARY_PATH"));
+        assert!(!env.contains_key("DYLD_FALLBACK_LIBRARY_PATH"));
+        assert!(env.contains_key("WINEDLLPATH"));
+        assert_eq!(env["WINEESYNC"], plan.bootstrap_env()["WINEESYNC"]);
+        assert_eq!(env["MTL_HUD_ENABLED"], "1");
+    }
+
+    #[test]
+    fn standalone_ignores_runtime_steam_capabilities_and_needs_no_bridge() {
+        let (_temp, mut runtime) = runtime::fixture(ExecutionMode::Arm64Fex);
+        runtime.steam_helper = true;
+        runtime.steam_protocol = SteamProtocol::ValveRedirect;
+        let plan = LaunchPlan::new(
+            runtime,
+            PathBuf::from("/tmp/standalone-prefix"),
+            TargetEngine::WineStaging,
+            GraphicsComponents::default(),
+            true,
+            None,
+            &GraphicsApi::Unknown,
+        )
+        .unwrap()
+        .without_steam();
+        let env = plan.execution_env(false, true);
+        for key in [
+            "STEAM_COMPAT_CLIENT_INSTALL_PATH",
+            "NUCLEON_STEAMCLIENT_REDIRECT",
+            "DYLD_INSERT_LIBRARIES",
+        ] {
+            assert!(!env.contains_key(key), "{key}");
+        }
+        for key in ["WINEDLLPATH", "DYLD_LIBRARY_PATH", "WINEDLLOVERRIDES"] {
+            assert!(!env[key].contains("Steam"), "{}", env[key]);
+        }
+        assert!(!env["WINEDLLOVERRIDES"].contains("steamclient"));
+        let args = vec!["/tmp/Game.exe".into(), "argument with spaces".into()];
+        assert_eq!(plan.wine_args(&args).unwrap(), args);
+    }
 
     #[test]
     fn optional_runtime_extensions_are_detected_from_native_symbols() {

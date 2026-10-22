@@ -234,6 +234,7 @@ mod tests {
         let driver = temp.path().join("driver.dylib");
         fs::write(&driver, b"driver").unwrap();
         let mut plan = LaunchPlan {
+            steam_integration: true,
             runtime_features: Default::default(),
             runtime: runtime.clone(),
             prefix: temp.path().join("pfx"),

@@ -50,7 +50,7 @@ pub fn load_selection(path: &Path) -> Result<ResolvedRuntime> {
         runtime.mode == ExecutionMode::Arm64Fex
             && runtime.root == selection.root
             && runtime.prefix == selection.prefix,
-        "Experimental runtime identity changed. Register the intended runtime again with 'nucleon wine fex register <runtime>'"
+        "Native runtime identity changed. Select it again with 'nucleon wine fex select <runtime>', or register the intended Steam runtime with 'nucleon wine fex register <runtime>'"
     );
     Ok(runtime)
 }
@@ -60,7 +60,8 @@ pub fn register(runtime_root: &Path, runner_bin: &Path) -> Result<()> {
         runtime_root,
         runner_bin,
         &paths::steam_fex_compat_tools_dir(),
-    )
+    )?;
+    crate::runtime_selection::set_fex_default(&ResolvedRuntime::inspect(runtime_root)?)
 }
 
 pub fn register_at(runtime_root: &Path, runner_bin: &Path, target: &Path) -> Result<()> {
