@@ -22,12 +22,11 @@ with a distinct prefix family. Run receipts identify the frontend ABI and manife
 The real generation passed managed import/full verification, relocation, DX11/DX12
 staging and reimport. The final stricter contract also passed real-artifact
 preflight/staging and rejected an unpaired override before prefix mutation.
-[The integration receipt](tools/arm64ec-integration-validation.json) records these
-checks and the paired hashes. No Wine, Steam, game or GPU workload was executed;
+No Wine, Steam, game or GPU workload was executed during these checks;
 Steam registration and production selection were not changed. Graphics execution
 controls, Steam/gameplay validation, performance and DXMT integration remain open.
 
-A subsequent [installed-game validation](tools/arm64ec-game-validation.md) ran
+A subsequent installed-game validation ran
 DiRT Rally 2.0 and DMC5 with this generation, and 32-bit Braid/GoNNER with the
 baseline generation. All prefix cleanup audits passed, but game failures/stalls
 prevented verification of normal menu exits. Production promotion remains blocked.
@@ -49,9 +48,8 @@ classification alone does not prove a component belongs to the validated set.
 
 ## Evidence checked
 
-The committed summary is `tools/arm64ec-graphics-validation.json`; its narrative
-is `tools/arm64ec-graphics-validation.md`. The referenced local receipts and
-draw/control logs are present under `target/arm64-fex/arm64ec/runs/`.
+The table below summarizes the graphics probes inspected during this historical
+investigation. Runtime build and probe tooling is now maintained in Isotope.
 
 | Recorded run | Evidence inspected | Remaining limitation |
 | --- | --- | --- |

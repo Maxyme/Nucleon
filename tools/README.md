@@ -30,5 +30,4 @@ uses Nucleon's prefix/bridge preparation, and keeps its negative controls.
 Supply `NUCLEON_STEAM_API` and optionally `NUCLEON_STEAM_BRIDGE`. It does not run a
 game. Runtime build/graphics tooling no longer depends on installed games.
 
-Historical validation JSON files retain their original dates and policies.
-See the standalone builder for current optional x86 validation and release CI.
+See the standalone builder for runtime validation and release CI.

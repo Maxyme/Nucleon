@@ -183,15 +183,15 @@ production default and Steam registration remain unchanged. The defaulted
 graphics ABI, pairing manifest, strict selected-file checks and separate assembler
 are in place. The retained real runtime passed import, full integrity verification,
 relocation, DX11/DX12 staging and reimport without execution; final preflight and
-override rejection also passed. See [the integration receipt](tools/arm64ec-integration-validation.json)
-and [the detailed investigation](ARM64EC-PRODUCTION-INVESTIGATION.md). Core/runner
+override rejection also passed. See
+[the detailed investigation](ARM64EC-PRODUCTION-INVESTIGATION.md). Core/runner
 tests (203 + 16 + 6), 14 Python tests, lint and formatting passed. GPU, Steam,
 gameplay and performance validation remain pending; Steam launch was explicitly
 excluded by the user. DXMT remains a separate integration.
 
-`tools/arm64ec-graphics-validation.md` records GPU and TLS probe success, including
-negative controls and a paired DXMT/native Metal experiment. It explicitly does
-not establish Steam compatibility, sustained gameplay, or performance. Retain
+Earlier GPU and TLS probes passed, including negative controls and a paired
+DXMT/native Metal experiment. These results do not establish Steam compatibility,
+sustained gameplay, or performance. Retain
 the normal rejection until an opt-in path implements the contract below.
 
 1. Define a typed graphics frontend ABI (`x64` / `arm64ec`) with backward-compatible
@@ -251,7 +251,7 @@ experiments, launch games, or establish a full-suite baseline.
 
 ## Installed-game follow-up (2026-10-16)
 
-[Four-game validation](tools/arm64ec-game-validation.md) completed with failures.
+Four-game validation completed with failures.
 DiRT and GoNNER reached their supervised time limits; DMC5 reached DX12 swapchain
 creation but required cancellation during a stack-exception loop; Braid exited
 255. All four independent prefix cleanup checks passed. Normal menu exits and
