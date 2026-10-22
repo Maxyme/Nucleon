@@ -13,6 +13,7 @@ pub mod setup;
 pub mod status;
 pub mod steam;
 pub mod ui;
+pub mod upscaler;
 pub mod vkd3d;
 pub mod wine;
 

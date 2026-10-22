@@ -87,6 +87,22 @@ fn environment_boolean(name: &str) -> Result<Option<bool>> {
         .transpose()
 }
 
+fn requested_upscaler(
+    temporary: Option<&LaunchOverride>,
+    environment: Option<&str>,
+    profile: &LaunchOverride,
+) -> Result<Option<nucleon_core::upscaler::Settings>> {
+    if let Some(settings) = temporary.and_then(|p| p.upscaler.clone()) {
+        return Ok(Some(settings));
+    }
+    if let Some(value) = environment {
+        return Ok(Some(nucleon_core::upscaler::Settings::selected(
+            value.parse()?,
+        )));
+    }
+    Ok(profile.upscaler.clone())
+}
+
 fn validate_graphics_paths(
     profile: &LaunchOverride,
     source: &str,
@@ -843,6 +859,19 @@ fn run_with_args_inner(args: &[String], session: &mut RunSession) -> Result<RunO
     let mut resolved_runtime = selected_runtime.clone();
     let detection = nucleon_core::detector::detect_target_engine(&target_exe);
     let mut effective_profile = game_profile.clone();
+    effective_profile.upscaler = requested_upscaler(
+        launch_override.as_ref(),
+        if launch_override
+            .as_ref()
+            .is_some_and(|p| p.upscaler.is_some())
+        {
+            None
+        } else {
+            config::environment("NUCLEON_UPSCALER")?
+        }
+        .as_deref(),
+        &game_profile,
+    )?;
     effective_profile.graphics_api = launch_override
         .as_ref()
         .and_then(|p| p.graphics_api)
@@ -992,12 +1021,14 @@ fn run_with_args_inner(args: &[String], session: &mut RunSession) -> Result<RunO
             overlay: enable_overlay,
             wait: verb == "waitforexitandrun",
             consume_override: override_path.filter(|_| launch_override.is_some()),
+            upscaler: effective_profile.upscaler,
         },
         session,
     )
 }
 
 struct PreparedLaunch {
+    upscaler: Option<nucleon_core::upscaler::Settings>,
     plan: LaunchPlan,
     data_path: PathBuf,
     appid: Option<String>,
@@ -1011,6 +1042,7 @@ struct PreparedLaunch {
 
 fn execute_launch(prepared: PreparedLaunch, session: &mut RunSession) -> Result<RunOutcome> {
     let PreparedLaunch {
+        upscaler,
         mut plan,
         data_path: compat_data_path,
         appid: compat_appid,
@@ -1022,6 +1054,40 @@ fn execute_launch(prepared: PreparedLaunch, session: &mut RunSession) -> Result<
         consume_override,
     } = prepared;
     let target_exe = PathBuf::from(&game_args[0]);
+    // Resolve before prefix initialization, and hold the installation lock through game cleanup.
+    let scaler_root = nucleon_core::upscaler::root();
+    let scaler_choice = upscaler.clone().unwrap_or_else(|| {
+        nucleon_core::upscaler::Settings::selected(nucleon_core::upscaler::Backend::Game)
+    });
+    if upscaler.is_some() {
+        session.upscaler_requested(&scaler_choice)?;
+    }
+    let resolved_scaler = nucleon_core::upscaler::resolve_for_launch(
+        &scaler_root,
+        &plan,
+        &target_exe,
+        &scaler_choice,
+    )?;
+    if upscaler.is_some() || scaler_choice.backend != nucleon_core::upscaler::Backend::Game {
+        nucleon_core::upscaler::preview(&scaler_root, &resolved_scaler)?;
+    }
+    nucleon_core::upscaler::validate_raw_overrides(
+        config::environment("NUCLEON_WINEDLLOVERRIDES")?
+            .as_deref()
+            .unwrap_or(""),
+        scaler_choice.backend,
+    )?;
+    let scaler_installation = if scaler_choice.backend != nucleon_core::upscaler::Backend::Game {
+        Some(nucleon_core::upscaler::Installation::open(
+            &scaler_root,
+            &resolved_scaler,
+        )?)
+    } else {
+        nucleon_core::upscaler::Installation::existing(&scaler_root, &target_exe)?
+    };
+    if let Some(installation) = &scaler_installation {
+        installation.assert_idle(Some(&plan.prefix))?;
+    }
     let runner_dir = plan.runtime.root.clone();
     let pfx_dir = plan.prefix.clone();
     let active_engine = plan.engine;
@@ -1085,6 +1151,17 @@ fn execute_launch(prepared: PreparedLaunch, session: &mut RunSession) -> Result<
         wait_wineserver(&plan.runtime, &pfx_dir, 5000);
     }
 
+    let mut observed_binding = None;
+    let mut exec_env = plan.execution_env(enable_hud, enable_overlay);
+    plan.configure_launch_environment(&mut exec_env)?;
+    if let Some(installation) = &scaler_installation {
+        let binding =
+            nucleon_core::upscaler::prepare(&scaler_root, installation, &resolved_scaler)?;
+        nucleon_core::upscaler::apply_environment(&binding, &mut exec_env)?;
+        session.upscaler(&binding)?;
+        nucleon_core::upscaler::begin_observation(&binding)?;
+        observed_binding = Some(binding);
+    }
     plan.prepare_prefix().with_context(|| {
         format!(
             "Cannot initialize prefix {} using Wine {}",
@@ -1097,8 +1174,6 @@ fn execute_launch(prepared: PreparedLaunch, session: &mut RunSession) -> Result<
         "Resolved graphics {:?} active ({staged} DLL operations)",
         active_engine
     ));
-    let mut exec_env = plan.execution_env(enable_hud, enable_overlay);
-    plan.configure_launch_environment(&mut exec_env)?;
     let caches = nucleon_core::shader_cache::ShaderCaches::prepare(
         &plan,
         &compat_data_path,
@@ -1203,6 +1278,17 @@ fn execute_launch(prepared: PreparedLaunch, session: &mut RunSession) -> Result<
 
     let mut cmd = plan.runtime.command(&wine_bin);
     nucleon_core::launch::clean_command(&mut cmd);
+    if scaler_installation.is_some() || upscaler.is_some() {
+        for (key, _) in env::vars_os() {
+            let key_text = key.to_string_lossy();
+            if key_text.starts_with("FSR4_")
+                || key_text == "D3DMETAL_FRAMEWORK_PATH"
+                || key_text == "D3DM_ENABLE_METALFX"
+            {
+                cmd.env_remove(key);
+            }
+        }
+    }
     if !plan.steam_integration {
         nucleon_core::launch::clean_standalone_command(&mut cmd);
     }
@@ -1236,6 +1322,9 @@ fn execute_launch(prepared: PreparedLaunch, session: &mut RunSession) -> Result<
     let mut outcome = "exited";
 
     loop {
+        if let Some(binding) = &observed_binding {
+            session.upscaler_observation(nucleon_core::upscaler::observation(binding)?)?;
+        }
         if run_seconds.is_some_and(|limit| started.elapsed() >= limit) {
             log_runner("Bounded run finished; stopping owned Wine prefix");
             stop_game(
@@ -1359,6 +1448,41 @@ fn execute_launch(prepared: PreparedLaunch, session: &mut RunSession) -> Result<
 mod tests {
     use super::*;
     use sysinfo::{Pid, Signal};
+
+    #[test]
+    fn upscaler_precedence_preserves_explicit_game_and_reports_invalid_values() {
+        use nucleon_core::upscaler::{Backend, Settings};
+        let profile = LaunchOverride {
+            upscaler: Some(Settings::selected(Backend::Fsr2)),
+            ..Default::default()
+        };
+        let temporary = LaunchOverride {
+            upscaler: Some(Settings::selected(Backend::Game)),
+            ..Default::default()
+        };
+        assert_eq!(
+            requested_upscaler(Some(&temporary), Some("bad"), &profile)
+                .unwrap()
+                .unwrap()
+                .backend,
+            Backend::Game
+        );
+        assert_eq!(
+            requested_upscaler(None, Some("fsr3.1"), &profile)
+                .unwrap()
+                .unwrap()
+                .backend,
+            Backend::Fsr31
+        );
+        assert!(requested_upscaler(None, Some("bad"), &profile).is_err());
+        assert_eq!(
+            requested_upscaler(None, None, &profile)
+                .unwrap()
+                .unwrap()
+                .backend,
+            Backend::Fsr2
+        );
+    }
 
     #[test]
     fn helper_timeout_kills_and_reaps_the_child() {

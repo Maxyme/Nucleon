@@ -14,6 +14,7 @@ use std::{
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Settings {
+    pub upscaler: Option<crate::upscaler::Settings>,
     pub wine: Option<String>,
     pub emulator: Option<Emulator>,
     pub engine: Option<String>,
@@ -25,6 +26,7 @@ impl Settings {
     /// Explicit fields win; false and auto are intentional choices.
     pub fn with_defaults(self, defaults: Self) -> Self {
         Self {
+            upscaler: self.upscaler.or(defaults.upscaler),
             wine: self.wine.or(defaults.wine),
             emulator: self.emulator.or(defaults.emulator),
             engine: self.engine.or(defaults.engine),
@@ -45,6 +47,7 @@ impl Settings {
 
     pub fn profile(&self) -> GameProfile {
         GameProfile {
+            upscaler: self.upscaler.clone(),
             wine: self.wine.clone(),
             emulator: self.emulator,
             engine: self.engine.clone(),
@@ -68,6 +71,8 @@ impl Settings {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Application {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upscaler: Option<crate::upscaler::Settings>,
     pub executable: PathBuf,
     #[serde(default)]
     pub arguments: Vec<String>,
@@ -81,6 +86,7 @@ impl Application {
             .with_context(|| format!("Resolve executable {}", executable.display()))?;
         crate::detector::executable_guest(&executable)?;
         Ok(Self {
+            upscaler: None,
             executable,
             arguments,
             cwd: cwd.map(working_directory).transpose()?,

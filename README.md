@@ -31,6 +31,14 @@ their selected runtime, preferences, installed files and saves across launches.
 See [standalone usage](STANDALONE.md) for saved applications, configuration and
 runtime selection.
 
+An experimental [Talos 2 FSR4 Lite integration](tools/upscalers/README.md) can
+prepare a private GPTK/MetalFX hook and game-local DLSS bridge without starting
+the game. It includes integrity checks, a launch preview and rollback; Talos
+compatibility still requires a separate game test.
+Managed [upscaler selection](UPSCALING.md) shares preferences across direct EXEs,
+bottles and Steam, with preparation previews, integrity checks and rollback.
+The [design](UPSCALING-PLAN.md) records runtime/backend compatibility gates.
+
 ## Running locally
 
 From the checkout, build and use the local CLI:

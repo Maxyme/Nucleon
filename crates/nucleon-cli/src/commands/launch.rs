@@ -8,8 +8,10 @@ pub fn run_launch(
     engine: Option<String>,
     wine: Option<String>,
     emulator: Option<nucleon_core::runtime_selection::Emulator>,
+    upscaler: Option<nucleon_core::upscaler::Backend>,
 ) -> Result<()> {
-    let request = prepare_request(hud, engine.as_deref(), wine.as_deref(), emulator)?;
+    let mut request = prepare_request(hud, engine.as_deref(), wine.as_deref(), emulator)?;
+    request.upscaler = upscaler.map(nucleon_core::upscaler::Settings::selected);
     if let Some(path) = &request.wine {
         println!("  Wine: {path}");
     }

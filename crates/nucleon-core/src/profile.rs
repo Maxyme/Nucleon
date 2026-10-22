@@ -42,6 +42,8 @@ impl GraphicsPreference {
 #[serde(deny_unknown_fields)]
 pub struct GameProfile {
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub upscaler: Option<crate::upscaler::Settings>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub hud: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub engine: Option<String>,
@@ -73,6 +75,7 @@ impl GameProfile {
     /// Fill absent fields without overriding explicit false or auto choices.
     pub fn with_defaults(self, defaults: Self) -> Self {
         Self {
+            upscaler: self.upscaler.or(defaults.upscaler),
             hud: self.hud.or(defaults.hud),
             engine: self.engine.or(defaults.engine),
             use_steam_shim: self.use_steam_shim.or(defaults.use_steam_shim),

@@ -31,6 +31,7 @@ pub mod steam;
 pub mod steam_contract;
 #[cfg(target_os = "macos")]
 pub mod steam_ntdll;
+pub mod upscaler;
 pub mod validator;
 pub mod vdf;
 pub mod vkd3d;

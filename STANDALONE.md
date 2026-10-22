@@ -45,6 +45,12 @@ its matched D3DMetal components, selected explicitly with `--wine`; it does not
 replace a selected Wine runtime with another runner.
 `--hud` enables the Metal HUD; `--hud=false` explicitly disables it.
 
+`--upscaler game|fsr2|fsr3.1|xess|metalfx|fsr4-native-lite|fsr4-native`
+selects an experimental prepared upscaler. Install the provider and bind the
+rendering EXE before launch; bottle defaults do not automatically inject
+installers. See [upscaling](UPSCALING.md) for preparation, saved application
+preferences, supported graphics paths and restoration.
+
 Each canonical EXE path gets a separate data directory by default. A symlink to
 that same EXE uses the same identity. Moving or renaming an EXE selects a new
 identity; use a bottle for a stable environment shared by multiple executables.

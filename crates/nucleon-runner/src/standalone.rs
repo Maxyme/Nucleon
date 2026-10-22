@@ -25,6 +25,9 @@ pub fn run_standalone(request: StandaloneRequest) -> Result<()> {
         .as_deref()
         .map(nucleon_core::application::working_directory)
         .transpose()?;
+    let saved_upscaler = request.application.upscaler.clone();
+    let mut settings = request.settings;
+    settings.upscaler = settings.upscaler.or(saved_upscaler);
     let application = Application::new(
         &request.application.executable,
         request.application.arguments,
@@ -35,18 +38,18 @@ pub fn run_standalone(request: StandaloneRequest) -> Result<()> {
         (
             format!("prefix-{identity}"),
             prefix.join(".nucleon-data"),
-            request.settings,
+            settings,
         )
     } else if let Some(name) = &request.bottle {
         let bottle = Bottle::load(name)?;
         (
             format!("bottle-{name}"),
             bottle.data_directory()?,
-            request.settings.with_defaults(bottle.settings),
+            settings.with_defaults(bottle.settings),
         )
     } else {
         let (identity, data) = nucleon_core::application::standalone_data(&application.executable)?;
-        (identity, data, request.settings)
+        (identity, data, settings)
     };
     let mut arguments = vec![
         application
@@ -78,6 +81,7 @@ pub fn run_standalone(request: StandaloneRequest) -> Result<()> {
                 overlay: false,
                 wait: false,
                 consume_override: None,
+                upscaler: settings.upscaler.clone(),
             },
             &mut session,
         )

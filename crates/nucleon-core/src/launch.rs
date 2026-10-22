@@ -303,6 +303,7 @@ impl RuntimeFeatures {
 
 #[derive(Debug)]
 pub struct LaunchPlan {
+    pub api: GraphicsApi,
     pub runtime: ResolvedRuntime,
     pub prefix: PathBuf,
     pub engine: TargetEngine,
@@ -360,6 +361,7 @@ impl LaunchPlan {
         let use_steam_helper = helper.unwrap_or(runtime.steam_helper || !is64);
         let runtime_features = RuntimeFeatures::inspect(&runtime);
         Ok(Self {
+            api: api.clone(),
             runtime_features,
             runtime,
             prefix: std::path::absolute(prefix)?,

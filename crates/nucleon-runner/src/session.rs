@@ -90,6 +90,8 @@ struct Receipt {
     frontend_abi: Option<nucleon_core::runtime::FrontendAbi>,
     frontend_manifest: Option<PathBuf>,
     engine: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    upscaler: Option<serde_json::Value>,
     prefix: Option<PathBuf>,
     shader_caches: Option<serde_json::Value>,
     staged_files: Option<usize>,
@@ -189,6 +191,7 @@ impl RunSession {
             frontend_abi: None,
             frontend_manifest: None,
             engine: None,
+            upscaler: None,
             prefix: None,
             shader_caches: None,
             staged_files: None,
@@ -258,6 +261,45 @@ impl RunSession {
         self.receipt.staged_files = staged;
         self.receipt.shader_caches = caches;
         self.save()
+    }
+
+    pub fn upscaler(&mut self, binding: &nucleon_core::upscaler::Binding) -> Result<()> {
+        let requested = self
+            .receipt
+            .upscaler
+            .as_ref()
+            .and_then(|v| v.get("requested"))
+            .cloned()
+            .unwrap_or(serde_json::to_value(&binding.settings)?);
+        let mut value = serde_json::to_value(binding)?;
+        value["requested"] = requested;
+        value["preparation"] = if binding.settings.backend == nucleon_core::upscaler::Backend::Game
+        {
+            "restored"
+        } else {
+            "prepared"
+        }
+        .into();
+        self.receipt.upscaler = Some(value);
+        self.save()
+    }
+    pub fn upscaler_requested(
+        &mut self,
+        settings: &nucleon_core::upscaler::Settings,
+    ) -> Result<()> {
+        self.receipt.upscaler = Some(
+            serde_json::json!({"requested":settings,"preparation":"pending","activation":"not-observed"}),
+        );
+        self.save()
+    }
+    pub fn upscaler_observation(&mut self, evidence: serde_json::Value) -> Result<()> {
+        if let Some(value) = &mut self.receipt.upscaler
+            && value["observed"] != evidence
+        {
+            value["observed"] = evidence;
+            self.save()?;
+        }
+        Ok(())
     }
     pub fn started(&mut self) -> Result<()> {
         self.clock.game.set(Some(Instant::now()));

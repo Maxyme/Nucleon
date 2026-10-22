@@ -25,6 +25,52 @@ mod tests {
     use super::*;
 
     #[test]
+    fn upscaler_commands_and_saved_preferences_parse_without_launching() {
+        for args in [
+            vec!["nucleon", "run", "Game.exe", "--upscaler", "fsr3.1"],
+            vec!["nucleon", "launch", "123", "--upscaler", "fsr4-native-lite"],
+            vec![
+                "nucleon",
+                "upscaler",
+                "prepare",
+                "Game.exe",
+                "--backend",
+                "metalfx",
+                "--input",
+                "dlss",
+                "--dry-run",
+            ],
+            vec![
+                "nucleon", "upscaler", "install", "native", "--wine", "/runtime",
+            ],
+            vec!["nucleon", "upscaler", "restore", "Game.exe"],
+            vec![
+                "nucleon",
+                "bottle",
+                "configure",
+                "game",
+                "--clear",
+                "upscaler",
+            ],
+            vec![
+                "nucleon",
+                "bottle",
+                "add",
+                "game",
+                "game",
+                "Game.exe",
+                "--upscaler",
+                "fsr2",
+            ],
+        ] {
+            assert!(Cli::try_parse_from(args).is_ok());
+        }
+        assert!(
+            Cli::try_parse_from(["nucleon", "run", "Game.exe", "--upscaler", "fsr4.1.2"]).is_err()
+        );
+    }
+
+    #[test]
     fn standalone_cli_parses_options_and_preserves_forwarded_arguments() {
         let cli = Cli::try_parse_from([
             "nucleon",
@@ -164,6 +210,11 @@ enum Commands {
         #[command(subcommand)]
         action: commands::application::BottleAction,
     },
+    /// Prepare and inspect experimental game-local temporal upscaling (does not start games)
+    Upscaler {
+        #[command(subcommand)]
+        action: commands::upscaler::Action,
+    },
     /// Perform idempotent setup check or remediate missing prerequisites ('nucleon setup fix')
     Setup {
         #[command(subcommand)]
@@ -289,6 +340,9 @@ enum Commands {
         /// Force graphics engine (auto, gptk, dxmt, dxvk, vkd3d, kosmickrisp, wine)
         #[arg(short, long)]
         engine: Option<String>,
+        /// Select a prepared temporal upscaler for this launch
+        #[arg(long)]
+        upscaler: Option<nucleon_core::upscaler::Backend>,
     },
     /// Diagnostic troubleshooting tool: verify whether a game window is actively displaying on macOS (0 screen capture)
     Validate {
@@ -361,6 +415,7 @@ fn main() -> Result<()> {
     match cli.command {
         Commands::Run(args) => commands::application::run(args),
         Commands::Bottle { action } => commands::application::bottle(action),
+        Commands::Upscaler { action } => commands::upscaler::run(action),
         Commands::Setup {
             action,
             non_interactive,
@@ -417,7 +472,8 @@ fn main() -> Result<()> {
             engine,
             wine,
             emulator,
-        } => commands::launch::run_launch(appid, hud, engine, wine, emulator),
+            upscaler,
+        } => commands::launch::run_launch(appid, hud, engine, wine, emulator, upscaler),
         Commands::Validate { appid } => commands::launch::run_validate(appid),
         Commands::Steam { action } => commands::steam::run(action),
         Commands::Map { appid, tool } => commands::steam::run(SteamAction::Map { appid, tool }),

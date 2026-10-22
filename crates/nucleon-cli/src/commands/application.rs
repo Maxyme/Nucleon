@@ -5,6 +5,9 @@ use std::path::PathBuf;
 
 #[derive(Debug, Clone, Default, Args)]
 pub struct SettingsArgs {
+    /// game, fsr2, fsr3.1, metalfx, fsr4-native-lite, fsr4-native or xess
+    #[arg(long)]
+    upscaler: Option<nucleon_core::upscaler::Backend>,
     /// Exact Wine ID or complete runtime path (overrides the bottle setting)
     #[arg(long)]
     wine: Option<String>,
@@ -24,6 +27,7 @@ pub struct SettingsArgs {
 impl SettingsArgs {
     fn settings(self) -> Result<Settings> {
         let settings = Settings {
+            upscaler: self.upscaler.map(nucleon_core::upscaler::Settings::selected),
             wine: self.wine, emulator: self.emulator, engine: self.engine,
             graphics_api: self.graphics_api.map(|value| serde_json::from_value(serde_json::Value::String(value))
                 .context("Choose auto, dx7, dx9, dx10, dx11, dx12, vulkan or opengl for --graphics-api")).transpose()?,
@@ -65,6 +69,7 @@ pub fn run(args: RunArgs) -> Result<()> {
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 pub enum SettingField {
+    Upscaler,
     Wine,
     Emulator,
     Engine,
@@ -108,6 +113,9 @@ pub enum BottleAction {
         /// Replace this saved entry explicitly
         #[arg(long)]
         replace: bool,
+        /// Save a scaler preference for this application only
+        #[arg(long)]
+        upscaler: Option<nucleon_core::upscaler::Backend>,
         #[arg(last = true)]
         arguments: Vec<String>,
     },
@@ -189,6 +197,7 @@ pub fn bottle(action: BottleAction) -> Result<()> {
                         SettingField::Engine => bottle.settings.engine = None,
                         SettingField::GraphicsApi => bottle.settings.graphics_api = None,
                         SettingField::Hud => bottle.settings.hud = None,
+                        SettingField::Upscaler => bottle.settings.upscaler = None,
                     }
                 }
                 bottle.settings = changes.with_defaults(bottle.settings.clone());
@@ -206,10 +215,12 @@ pub fn bottle(action: BottleAction) -> Result<()> {
             executable,
             cwd,
             replace,
+            upscaler,
             arguments,
         } => {
             nucleon_core::application::validate_name(&application)?;
-            let entry = Application::new(&executable, arguments, cwd.as_deref())?;
+            let mut entry = Application::new(&executable, arguments, cwd.as_deref())?;
+            entry.upscaler = upscaler.map(nucleon_core::upscaler::Settings::selected);
             Bottle::update(&name, |bottle| {
                 ensure!(
                     replace || !bottle.applications.contains_key(&application),
