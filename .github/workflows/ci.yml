@@ -56,10 +56,10 @@ jobs:
             ${{ runner.os }}-cargo-
 
       - name: Check Clippy lints
-        run: cargo clippy -p nucleon-core -p nucleon-runner -p nucleon-cli --all-targets --all-features -- -D warnings
+        run: cargo clippy -p nucleon-core -p nucleon-runner -p nucleon-cli -p nucleon-devtools --all-targets --all-features -- -D warnings
 
       - name: Run unit tests
-        run: cargo test -p nucleon-core -p nucleon-runner -p nucleon-cli
+        run: cargo test -p nucleon-core -p nucleon-runner -p nucleon-cli -p nucleon-devtools
 
   build-and-release:
     name: Build & Package Release Bundle

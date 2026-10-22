@@ -48,6 +48,38 @@ In Steam, open a game's **Properties → Compatibility**, enable the tool overri
 and select a Nucleon tool. Existing native macOS games should keep their native
 configuration. Use **Play** normally after configuration.
 
+Prebuilt ARM64 Wine/FEX core runtime prereleases are built in the separate
+`isotope` repository. See [runtime releases](RUNTIME-RELEASES.md) for publisher automation,
+source/license contents, installation commands and the current graphics limits.
+
+Install an exact Wine/FEX version or a local runtime:
+
+```sh
+nucleon wine install isotope --version 0.1.0-rc.1 --register
+nucleon wine install /path/to/runtime-or-archive --register
+```
+
+The named command requires that release to be published; local paths work before
+publication. Select a complete installed Wine runtime per launch:
+
+```sh
+nucleon launch 690790 --wine fex-preview --engine dxmt
+nucleon launch 690790 --emulator fex --engine dxmt
+nucleon launch 690790 --emulator rosetta --engine dxvk
+```
+
+`--wine` accepts an exact installed ID or runtime path. `--emulator rosetta`
+uses the ordinary configured Intel Wine; `--emulator fex` uses the runtime
+registered with `nucleon wine install ... --register` or `wine fex register`.
+Combining them constrains the selected runtime's mode. These options select
+complete compatible Wine builds, and do not change either default for one launch.
+Run `nucleon wine list` to see available IDs. The FEX core preview omits the developer graphics stack. Its 32-bit execution
+test currently has a known child-process failure, recorded as non-blocking
+in the separate builder.
+
+Runtime builds and publishing live in [isotope](../isotope/README.md).
+Nucleon-specific diagnostics use [`nucleon-devtools`](tools/README.md).
+
 ## Development
 
 ```sh

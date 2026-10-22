@@ -1,0 +1,22 @@
+[package]
+name = "nucleon-devtools"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+nucleon-core = { path = "../nucleon-core" }
+anyhow = { workspace = true }
+clap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = "0.10"
+tempfile = { workspace = true }
+rustix = { workspace = true, features = ["fs", "process"] }
+ctrlc = { workspace = true }
+env_logger = { workspace = true }
+chrono = { workspace = true }
+log = { workspace = true }
+
+[lints]
+workspace = true

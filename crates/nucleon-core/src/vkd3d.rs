@@ -18,19 +18,6 @@ pub struct Vkd3dProtonBundle {
     pub version: Option<String>,
 }
 
-fn read_version_file(dir: &Path) -> Option<String> {
-    let ver_file = dir.join("version.txt");
-    if ver_file.is_file()
-        && let Ok(c) = fs::read_to_string(&ver_file)
-    {
-        let t = c.trim();
-        if !t.is_empty() {
-            return Some(t.to_string());
-        }
-    }
-    None
-}
-
 /// Inspects a directory to check if it contains a valid VKD3D-Proton installation.
 /// Accepts either the standard release hierarchy (x64/d3d12.dll) or a flat directory (d3d12.dll).
 pub fn inspect_candidate_dir(dir: &Path) -> Option<Vkd3dProtonBundle> {
@@ -38,55 +25,24 @@ pub fn inspect_candidate_dir(dir: &Path) -> Option<Vkd3dProtonBundle> {
         return None;
     }
 
-    // 1. Check standard release layout: <dir>/x64/d3d12.dll
-    let x64_dir = dir.join("x64");
-    if x64_dir.join("d3d12.dll").is_file() {
-        let x64_d3d12 = x64_dir.join("d3d12.dll");
-        let x64_d3d12core = if x64_dir.join("d3d12core.dll").is_file() {
-            Some(x64_dir.join("d3d12core.dll"))
-        } else {
-            None
-        };
-
-        let x86_dir = dir.join("x86");
-        let x86_d3d12 = if x86_dir.join("d3d12.dll").is_file() {
-            Some(x86_dir.join("d3d12.dll"))
-        } else {
-            None
-        };
-        let x86_d3d12core = if x86_dir.join("d3d12core.dll").is_file() {
-            Some(x86_dir.join("d3d12core.dll"))
-        } else {
-            None
-        };
-
-        return Some(Vkd3dProtonBundle {
-            root: dir.to_path_buf(),
-            x64_d3d12,
-            x64_d3d12core,
-            x86_d3d12,
-            x86_d3d12core,
-            version: read_version_file(dir),
-        });
-    }
-
-    // 2. Check flat directory: <dir>/d3d12.dll
-    if dir.join("d3d12.dll").is_file() {
-        let x64_d3d12 = dir.join("d3d12.dll");
-        let x64_d3d12core = if dir.join("d3d12core.dll").is_file() {
-            Some(dir.join("d3d12core.dll"))
-        } else {
-            None
-        };
-
-        return Some(Vkd3dProtonBundle {
-            root: dir.to_path_buf(),
-            x64_d3d12,
-            x64_d3d12core,
-            x86_d3d12: None,
-            x86_d3d12core: None,
-            version: read_version_file(dir),
-        });
+    // Prefer the standard release layout, then the flat layout.
+    for x64 in [dir.join("x64"), dir.to_path_buf()] {
+        if let Some(x64_d3d12) = crate::graphics_bundle::file(&x64, "d3d12.dll") {
+            let x86 = dir.join("x86");
+            let standard = x64 != dir;
+            return Some(Vkd3dProtonBundle {
+                root: dir.to_path_buf(),
+                x64_d3d12,
+                x64_d3d12core: crate::graphics_bundle::file(&x64, "d3d12core.dll"),
+                x86_d3d12: standard
+                    .then(|| crate::graphics_bundle::file(&x86, "d3d12.dll"))
+                    .flatten(),
+                x86_d3d12core: standard
+                    .then(|| crate::graphics_bundle::file(&x86, "d3d12core.dll"))
+                    .flatten(),
+                version: crate::graphics_bundle::version(dir),
+            });
+        }
     }
 
     None
@@ -112,21 +68,12 @@ pub fn find_vkd3d_proton() -> Option<Vkd3dProtonBundle> {
 /// environment, highest priority first). Split out so resolution can be tested without mutating
 /// process state.
 fn find_vkd3d_proton_with(env_paths: &[PathBuf]) -> Option<Vkd3dProtonBundle> {
-    for path in env_paths {
-        if let Some(bundle) = inspect_candidate_dir(path) {
-            return Some(bundle);
-        }
-    }
-
-    // 2. Custom path stored via `nucleon vkd3d set-path <path>`
-    let custom_file = custom_vkd3d_path_file();
-    if custom_file.is_file()
-        && let Ok(content) = fs::read_to_string(&custom_file)
-    {
-        let p = PathBuf::from(content.trim());
-        if let Some(bundle) = inspect_candidate_dir(&p) {
-            return Some(bundle);
-        }
+    if let Some(bundle) = crate::graphics_bundle::configured(
+        env_paths,
+        &custom_vkd3d_path_file(),
+        inspect_candidate_dir,
+    ) {
+        return Some(bundle);
     }
 
     // 3. Nucleon managed directory: ~/Library/Application Support/nucleon/vkd3d-proton
@@ -142,10 +89,8 @@ fn find_vkd3d_proton_with(env_paths: &[PathBuf]) -> Option<Vkd3dProtonBundle> {
         paths::home_dir().join(".local/share/vkd3d-proton"),
     ];
 
-    for candidate in &system_candidates {
-        if let Some(bundle) = inspect_candidate_dir(candidate) {
-            return Some(bundle);
-        }
+    if let Some(bundle) = crate::graphics_bundle::find(system_candidates, inspect_candidate_dir) {
+        return Some(bundle);
     }
 
     // 5. Scan Steam Proton installs for vkd3d-proton if present
@@ -181,35 +126,21 @@ pub fn is_vkd3d_proton_installed() -> bool {
 
 /// Sets a custom path to a VKD3D-Proton installation directory.
 pub fn set_custom_vkd3d_proton_path(path: &Path) -> Result<Vkd3dProtonBundle> {
-    let canonical = path
+    let path = &path
         .canonicalize()
         .with_context(|| format!("Path does not exist: {}", path.display()))?;
-
-    let bundle = inspect_candidate_dir(&canonical).context(
-        "Specified path does not contain valid VKD3D-Proton binaries (d3d12.dll not found)",
-    )?;
-
-    paths::ensure_dirs()?;
-    fs::write(
-        custom_vkd3d_path_file(),
-        canonical.to_string_lossy().as_bytes(),
+    crate::graphics_bundle::register(
+        path,
+        &custom_vkd3d_path_file(),
+        "VKD3D-Proton (d3d12.dll not found)",
+        inspect_candidate_dir,
+        |bundle| &bundle.root,
     )
-    .with_context(|| format!("Failed to write {}", custom_vkd3d_path_file().display()))?;
-
-    log::info!(
-        "Registered custom VKD3D-Proton path at {}",
-        canonical.display()
-    );
-    Ok(bundle)
 }
 
 /// Clears any configured custom VKD3D-Proton path.
 pub fn clear_custom_vkd3d_proton_path() -> Result<()> {
-    let custom_file = custom_vkd3d_path_file();
-    if custom_file.is_file() {
-        let _ = fs::remove_file(&custom_file);
-    }
-    Ok(())
+    crate::graphics_bundle::clear(&custom_vkd3d_path_file())
 }
 
 /// Stages VKD3D-Proton DLLs into a Wine prefix's system32 and syswow64 directories.
@@ -219,56 +150,25 @@ pub fn stage_vkd3d_proton_into_prefix(
 ) -> Result<usize> {
     let sys32 = prefix_dir.join("drive_c/windows/system32");
     let syswow64 = prefix_dir.join("drive_c/windows/syswow64");
-
     fs::create_dir_all(&sys32)?;
-    let mut staged_count = 0;
-
-    // Stage 64-bit d3d12.dll
-    let dst_d3d12 = sys32.join("d3d12.dll");
-    crate::backend_files::copy(&bundle.x64_d3d12, &dst_d3d12).with_context(|| {
-        format!(
-            "Failed to stage 64-bit d3d12.dll to {}",
-            dst_d3d12.display()
-        )
-    })?;
-    staged_count += 1;
-
-    // Stage 64-bit d3d12core.dll if present
-    if let Some(ref core_src) = bundle.x64_d3d12core {
-        let dst_core = sys32.join("d3d12core.dll");
-        crate::backend_files::copy(core_src, &dst_core).with_context(|| {
-            format!(
-                "Failed to stage 64-bit d3d12core.dll to {}",
-                dst_core.display()
-            )
-        })?;
-        staged_count += 1;
-    }
-
-    // Stage 32-bit d3d12.dll if syswow64 exists and 32-bit binary is present
-    if let Some(ref x86_src) = bundle.x86_d3d12
-        && syswow64.is_dir()
-    {
-        let dst_x86 = syswow64.join("d3d12.dll");
-        crate::backend_files::copy(x86_src, &dst_x86)?;
-        staged_count += 1;
-    }
-
-    if let Some(ref x86_core) = bundle.x86_d3d12core
-        && syswow64.is_dir()
-    {
-        let dst_x86_core = syswow64.join("d3d12core.dll");
-        crate::backend_files::copy(x86_core, &dst_x86_core)?;
-        staged_count += 1;
-    }
-
-    log::info!(
-        "Staged {} VKD3D-Proton DLL(s) into Wine prefix at {}",
-        staged_count,
-        prefix_dir.display()
-    );
-
-    Ok(staged_count)
+    let target_32 = &syswow64;
+    let count = crate::graphics_bundle::stage(
+        &sys32,
+        "64-bit VKD3D",
+        [
+            ("d3d12.dll", Some(bundle.x64_d3d12.as_path())),
+            ("d3d12core.dll", bundle.x64_d3d12core.as_deref()),
+        ],
+    )?;
+    Ok(count
+        + crate::graphics_bundle::stage(
+            target_32,
+            "32-bit VKD3D",
+            [
+                ("d3d12.dll", bundle.x86_d3d12.as_deref()),
+                ("d3d12core.dll", bundle.x86_d3d12core.as_deref()),
+            ],
+        )?)
 }
 
 fn restore_d3d12_in_dir(

@@ -7,6 +7,31 @@ use std::path::PathBuf;
 
 #[derive(Subcommand, Debug, Clone)]
 pub enum WineAction {
+    /// Install a published Wine/FEX version, HTTPS archive, or local runtime
+    Install {
+        /// isotope, an HTTPS archive URL, a local archive, or a runtime directory
+        source: String,
+        /// Exact Wine/FEX release version (required when source is isotope)
+        #[arg(long)]
+        version: Option<String>,
+        /// Optional archive checksum; required for URLs without release metadata
+        #[arg(long)]
+        sha256: Option<String>,
+        /// Select the installed runtime for the experimental FEX Steam tool
+        #[arg(long)]
+        register: bool,
+    },
+    /// Validate a runtime descriptor and print resolved component paths
+    Inspect {
+        runtime: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Manage the opt-in native ARM64/FEX Steam tool
+    Fex {
+        #[command(subcommand)]
+        action: FexAction,
+    },
     /// Download and register the recommended Wine build without selecting it
     Fetch {
         #[arg(long, default_value = "11.18")]
@@ -41,7 +66,7 @@ pub enum WineAction {
     },
     /// List all discovered Wine runtimes and show the currently active desired version
     List,
-    /// Select desired active Wine version for Steam (e.g. 'crossover', 'staging', 'dxmt', or path)
+    /// Select the Intel default, or register a FEX default without changing Intel Wine
     Use {
         /// Wine identifier, name keyword, or custom path
         version: String,
@@ -78,6 +103,167 @@ pub enum WineAction {
         #[command(subcommand)]
         action: super::backends::BackendsAction,
     },
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum FexAction {
+    /// Install a complete local runtime outside the build tree, retaining earlier generations
+    Install {
+        runtime: String,
+        /// Required for .tar.gz, .tar.zst or .zip archives
+        #[arg(long)]
+        sha256: Option<String>,
+        /// Point only the experimental Steam option to this installed generation
+        #[arg(long)]
+        register: bool,
+    },
+    /// Hash every installed file and check the native dependency closure
+    Verify { runtime: Option<PathBuf> },
+    /// Register a complete native runtime without changing global Wine or game mappings
+    Register { runtime: String },
+    /// Inspect the experimental tool's pinned runtime
+    Status,
+    /// Remove only the experimental Steam tool
+    Unregister,
+    /// Update a game's ARM64/FEX profile (leaves the ordinary profile intact)
+    Profile {
+        appid: std::num::NonZeroU32,
+        #[arg(long)]
+        engine: Option<String>,
+        #[arg(long)]
+        graphics_api: Option<String>,
+        #[arg(long)]
+        steam_protocol: Option<String>,
+        #[arg(long)]
+        steam_helper: Option<bool>,
+        #[arg(long)]
+        overlay: Option<bool>,
+    },
+}
+
+fn install_runtime(
+    source: &str,
+    version: Option<&str>,
+    sha256: Option<&str>,
+    register: bool,
+) -> Result<()> {
+    ui::info("Verifying and installing Wine/FEX runtime components...");
+    let installed = nucleon_core::runtime_releases::install(source, version, sha256)?;
+    ui::success(format!("Installed runtime: {}", installed.display()));
+    if register {
+        steam::fex::register(&installed, &std::env::current_exe()?)?;
+        ui::success("Experimental FEX Steam option now uses this runtime.");
+    }
+    Ok(())
+}
+
+fn run_fex(action: FexAction) -> Result<()> {
+    use nucleon_core::{paths, profile::GameProfile};
+    match action {
+        FexAction::Install {
+            runtime,
+            sha256,
+            register,
+        } => {
+            install_runtime(&runtime, None, sha256.as_deref(), register)?;
+        }
+        FexAction::Verify { runtime } => {
+            let root = match runtime {
+                Some(path) => path,
+                None => {
+                    steam::fex::load_selection(
+                        &paths::steam_fex_compat_tools_dir().join(steam::fex::SELECTION_FILE),
+                    )?
+                    .root
+                }
+            };
+            nucleon_core::managed_runtime::verify(&root)?;
+            ui::success(format!(
+                "Runtime integrity and native dependencies verified: {}",
+                root.display()
+            ));
+        }
+        FexAction::Register { runtime } => {
+            let root = if std::path::Path::new(&runtime).is_dir() {
+                PathBuf::from(&runtime)
+            } else {
+                wine::resolve_wine_runtime_by_query(&runtime)
+                    .context("Runtime not found; supply a complete ARM64/FEX runtime path")?
+                    .root
+            };
+            steam::fex::register(&root, &std::env::current_exe()?)?;
+            ui::success(format!("Registered '{}'.", steam::fex::DISPLAY_NAME));
+            ui::info(
+                "Select it in a game's Steam Compatibility settings. Restart Steam when convenient if it is not listed.",
+            );
+        }
+        FexAction::Status => {
+            let path = paths::steam_fex_compat_tools_dir().join(steam::fex::SELECTION_FILE);
+            if path.exists() {
+                let runtime = steam::fex::load_selection(&path)?;
+                ui::kv(steam::fex::DISPLAY_NAME, runtime.root.display());
+                ui::kv(
+                    "Installation",
+                    if runtime
+                        .root
+                        .join(nucleon_core::managed_runtime::RECEIPT)
+                        .is_file()
+                    {
+                        "Managed; retained generation"
+                    } else {
+                        "External runtime"
+                    },
+                );
+                ui::kv(
+                    "Prefix family",
+                    format!("{} (ABI {})", runtime.prefix.family, runtime.prefix.abi),
+                );
+            } else {
+                ui::info("Experimental ARM64/FEX tool is not registered.");
+            }
+        }
+        FexAction::Unregister => {
+            steam::fex::unregister()?;
+            ui::success("Removed experimental ARM64/FEX tool.");
+        }
+        FexAction::Profile {
+            appid,
+            engine,
+            graphics_api,
+            steam_protocol,
+            steam_helper,
+            overlay,
+        } => {
+            let dir = paths::game_profiles_dir(true);
+            let file = dir.join(format!("{appid}.json"));
+            let mut profile = GameProfile::load(&file)?
+                .unwrap_or_default()
+                .with_defaults(GameProfile::fex_default(&appid.to_string()));
+            if let Some(value) = engine {
+                nucleon_core::configuration::engine("--engine", &value)?;
+                profile.engine = Some(value);
+            }
+            if let Some(value) = graphics_api {
+                profile.graphics_api=Some(serde_json::from_value(serde_json::Value::String(value)).context("Choose auto, dx7, dx9, dx10, dx11, dx12, vulkan or opengl for --graphics-api")?);
+            }
+            if let Some(value) = steam_protocol {
+                profile.steam_protocol = Some(
+                    serde_json::from_value(serde_json::Value::String(value))
+                        .context("Choose bridge or valve-redirect for --steam-protocol")?,
+                );
+            }
+            if steam_helper.is_some() {
+                profile.use_steam_shim = steam_helper;
+            }
+            if overlay.is_some() {
+                profile.overlay = overlay;
+            }
+            std::fs::create_dir_all(&dir)?;
+            nucleon_core::fs_util::atomic_write_file(&file, serde_json::to_vec_pretty(&profile)?)?;
+            ui::success(format!("ARM64/FEX profile: {}", file.display()));
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -117,6 +303,27 @@ fn ensure_new_name(name: &str) -> Result<()> {
 
 pub fn run(action: WineAction) -> Result<()> {
     match action {
+        WineAction::Install {
+            source,
+            version,
+            sha256,
+            register,
+        } => {
+            install_runtime(&source, version.as_deref(), sha256.as_deref(), register)?;
+        }
+        WineAction::Inspect { runtime, json } => {
+            let runtime = nucleon_core::runtime::ResolvedRuntime::inspect(&runtime)?;
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string(&serde_json::json!({"schema": 1, "runtime": runtime}))?
+                );
+            } else {
+                ui::kv("Runtime", runtime.root.display());
+                ui::kv("Execution", format!("{:?}", runtime.mode));
+            }
+        }
+        WineAction::Fex { action } => run_fex(action)?,
         WineAction::Fetch {
             version,
             output,
@@ -219,6 +426,13 @@ pub fn run(action: WineAction) -> Result<()> {
                         active_marker,
                         rt.root.display()
                     );
+                    match rt.capabilities() {
+                        Ok(capabilities) => println!(
+                            "    Execution: {:?}; guests: {:?}; Steam: {:?}",
+                            capabilities.mode, capabilities.guests, capabilities.steam_protocol
+                        ),
+                        Err(error) => println!("    Runtime configuration error: {error:#}"),
+                    }
                 }
                 let active_name = active.as_ref().map(|a| a.name.as_str()).unwrap_or("None");
                 println!(
@@ -252,8 +466,7 @@ pub fn run(action: WineAction) -> Result<()> {
             ui::success(format!("Root path:  {}", rt.root.display()));
 
             if use_now {
-                let _ = wine::set_active_wine(&rt.id);
-                ui::success("Set as active Wine runtime for Steam.");
+                return run(WineAction::Use { version: rt.id });
             } else {
                 println!("\nTo switch to this Wine: nucleon wine use {}", rt.id);
             }
@@ -268,6 +481,18 @@ pub fn run(action: WineAction) -> Result<()> {
         }
         WineAction::Use { version } => {
             ui::header(format!("Setting active Wine runtime to '{}'...", version));
+            let requested = if version == "fex-preview" {
+                nucleon_core::runtime_selection::named(&version)?
+            } else {
+                wine::resolve_wine_runtime_by_query(&version)
+                    .context("Wine runtime was not found; run 'nucleon wine list'")?
+                    .capabilities()?
+            };
+            if requested.mode == nucleon_core::runtime::ExecutionMode::Arm64Fex {
+                steam::fex::register(&requested.root, &std::env::current_exe()?)?;
+                ui::success("FEX default updated. The Intel/Rosetta default is unchanged.");
+                return Ok(());
+            }
             let rt = wine::set_active_wine(&version)?;
             ui::success(format!(
                 "Active Wine set to: {} [{}]",
@@ -294,6 +519,12 @@ pub fn run(action: WineAction) -> Result<()> {
         }
         WineAction::SetPath { path } => {
             ui::header(format!("Registering custom Wine path: {}", path.display()));
+            let capabilities = nucleon_core::runtime_selection::named(&path.to_string_lossy())?;
+            if capabilities.mode == nucleon_core::runtime::ExecutionMode::Arm64Fex {
+                steam::fex::register(&capabilities.root, &std::env::current_exe()?)?;
+                ui::success("FEX default updated. The Intel/Rosetta default is unchanged.");
+                return Ok(());
+            }
             let rt = wine::set_custom_wine_path(&path)?;
             ui::success(format!(
                 "Registered custom Wine: {} [{}]",

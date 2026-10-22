@@ -5,6 +5,13 @@ use std::fs;
 
 pub fn run() -> Result<()> {
     ui::header("Nucleon Status Report");
+    let native = paths::steam_fex_compat_tools_dir().join(steam::fex::SELECTION_FILE);
+    if native.is_file() {
+        match steam::fex::load_selection(&native) {
+            Ok(runtime) => ui::kv(steam::fex::DISPLAY_NAME, runtime.root.display()),
+            Err(error) => ui::warn(format!("Experimental runtime configuration: {error:#}")),
+        }
+    }
     ui::status_bool(
         "Steam.app installed:",
         steam::check_steam_installed().is_ok(),

@@ -1,5 +1,6 @@
 mod appinfo;
 pub mod codesign;
+pub mod fex;
 pub mod native_detect;
 pub mod vdf_mapping;
 pub mod webui;
@@ -162,6 +163,9 @@ pub fn is_staging_tool_registered() -> bool {
 }
 
 pub fn install_compatibility_tool(runner_bin: &Path) -> Result<()> {
+    if let Err(error) = fex::refresh(runner_bin) {
+        log::warn!("Experimental FEX tool was preserved but could not be refreshed: {error:#}");
+    }
     let active_wine = wine::get_active_wine_runtime();
     // Generic tools resolve the active Wine at launch time. Embedding the current path here made
     // `nucleon wine set` ineffective for Auto, DXMT and Vulkan tools until setup was rerun.

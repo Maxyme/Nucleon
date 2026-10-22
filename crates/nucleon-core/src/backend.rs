@@ -154,7 +154,7 @@ fn parse_backend_configuration(contents: &str, path: &Path) -> Result<GraphicsBa
     struct Config {
         backend: String,
     }
-    let config: Config = toml::from_str(contents).with_context(|| format!(
+    let config: Config = crate::configuration::toml(contents, path).with_context(|| format!(
         "Invalid backend configuration {}. Set backend = \"auto\" (or dxvk, dxmt, d3dmetal, kosmickrisp), or remove the file to reset it", path.display()))?;
     GraphicsBackend::from_str(&config.backend).with_context(|| {
         format!(
@@ -448,10 +448,6 @@ impl Backend for KosmicKrispBackend {
                 "DXVK_LOG_PATH".to_string(),
                 paths::support_dir().to_string_lossy().to_string(),
             );
-        }
-
-        if crate::vkd3d::find_vkd3d_proton().is_some() {
-            env.insert("VKD3D_CONFIG".to_string(), "dxr11,dxr".to_string());
         }
 
         let mesa_cache = paths::home_dir().join("Library/Caches/Mesa");

@@ -24,6 +24,12 @@ pub struct WineRuntime {
     pub version: Option<String>,
 }
 
+impl WineRuntime {
+    pub fn capabilities(&self) -> Result<crate::runtime::ResolvedRuntime> {
+        crate::runtime::ResolvedRuntime::inspect(&self.root)
+    }
+}
+
 fn query_wine_version(wine_bin: &Path) -> Option<String> {
     let mut command = Command::new(wine_bin);
     command
@@ -79,19 +85,14 @@ fn extract_bundle_version(root: &Path) -> Option<String> {
     while let Some(dir) = cur {
         let plist_candidates = [dir.join("Contents/Info.plist"), dir.join("Info.plist")];
         for plist_path in &plist_candidates {
-            if plist_path.is_file()
-                && let Ok(content) = fs::read_to_string(plist_path)
-                && let Some(pos) = content.find("CFBundleShortVersionString")
+            if let Ok(value) = plist::Value::from_file(plist_path)
+                && let Some(version) = value
+                    .as_dictionary()
+                    .and_then(|d| d.get("CFBundleShortVersionString"))
+                    .and_then(plist::Value::as_string)
+                    .filter(|v| !v.trim().is_empty())
             {
-                let after = &content[pos..];
-                if let Some(str_start) = after.find("<string>")
-                    && let Some(str_end) = after[str_start + 8..].find("</string>")
-                {
-                    let ver = after[str_start + 8..str_start + 8 + str_end].trim();
-                    if !ver.is_empty() {
-                        return Some(ver.to_string());
-                    }
-                }
+                return Some(version.trim().to_string());
             }
         }
         cur = dir.parent();
@@ -235,6 +236,19 @@ pub fn inspect_wine_dir(
     name_override: Option<&str>,
 ) -> Option<WineRuntime> {
     let actual_root = resolve_wine_runtime_root(dir)?;
+
+    if actual_root.join(crate::runtime::DESCRIPTOR).is_file() {
+        let capabilities = crate::runtime::ResolvedRuntime::inspect(&actual_root).ok()?;
+        let name = name_override
+            .map(str::to_owned)
+            .unwrap_or_else(|| derive_name_from_path(dir, &actual_root));
+        let id = id_override
+            .map(str::to_owned)
+            .unwrap_or_else(|| name.to_lowercase().replace([' ', '_'], "-"));
+        let mut runtime = described_wine(&capabilities, &id);
+        runtime.name = name;
+        return Some(runtime);
+    }
 
     let wine_bin = if actual_root.join("bin/wine").is_file() {
         actual_root.join("bin/wine")
@@ -525,6 +539,29 @@ pub fn discover_wine_runtimes() -> Vec<WineRuntime> {
     let custom_ids: std::collections::HashSet<String> =
         load_custom_wines().into_iter().map(|r| r.id).collect();
 
+    // Native managed runtimes are identified without executing a loader for discovery.
+    let selected = crate::runtime_selection::fex_default().ok();
+    if let Some(runtime) = selected.as_ref()
+        && seen_roots.insert(runtime.root.clone())
+    {
+        runtimes.push(described_wine(runtime, "fex-preview"));
+    }
+    let store = paths::support_dir().join("runtimes/arm64-fex");
+    if let Ok(entries) = fs::read_dir(store) {
+        for entry in entries.flatten() {
+            let root = entry.path();
+            if root.join(crate::managed_runtime::RECEIPT).is_file()
+                && let Ok(runtime) = crate::runtime::ResolvedRuntime::inspect(&root)
+                && runtime.mode == crate::runtime::ExecutionMode::Arm64Fex
+                && seen_roots.insert(runtime.root.clone())
+            {
+                runtimes.push(described_wine(
+                    &runtime,
+                    &format!("fex-{}", entry.file_name().to_string_lossy()),
+                ));
+            }
+        }
+    }
     runtimes.sort_by_key(|r| {
         if r.id == "custom" || custom_ids.contains(&r.id) {
             0
@@ -545,9 +582,31 @@ pub fn discover_wine_runtimes() -> Vec<WineRuntime> {
     runtimes
 }
 
+fn described_wine(runtime: &crate::runtime::ResolvedRuntime, id: &str) -> WineRuntime {
+    let version = fs::read(runtime.root.join("share/nucleon-build/release.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .and_then(|v| v.get("version").and_then(|v| v.as_str()).map(str::to_owned));
+    WineRuntime {
+        id: id.into(),
+        name: id.into(),
+        display_name: format!("Nucleon (Wine: {id})"),
+        tool_id: format!("nucleon-wine-{id}"),
+        root: runtime.root.clone(),
+        version,
+    }
+}
+
 /// Returns the primary/recommended Wine runtime (preferring Wine-Staging or Heroic Wine).
 pub fn find_primary_wine_runtime() -> Option<WineRuntime> {
-    let runtimes = discover_wine_runtimes();
+    let runtimes: Vec<_> = discover_wine_runtimes()
+        .into_iter()
+        .filter(|r| {
+            !r.root.join(crate::runtime::DESCRIPTOR).exists()
+                || r.capabilities()
+                    .is_ok_and(|c| c.mode == crate::runtime::ExecutionMode::Intel)
+        })
+        .collect();
     if runtimes.is_empty() {
         return None;
     }
@@ -653,6 +712,15 @@ pub fn set_custom_wine_path(path: &Path) -> Result<WineRuntime> {
         .canonicalize()
         .with_context(|| format!("Path does not exist: {}", path.display()))?;
 
+    if let Some(root) = resolve_wine_runtime_root(&canonical)
+        && root.join(crate::runtime::DESCRIPTOR).is_file()
+    {
+        anyhow::ensure!(
+            crate::runtime::ResolvedRuntime::inspect(&root)?.mode
+                == crate::runtime::ExecutionMode::Intel,
+            "Keep the Intel/Rosetta default separate; register native Wine with 'nucleon wine fex register <runtime>'"
+        );
+    }
     let runtime = add_custom_wine("custom", &canonical)?;
 
     paths::ensure_dirs()?;
@@ -770,6 +838,13 @@ pub fn set_active_wine(identifier_or_path: &str) -> Result<WineRuntime> {
     let runtime = resolve_wine_runtime_by_query(identifier_or_path)
         .context(format!("Could not find a valid Wine runtime matching '{}'. Run 'nucleon wine list' to view available options.", identifier_or_path))?;
 
+    if runtime.root.join(crate::runtime::DESCRIPTOR).is_file() {
+        anyhow::ensure!(
+            runtime.capabilities()?.mode == crate::runtime::ExecutionMode::Intel,
+            "Keep the Intel/Rosetta default separate; register native Wine with 'nucleon wine fex register <runtime>'"
+        );
+    }
+
     paths::ensure_dirs()?;
 
     // If identifier_or_path was a path on disk, ensure it is recorded in custom wines
@@ -850,6 +925,24 @@ pub fn clear_custom_wine_path() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn bundle_versions_use_plist_library_for_binary_and_xml_documents() {
+        let dir = tempdir().unwrap();
+        fs::create_dir(dir.path().join("Contents")).unwrap();
+        let value = plist::Value::Dictionary(
+            [(
+                "CFBundleShortVersionString".to_string(),
+                plist::Value::String("11.18".into()),
+            )]
+            .into_iter()
+            .collect(),
+        );
+        let file = dir.path().join("Contents/Info.plist");
+        value.to_file_binary(&file).unwrap();
+        assert_eq!(extract_bundle_version(dir.path()).as_deref(), Some("11.18"));
+        value.to_file_xml(&file).unwrap();
+        assert_eq!(extract_bundle_version(dir.path()).as_deref(), Some("11.18"));
+    }
     use tempfile::tempdir;
 
     #[test]
@@ -958,6 +1051,11 @@ mod tests {
 
     #[test]
     fn test_custom_crossover_registration_and_resolution() {
+        if crate::test_support::run_in_isolated_support(
+            "wine::tests::test_custom_crossover_registration_and_resolution",
+        ) {
+            return;
+        }
         let dir = tempdir().unwrap();
         let cx_app = dir.path().join("CrossOver 24.app");
         let inner_cx = cx_app.join("Contents/SharedSupport/CrossOver/bin");

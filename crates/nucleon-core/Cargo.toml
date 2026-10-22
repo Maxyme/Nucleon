@@ -8,12 +8,15 @@ license.workspace = true
 anyhow = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+serde_path_to_error = "0.1"
 toml = "0.8"
 sha2 = "0.10"
+semver = "1.0"
 rustix = { workspace = true, features = ["fs"] }
 log = { workspace = true }
 tempfile = { workspace = true }
 walkdir = "2.5"
+sysinfo = { version = "0.33", default-features = false, features = ["system"] }
 object = { workspace = true }
 memchr = { workspace = true }
 aho-corasick = "1.1"
@@ -25,6 +28,7 @@ zip = { workspace = true }
 tar = { workspace = true }
 flate2 = { workspace = true }
 zstd = { workspace = true }
+lzma-rs = "0.3"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics = { workspace = true }

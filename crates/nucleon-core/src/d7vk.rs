@@ -1,5 +1,5 @@
 use crate::paths;
-use anyhow::{Context, Result};
+use anyhow::Result;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -15,19 +15,6 @@ pub struct D7vkBundle {
     pub version: Option<String>,
 }
 
-fn read_version_file(dir: &Path) -> Option<String> {
-    let ver_file = dir.join("version.txt");
-    if ver_file.is_file()
-        && let Ok(c) = fs::read_to_string(&ver_file)
-    {
-        let t = c.trim();
-        if !t.is_empty() {
-            return Some(t.to_string());
-        }
-    }
-    None
-}
-
 /// Inspects a directory to check if it contains a valid D7VK installation.
 /// Accepts either the standard release hierarchy (x32/ddraw.dll), an x86 subfolder, or a flat directory (ddraw.dll).
 pub fn inspect_candidate_dir(dir: &Path) -> Option<D7vkBundle> {
@@ -35,34 +22,14 @@ pub fn inspect_candidate_dir(dir: &Path) -> Option<D7vkBundle> {
         return None;
     }
 
-    // 1. Check standard release layout: <dir>/x32/ddraw.dll
-    let x32_ddraw = dir.join("x32/ddraw.dll");
-    if x32_ddraw.is_file() {
-        return Some(D7vkBundle {
-            root: dir.to_path_buf(),
-            x86_ddraw: x32_ddraw,
-            version: read_version_file(dir),
-        });
-    }
-
-    // 2. Check x86 layout: <dir>/x86/ddraw.dll
-    let x86_ddraw = dir.join("x86/ddraw.dll");
-    if x86_ddraw.is_file() {
-        return Some(D7vkBundle {
-            root: dir.to_path_buf(),
-            x86_ddraw,
-            version: read_version_file(dir),
-        });
-    }
-
-    // 3. Check flat directory: <dir>/ddraw.dll
-    let flat_ddraw = dir.join("ddraw.dll");
-    if flat_ddraw.is_file() {
-        return Some(D7vkBundle {
-            root: dir.to_path_buf(),
-            x86_ddraw: flat_ddraw,
-            version: read_version_file(dir),
-        });
+    for layout in ["x32", "x86", ""] {
+        if let Some(x86_ddraw) = crate::graphics_bundle::file(&dir.join(layout), "ddraw.dll") {
+            return Some(D7vkBundle {
+                root: dir.to_path_buf(),
+                x86_ddraw,
+                version: crate::graphics_bundle::version(dir),
+            });
+        }
     }
 
     // 4. Check immediate release subdirectories, retaining the parent's version fallback.
@@ -71,7 +38,8 @@ pub fn inspect_candidate_dir(dir: &Path) -> Option<D7vkBundle> {
             .into_iter()
             .find(|file| file.is_file())
             .map(|x86_ddraw| D7vkBundle {
-                version: read_version_file(&p).or_else(|| read_version_file(dir)),
+                version: crate::graphics_bundle::version(&p)
+                    .or_else(|| crate::graphics_bundle::version(dir)),
                 root: p,
                 x86_ddraw,
             })
@@ -97,21 +65,12 @@ pub fn find_d7vk() -> Option<D7vkBundle> {
 /// Resolves a D7VK bundle, preferring `env_paths` (directories supplied through the environment,
 /// highest priority first). Split out so resolution can be tested without mutating process state.
 fn find_d7vk_with(env_paths: &[PathBuf]) -> Option<D7vkBundle> {
-    for p in env_paths {
-        if let Some(bundle) = inspect_candidate_dir(p) {
-            return Some(bundle);
-        }
-    }
-
-    // 2. Custom path stored via `nucleon d7vk set-path <path>`
-    let custom_file = custom_d7vk_path_file();
-    if custom_file.is_file()
-        && let Ok(c) = fs::read_to_string(&custom_file)
-    {
-        let p = PathBuf::from(c.trim());
-        if let Some(bundle) = inspect_candidate_dir(&p) {
-            return Some(bundle);
-        }
+    if let Some(bundle) = crate::graphics_bundle::configured(
+        env_paths,
+        &custom_d7vk_path_file(),
+        inspect_candidate_dir,
+    ) {
+        return Some(bundle);
     }
 
     // 3. Nucleon managed directory: ~/Library/Application Support/nucleon/d7vk
@@ -126,10 +85,8 @@ fn find_d7vk_with(env_paths: &[PathBuf]) -> Option<D7vkBundle> {
         PathBuf::from("/usr/local/share/d7vk"),
         paths::home_dir().join(".local/share/d7vk"),
     ];
-    for cand in &candidates {
-        if let Some(bundle) = inspect_candidate_dir(cand) {
-            return Some(bundle);
-        }
+    if let Some(bundle) = crate::graphics_bundle::find(candidates, inspect_candidate_dir) {
+        return Some(bundle);
     }
 
     // 5. Scan Steam Proton installs for d7vk if present
@@ -163,66 +120,29 @@ pub fn is_d7vk_installed() -> bool {
 }
 
 pub fn set_custom_d7vk_path(path: &Path) -> Result<D7vkBundle> {
-    let resolved = if path.is_relative() {
-        std::env::current_dir()?.join(path)
-    } else {
-        path.to_path_buf()
-    };
-
-    let bundle = inspect_candidate_dir(&resolved).ok_or_else(|| {
-        anyhow::anyhow!(
-            "Invalid D7VK installation at {}. Expected x32/ddraw.dll, x86/ddraw.dll, or ddraw.dll",
-            resolved.display()
-        )
-    })?;
-
-    fs::write(
-        custom_d7vk_path_file(),
-        bundle.root.to_string_lossy().as_bytes(),
+    crate::graphics_bundle::register(
+        path,
+        &custom_d7vk_path_file(),
+        "D7VK (expected x32/ddraw.dll, x86/ddraw.dll, or ddraw.dll)",
+        inspect_candidate_dir,
+        |bundle| &bundle.root,
     )
-    .with_context(|| format!("Failed to write {}", custom_d7vk_path_file().display()))?;
-
-    Ok(bundle)
 }
 
 pub fn clear_custom_d7vk_path() -> Result<()> {
-    let custom_file = custom_d7vk_path_file();
-    if custom_file.exists() {
-        fs::remove_file(&custom_file)?;
-    }
-    Ok(())
+    crate::graphics_bundle::clear(&custom_d7vk_path_file())
 }
 
 /// Stages D7VK DLL into a Wine prefix's syswow64 (or system32) directory.
 pub fn stage_d7vk_into_prefix(bundle: &D7vkBundle, prefix_dir: &Path) -> Result<usize> {
     let sys32 = prefix_dir.join("drive_c/windows/system32");
     let syswow64 = prefix_dir.join("drive_c/windows/syswow64");
-
-    let mut staged_count = 0;
-
-    // DirectDraw / D3D 1-7 games are 32-bit: stage to syswow64 on 64-bit Wine WoW64 prefixes
-    if syswow64.is_dir() {
-        let dst_wow64 = syswow64.join("ddraw.dll");
-        crate::backend_files::copy(&bundle.x86_ddraw, &dst_wow64).with_context(|| {
-            format!("Failed to stage D7VK ddraw.dll to {}", dst_wow64.display())
-        })?;
-        staged_count += 1;
-    } else if sys32.is_dir() {
-        // Fallback for pure 32-bit Wine prefixes
-        let dst_sys32 = sys32.join("ddraw.dll");
-        crate::backend_files::copy(&bundle.x86_ddraw, &dst_sys32).with_context(|| {
-            format!("Failed to stage D7VK ddraw.dll to {}", dst_sys32.display())
-        })?;
-        staged_count += 1;
-    }
-
-    log::info!(
-        "Staged {} D7VK DLL(s) into Wine prefix at {}",
-        staged_count,
-        prefix_dir.display()
-    );
-
-    Ok(staged_count)
+    let target_32 = if syswow64.is_dir() { &syswow64 } else { &sys32 };
+    crate::graphics_bundle::stage(
+        target_32,
+        "32-bit D7VK",
+        [("ddraw.dll", Some(bundle.x86_ddraw.as_path()))],
+    )
 }
 
 fn restore_ddraw_in_dir(

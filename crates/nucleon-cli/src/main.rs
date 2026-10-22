@@ -20,6 +20,75 @@ struct Cli {
     command: Commands,
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn wine_install_accepts_named_versions_and_explicit_sources() {
+        for args in [
+            vec![
+                "nucleon",
+                "wine",
+                "install",
+                "isotope",
+                "--version",
+                "0.1.0-rc.1",
+                "--register",
+            ],
+            vec![
+                "nucleon",
+                "wine",
+                "install",
+                "/tmp/runtime.tar.gz",
+                "--register",
+            ],
+            vec![
+                "nucleon",
+                "wine",
+                "install",
+                "https://example.invalid/runtime.tar.gz",
+                "--sha256",
+                &"a".repeat(64),
+            ],
+        ] {
+            assert!(matches!(
+                Cli::try_parse_from(args).unwrap().command,
+                Commands::Wine {
+                    action: WineAction::Install { .. }
+                }
+            ));
+        }
+    }
+    #[test]
+    fn launch_parses_complete_runtime_and_emulator_constraints() {
+        for emulator in ["rosetta", "fex"] {
+            let cli = Cli::try_parse_from([
+                "nucleon",
+                "launch",
+                "690790",
+                "--wine",
+                "fex-preview",
+                "--emulator",
+                emulator,
+                "--engine",
+                "dxmt",
+            ])
+            .unwrap();
+            assert!(matches!(
+                cli.command,
+                Commands::Launch {
+                    wine: Some(_),
+                    emulator: Some(_),
+                    ..
+                }
+            ));
+        }
+        assert!(
+            Cli::try_parse_from(["nucleon", "launch", "690790", "--emulator", "box64"]).is_err()
+        );
+    }
+}
+
 #[derive(Subcommand)]
 enum Commands {
     /// Perform idempotent setup check or remediate missing prerequisites ('nucleon setup fix')
@@ -138,7 +207,13 @@ enum Commands {
         /// Enable Apple Metal Performance HUD
         #[arg(long)]
         hud: bool,
-        /// Force specific engine (gptk, kosmickrisp, or staging)
+        /// Choose an exact installed Wine ID or a complete runtime path
+        #[arg(long)]
+        wine: Option<String>,
+        /// Choose the configured Wine for rosetta or fex (constrains --wine when combined)
+        #[arg(long)]
+        emulator: Option<nucleon_core::runtime_selection::Emulator>,
+        /// Force graphics engine (auto, gptk, dxmt, dxvk, vkd3d, kosmickrisp, wine)
         #[arg(short, long)]
         engine: Option<String>,
     },
@@ -261,7 +336,13 @@ fn main() -> Result<()> {
         Commands::Dxvk { action } => commands::dxvk::run(action),
         Commands::Dxmt { action } => commands::dxmt::run(action),
         Commands::Detect { path } => commands::detect::run(&path),
-        Commands::Launch { appid, hud, engine } => commands::launch::run_launch(appid, hud, engine),
+        Commands::Launch {
+            appid,
+            hud,
+            engine,
+            wine,
+            emulator,
+        } => commands::launch::run_launch(appid, hud, engine, wine, emulator),
         Commands::Validate { appid } => commands::launch::run_validate(appid),
         Commands::Steam { action } => commands::steam::run(action),
         Commands::Map { appid, tool } => commands::steam::run(SteamAction::Map { appid, tool }),

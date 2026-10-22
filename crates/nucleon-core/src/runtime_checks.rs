@@ -1,31 +1,14 @@
 //! File-level compatibility checks used before Automatic chooses a graphics path.
 use anyhow::{Result, bail};
-use object::read::macho::{FatArch, MachOFatFile32, MachOFatFile64};
 use object::{Architecture, BinaryFormat, Object, ObjectSection, ObjectSymbol};
 use sha2::{Digest, Sha256};
 use std::{fs, path::Path};
-
-pub(crate) fn slices(data: &[u8]) -> Result<Vec<&[u8]>> {
-    Ok(match object::FileKind::parse(data)? {
-        object::FileKind::MachOFat32 => MachOFatFile32::parse(data)?
-            .arches()
-            .iter()
-            .map(|a| a.data(data))
-            .collect::<std::result::Result<Vec<_>, _>>()?,
-        object::FileKind::MachOFat64 => MachOFatFile64::parse(data)?
-            .arches()
-            .iter()
-            .map(|a| a.data(data))
-            .collect::<std::result::Result<Vec<_>, _>>()?,
-        _ => vec![data],
-    })
-}
 
 pub(crate) fn native_arch(path: &Path, arch: Architecture) -> bool {
     fs::read(path)
         .ok()
         .and_then(|data| {
-            slices(&data).ok().map(|images| {
+            crate::binary_image::slices(&data, None).ok().map(|images| {
                 images.iter().any(|image| {
                     object::File::parse(*image).is_ok_and(|f| {
                         f.format() == BinaryFormat::MachO && f.architecture() == arch
@@ -36,7 +19,13 @@ pub(crate) fn native_arch(path: &Path, arch: Architecture) -> bool {
         .unwrap_or(false)
 }
 
+#[cfg(test)]
 pub(crate) fn wine_arch(root: &Path) -> Option<Architecture> {
+    if root.join(crate::runtime::DESCRIPTOR).exists() {
+        return crate::runtime::ResolvedRuntime::inspect(root)
+            .ok()
+            .map(|r| r.arch());
+    }
     // Prefer the host ntdll over launch scripts or universal executable wrappers.
     for (dir, arch) in [
         ("x86_64-unix", Architecture::X86_64),
@@ -59,6 +48,7 @@ pub(crate) fn wine_arch(root: &Path) -> Option<Architecture> {
     None
 }
 
+#[cfg(test)]
 pub(crate) fn dxmt(bundle: &crate::dxmt::DxmtBundle, root: &Path, is64: bool) -> bool {
     let files = if is64 {
         [
@@ -85,47 +75,100 @@ pub(crate) fn dxmt(bundle: &crate::dxmt::DxmtBundle, root: &Path, is64: bool) ->
 
 pub(crate) fn pe(path: Option<&Path>, is64: bool) -> bool {
     path.and_then(|p| fs::read(p).ok()).is_some_and(|data| {
-        object::File::parse(data.as_slice()).is_ok_and(|f| {
-            f.format() == BinaryFormat::Pe
-                && f.architecture()
-                    == if is64 {
-                        Architecture::X86_64
-                    } else {
-                        Architecture::I386
-                    }
-        })
+        pe_abi(&data).is_ok_and(|abi| abi == if is64 { PeAbi::X64 } else { PeAbi::X86 })
     })
 }
 
+/// Only the explicitly declared graphics set may opt into ARM64EC.
+pub(crate) fn graphics_pe(
+    path: Option<&Path>,
+    is64: bool,
+    abi: crate::runtime::FrontendAbi,
+) -> bool {
+    if abi == crate::runtime::FrontendAbi::X64 {
+        return pe(path, is64);
+    }
+    is64 && path
+        .and_then(|p| fs::read(p).ok())
+        .is_some_and(|data| pe_abi(&data).is_ok_and(|abi| abi == PeAbi::Arm64Ec))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PeAbi {
+    X86,
+    X64,
+    Arm64,
+    Arm64Ec,
+    Arm64X,
+}
+
+/// Do not mistake AMD64 hybrid headers or ordinary ARM64 code for an x64 frontend.
+pub(crate) fn pe_abi(data: &[u8]) -> Result<PeAbi> {
+    use object::{endian::LittleEndian as LE, read::pe::ImageNtHeaders};
+    let image = object::File::parse(data)?;
+    if let object::File::Pe32(pe) = &image {
+        anyhow::ensure!(
+            pe.nt_headers().file_header().machine.get(LE) == object::pe::IMAGE_FILE_MACHINE_I386,
+            "Unsupported 32-bit PE machine"
+        );
+        return Ok(PeAbi::X86);
+    }
+    let object::File::Pe64(pe) = &image else {
+        bail!("Expected a Windows PE image");
+    };
+    let chpe =
+        if let Some(directory) = pe.data_directory(object::pe::IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG) {
+            if directory.virtual_address.get(LE) == 0 {
+                false
+            } else {
+                let config = directory.data(data, &pe.section_table())?;
+                let size = config
+                    .get(..4)
+                    .map(|b| u32::from_le_bytes(b.try_into().unwrap()) as usize)
+                    .unwrap_or(0);
+                anyhow::ensure!(size <= config.len(), "Truncated PE load configuration");
+                size >= 208
+                    && config
+                        .get(200..208)
+                        .is_some_and(|b| b.iter().any(|v| *v != 0))
+            }
+        } else {
+            false
+        };
+    Ok(match pe.nt_headers().file_header().machine.get(LE) {
+        object::pe::IMAGE_FILE_MACHINE_AMD64 if chpe => PeAbi::Arm64Ec,
+        object::pe::IMAGE_FILE_MACHINE_AMD64 => PeAbi::X64,
+        object::pe::IMAGE_FILE_MACHINE_ARM64EC => PeAbi::Arm64Ec,
+        object::pe::IMAGE_FILE_MACHINE_ARM64X => PeAbi::Arm64X,
+        object::pe::IMAGE_FILE_MACHINE_ARM64 if chpe => PeAbi::Arm64X,
+        object::pe::IMAGE_FILE_MACHINE_ARM64 => PeAbi::Arm64,
+        _ => bail!("Unsupported 64-bit PE machine"),
+    })
+}
+
+#[cfg(test)]
 pub(crate) fn vulkan(icd: &Path, root: &Path) -> bool {
     let Some(arch) = wine_arch(root) else {
         return false;
     };
-    let Some(json) = fs::read(icd)
-        .ok()
-        .and_then(|data| serde_json::from_slice::<serde_json::Value>(&data).ok())
-    else {
+    vulkan_arch(icd, arch)
+}
+
+pub(crate) fn vulkan_arch(icd: &Path, arch: Architecture) -> bool {
+    let Ok(manifest) = crate::configuration::resolve_vulkan_icd(icd) else {
         return false;
     };
-    let Some(library) = json["ICD"]["library_path"].as_str() else {
-        return false;
-    };
-    let version = json["ICD"]["api_version"].as_str().unwrap_or("");
-    let mut parts = version.split('.').filter_map(|v| v.parse::<u32>().ok());
-    if (parts.next().unwrap_or(0), parts.next().unwrap_or(0)) < (1, 3) {
+    if !manifest
+        .api_version()
+        .is_some_and(|version| version >= (1, 3, 0))
+    {
         return false;
     }
-    let library = Path::new(library);
-    let library = if library.is_absolute() {
-        library.to_path_buf()
-    } else {
-        icd.parent().unwrap_or(Path::new(".")).join(library)
-    };
-    native_arch(&library, arch)
+    native_arch(&manifest.library, arch)
 }
 
 pub(crate) fn has_export(data: &[u8], aliases: &[&str]) -> bool {
-    slices(data).is_ok_and(|images| {
+    crate::binary_image::slices(data, None).is_ok_and(|images| {
         images.iter().any(|image| {
             object::File::parse(*image).is_ok_and(|f| {
                 f.symbols().chain(f.dynamic_symbols()).any(|s| {
@@ -147,7 +190,7 @@ pub(crate) fn has_export(data: &[u8], aliases: &[&str]) -> bool {
 /// Compare loadable code/data, architecture, and UUID, excluding code-signature blobs.
 pub(crate) fn hook_identity(data: &[u8]) -> Result<Vec<[u8; 32]>> {
     let mut hashes = Vec::new();
-    for image in slices(data)? {
+    for image in crate::binary_image::slices(data, None)? {
         let f = object::File::parse(image)?;
         if f.format() != BinaryFormat::MachO || f.kind() != object::ObjectKind::Dynamic {
             bail!("Hook must be a Mach-O dynamic library");
@@ -222,8 +265,58 @@ pub(crate) fn test_image(symbol: &str, text: u8) -> Vec<u8> {
 }
 
 #[cfg(test)]
+pub(crate) fn test_pe_image(machine: u16) -> Vec<u8> {
+    let is64 = machine != 0x14c;
+    let mut b = vec![0u8; 512];
+    b[..2].copy_from_slice(b"MZ");
+    b[60..64].copy_from_slice(&128u32.to_le_bytes());
+    b[128..132].copy_from_slice(b"PE\0\0");
+    b[132..134].copy_from_slice(&machine.to_le_bytes());
+    b[148..150].copy_from_slice(&(if is64 { 240u16 } else { 224u16 }).to_le_bytes());
+    b[152..154].copy_from_slice(&(if is64 { 0x20bu16 } else { 0x10bu16 }).to_le_bytes());
+    b
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hybrid_metadata_is_not_a_plain_amd64_frontend() {
+        let mut data = test_pe_image(0x8664);
+        data.resize(768, 0);
+        data[134..136].copy_from_slice(&1u16.to_le_bytes());
+        data[260..264].copy_from_slice(&16u32.to_le_bytes());
+        data[344..348].copy_from_slice(&0x1000u32.to_le_bytes());
+        data[348..352].copy_from_slice(&208u32.to_le_bytes());
+        data[400..404].copy_from_slice(&256u32.to_le_bytes());
+        data[404..408].copy_from_slice(&0x1000u32.to_le_bytes());
+        data[408..412].copy_from_slice(&256u32.to_le_bytes());
+        data[412..416].copy_from_slice(&512u32.to_le_bytes());
+        data[512..516].copy_from_slice(&208u32.to_le_bytes());
+        assert_eq!(pe_abi(&data).unwrap(), PeAbi::X64);
+        data[712..720].copy_from_slice(&0x140001100u64.to_le_bytes());
+        assert_eq!(pe_abi(&data).unwrap(), PeAbi::Arm64Ec);
+        let image = tempfile::NamedTempFile::new().unwrap();
+        fs::write(image.path(), &data).unwrap();
+        assert!(graphics_pe(
+            Some(image.path()),
+            true,
+            crate::runtime::FrontendAbi::Arm64Ec
+        ));
+        assert!(!pe(Some(image.path()), true));
+        data[132..134].copy_from_slice(&0xaa64u16.to_le_bytes());
+        assert_eq!(pe_abi(&data).unwrap(), PeAbi::Arm64X);
+        assert_eq!(pe_abi(&test_pe_image(0xaa64)).unwrap(), PeAbi::Arm64);
+        data[512..516].copy_from_slice(&209u32.to_le_bytes());
+        assert!(pe_abi(&data).is_err());
+        fs::write(image.path(), &data).unwrap();
+        assert!(!graphics_pe(
+            Some(image.path()),
+            true,
+            crate::runtime::FrontendAbi::Arm64Ec
+        ));
+    }
 
     fn pe_image(is64: bool) -> Vec<u8> {
         let mut b = vec![0u8; 512];
@@ -272,7 +365,27 @@ mod tests {
         assert!(!vulkan(&icd, &root));
         fs::write(&library, test_image("driver", 1)).unwrap();
         assert!(vulkan(&icd, &root));
-        write_icd("1.2.0");
+        for version in ["1.3.0", "1.4.0", "2.0.0"] {
+            write_icd(version);
+            assert!(vulkan(&icd, &root), "{version}");
+        }
+        for version in [
+            "1.2.999",
+            "",
+            "garbage.1.3",
+            "1.garbage.3",
+            "1.3.bad",
+            "1.3",
+            "1.3.0.0",
+            "+1.3.0",
+            "4294967296.3.0",
+        ] {
+            write_icd(version);
+            assert!(!vulkan(&icd, &root), "{version}");
+        }
+        fs::write(&icd, r#"{"ICD":{"library_path":"driver.dylib"}}"#).unwrap();
+        // Readable driver configuration alone does not establish Vulkan 1.3.
+        crate::configuration::vulkan_manifest("test", &icd).unwrap();
         assert!(!vulkan(&icd, &root));
     }
 
