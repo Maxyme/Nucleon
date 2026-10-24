@@ -31,3 +31,22 @@ Supply `NUCLEON_STEAM_API` and optionally `NUCLEON_STEAM_BRIDGE`. It does not ru
 game. Runtime build/graphics tooling no longer depends on installed games.
 
 See the standalone builder for runtime validation and release CI.
+
+## Standalone DX11 window check
+
+`runtime-probes/d3d11-present.c` is a bounded x64 Windows test program: hardware
+feature level 11.0, a real window/swap chain, twelve alternating-color frames,
+full pixel readback and presentation. It needs neither Steam nor a game.
+
+```sh
+x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -Werror \
+  tools/runtime-probes/d3d11-present.c -o /tmp/nucleon-d3d11-present.exe \
+  -ld3d11 -ldxgi -ldxguid -luser32
+target/release/nucleon run /tmp/nucleon-d3d11-present.exe \
+  --wine /path/to/compatible/intel-wine --emulator rosetta \
+  --engine dxmt --graphics-api dx11 --upscaler game
+```
+
+Success requires the `NUCLEON_D3D11_OK` marker and exit 0. See
+[the DiRT runtime repair](../DIRT2-NO-GPTK-TEST.md) for the tested Wine 11.18
+driver patch and its limits. A successful probe does not establish gameplay.

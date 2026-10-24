@@ -245,7 +245,35 @@ pub fn clear_custom_dxmt_path() -> Result<()> {
     crate::graphics_bundle::clear(&custom_dxmt_path_file())
 }
 
-/// Builtin DXMT DLLs must match the selected Wine runtime.
+/// DXMT needs either its macdrv function table or the legacy exported entry points.
+/// Matching PE/Unix DXMT files alone do not provide this Wine ABI.
+pub fn validate_metal_driver(runner: &Path) -> Result<()> {
+    let legacy = [
+        "get_win_data",
+        "release_win_data",
+        "macdrv_view_create_metal_view",
+        "macdrv_view_get_metal_layer",
+        "macdrv_view_release_metal_view",
+    ];
+    for lib in ["lib/wine", "lib64/wine"] {
+        let path = runner.join(lib).join("x86_64-unix/winemac.so");
+        if let Ok(bytes) = fs::read(&path)
+            && crate::runtime_checks::native_arch(&path, object::Architecture::X86_64)
+            && (crate::runtime_checks::has_export(&bytes, &["macdrv_functions"])
+                || legacy
+                    .iter()
+                    .all(|name| crate::runtime_checks::has_export(&bytes, &[*name])))
+        {
+            return Ok(());
+        }
+    }
+    anyhow::bail!(
+        "Wine at {} lacks the exported macdrv Metal window interface required by DXMT. Select a DXMT-compatible Wine build; copying DXMT DLLs alone cannot repair the Wine driver.",
+        runner.display()
+    )
+}
+
+/// Builtin DXMT DLLs and the Metal window interface must match the selected Wine runtime.
 pub fn validate_runtime(bundle: &DxmtBundle, runner_dir: Option<&Path>) -> Result<()> {
     if let Some(runner) = runner_dir
         && runner.join(crate::runtime::DESCRIPTOR).is_file()
@@ -268,6 +296,9 @@ pub fn validate_runtime(bundle: &DxmtBundle, runner_dir: Option<&Path>) -> Resul
             );
             return Ok(());
         }
+    }
+    if let Some(runner) = runner_dir {
+        validate_metal_driver(runner)?;
     }
     if bundle.uses_builtin_dlls()
         && let Some(runner) = runner_dir
@@ -517,6 +548,22 @@ impl Backend for DxmtBackend {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn metal_driver_requires_real_exports_and_intel_architecture() {
+        let dir = tempdir().unwrap();
+        let unix = dir.path().join("lib/wine/x86_64-unix");
+        fs::create_dir_all(&unix).unwrap();
+        let driver = unix.join("winemac.so");
+        fs::write(&driver, b"macdrv_functions").unwrap();
+        assert!(validate_metal_driver(dir.path()).is_err());
+        let mut image = crate::runtime_checks::test_image("macdrv_functions", 1);
+        fs::write(&driver, &image).unwrap();
+        assert!(validate_metal_driver(dir.path()).is_ok());
+        image[4..8].copy_from_slice(&0x0100000cu32.to_le_bytes());
+        fs::write(&driver, image).unwrap();
+        assert!(validate_metal_driver(dir.path()).is_err());
+    }
 
     #[test]
     fn test_inspect_candidate_dir_standard_layout() {

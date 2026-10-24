@@ -330,6 +330,11 @@ impl LaunchPlan {
     ) -> Result<Self> {
         runtime.require_guest(is64)?;
         crate::frontend::validate_selected(&runtime, &graphics)?;
+        if engine == TargetEngine::Dxmt
+            && let Some(bundle) = &graphics.dxmt
+        {
+            crate::dxmt::validate_runtime(bundle, Some(&runtime.root))?;
+        }
         let available = graphics.available(&runtime, api, is64);
         let usable = match engine {
             TargetEngine::Dxmt => available.dxmt,

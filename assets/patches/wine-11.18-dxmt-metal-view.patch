@@ -1,0 +1,91 @@
+--- a/dlls/winemac.drv/cocoa_window.m
++++ b/dlls/winemac.drv/cocoa_window.m
+@@ -3654,6 +3654,13 @@
+ }
+ }
+ 
++WineContentView *macdrv_window_get_content_view(WineWindow *window)
++{
++    __block WineContentView *view;
++    OnMainThread(^{ view = (WineContentView *)[window contentView]; });
++    return view;
++}
++
+ WineMetalView *macdrv_view_create_metal_view(WineContentView *view, id<MTLDevice> device)
+ {
+     __block WineMetalView *metalView;
+--- a/dlls/winemac.drv/macdrv_cocoa.h
++++ b/dlls/winemac.drv/macdrv_cocoa.h
+@@ -531,6 +531,7 @@
+ extern void macdrv_set_view_hidden(WineContentView *view, bool hidden);
+ extern void macdrv_add_view_opengl_context(WineContentView *view, WineOpenGLContext *context);
+ extern void macdrv_remove_view_opengl_context(WineContentView *view, WineOpenGLContext *context);
++extern WineContentView *macdrv_window_get_content_view(WineWindow *window);
+ extern id_MTLDevice macdrv_create_metal_device(void);
+ extern void macdrv_release_metal_device(id_MTLDevice device);
+ extern WineMetalView *macdrv_view_create_metal_view(WineContentView *view, id_MTLDevice device);
+--- a/dlls/winemac.drv/window.c
++++ b/dlls/winemac.drv/window.c
+@@ -213,6 +213,62 @@
+ {
+     if (data) pthread_mutex_unlock(&win_data_mutex);
+ }
++
++
++struct dxmt_window_data
++{
++    HWND hwnd;
++    WineWindow * cocoa_window;
++    WineContentView * cocoa_view;
++    WineContentView * client_cocoa_view;
++};
++
++static _Thread_local struct dxmt_window_data dxmt_data;
++static _Thread_local struct macdrv_win_data *dxmt_locked_data;
++
++static struct dxmt_window_data *dxmt_get_win_data(HWND hwnd)
++{
++    struct macdrv_win_data *data = get_win_data(hwnd);
++    if (!data) return NULL;
++    dxmt_locked_data = data;
++    dxmt_data.hwnd = data->hwnd;
++    dxmt_data.cocoa_window = data->cocoa_window;
++    dxmt_data.cocoa_view = data->client_view;
++    if (!dxmt_data.cocoa_view && data->cocoa_window)
++        dxmt_data.cocoa_view = macdrv_window_get_content_view(data->cocoa_window);
++    dxmt_data.client_cocoa_view = dxmt_data.cocoa_view;
++    return &dxmt_data;
++}
++
++static void dxmt_release_win_data(struct dxmt_window_data *data)
++{
++    if (!data) return;
++    release_win_data(dxmt_locked_data);
++    dxmt_locked_data = NULL;
++}
++
++/* Preserve the reference's ten-slot table; only its window/Metal entries are
++ * consumed by winemetal. The unused display/main-thread slots stay NULL.
++ */
++DECLSPEC_EXPORT const struct
++{
++    void (*init_display_devices)(BOOL);
++    struct dxmt_window_data *(*get_win_data)(HWND);
++    void (*release_win_data)(struct dxmt_window_data *);
++    WineWindow * (*get_cocoa_window)(HWND, BOOL);
++    id_MTLDevice (*create_metal_device)(void);
++    void (*release_metal_device)(id_MTLDevice);
++    WineMetalView * (*create_metal_view)(WineContentView *, id_MTLDevice);
++    CAMetalLayer * (*get_metal_layer)(WineMetalView *);
++    void (*release_metal_view)(WineMetalView *);
++    void (*on_main_thread)(void *);
++} macdrv_functions =
++{
++    NULL, dxmt_get_win_data, dxmt_release_win_data, macdrv_get_cocoa_window,
++    macdrv_create_metal_device, macdrv_release_metal_device,
++    macdrv_view_create_metal_view, macdrv_view_get_metal_layer,
++    macdrv_view_release_metal_view, NULL
++};
+ 
+ 
+ /***********************************************************************

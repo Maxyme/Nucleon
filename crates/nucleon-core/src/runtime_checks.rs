@@ -405,6 +405,12 @@ mod tests {
         }
         fs::write(bundle_dir.join("winemetal.so"), test_image("metal", 1)).unwrap();
         let bundle = crate::dxmt::inspect_candidate_dir(&bundle_dir).unwrap();
+        fs::create_dir_all(root.join("lib/wine/x86_64-unix")).unwrap();
+        fs::write(
+            root.join("lib/wine/x86_64-unix/winemac.so"),
+            test_image("macdrv_functions", 1),
+        )
+        .unwrap();
         assert!(dxmt(&bundle, &root, true));
         assert!(!dxmt(&bundle, &root, false));
         let mut builtin = pe_image(true);

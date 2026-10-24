@@ -1,0 +1,98 @@
+format = "nucleon-steam-contract"
+revision = 1
+
+[client]
+platform = "macos"
+architecture = "arm64"
+steam_build = 1792618285
+uuid = "1d282616b67e30a6b0afe4d5880610e7"
+text_sha256 = "fd211e17521100ded5ceab450540ff7114952aafaa4095eca91ac73215a3d6a8"
+
+[provenance]
+method = "Apple otool ARM64 static disassembly and Mach-O identity inspection, 2026-10-22"
+source = "Locally installed Valve steamclient.dylib; see client-1792618285.md"
+limitations = "Static review verifies instruction sites and callback ABI; gameplay is not tested. REA Mach-O inspection retained separately; disassembly observations are from Apple otool."
+
+[eligibility]
+virtual_address = 0x6a5c40
+entry_words = [0xd10103ff, 0xa9024ff4, 0xa9037bfd, 0x9100c3fd, 0xaa0103f4, 0xaa0003f3, 0xb90017e1, 0xf0008008]
+abi = "c-self-u32-bool"
+evidence = "Entry stores x0 as self and w1 as AppID; profiler identifies CCompatManager::BIsCompatibilityToolEnabled at 0x6a5c70; boolean result returns in x0 at 0x6a5d60."
+
+[[patches]]
+kind = "platform-state-read"
+virtual_address = 0x6a1f78
+expected_word = 0x39604008
+evidence = "Compatibility-manager flag read at 0x6a1f78; constructor compares platform to linux and stores flag at self+0x810 (0x6a1ab8-0x6a1acc); DisableCompatibilityLayer clears it at 0x6a3da4."
+
+[[patches]]
+kind = "platform-state-read"
+virtual_address = 0x6a2018
+expected_word = 0x39604008
+evidence = "Compatibility-manager flag read at 0x6a2018; constructor compares platform to linux and stores flag at self+0x810 (0x6a1ab8-0x6a1acc); DisableCompatibilityLayer clears it at 0x6a3da4."
+
+[[patches]]
+kind = "platform-state-read"
+virtual_address = 0x6a2140
+expected_word = 0x39604008
+evidence = "Compatibility-manager flag read at 0x6a2140; constructor compares platform to linux and stores flag at self+0x810 (0x6a1ab8-0x6a1acc); DisableCompatibilityLayer clears it at 0x6a3da4."
+
+[[patches]]
+kind = "platform-state-read"
+virtual_address = 0x6a2440
+expected_word = 0x39604008
+evidence = "Compatibility-manager flag read at 0x6a2440; constructor compares platform to linux and stores flag at self+0x810 (0x6a1ab8-0x6a1acc); DisableCompatibilityLayer clears it at 0x6a3da4."
+
+[[patches]]
+kind = "platform-state-read"
+virtual_address = 0x6a3d78
+expected_word = 0x39604000
+evidence = "Compatibility-manager flag read at 0x6a3d78; constructor compares platform to linux and stores flag at self+0x810 (0x6a1ab8-0x6a1acc); DisableCompatibilityLayer clears it at 0x6a3da4."
+
+[[patches]]
+kind = "platform-state-read"
+virtual_address = 0x6a5198
+expected_word = 0x39604008
+evidence = "Compatibility-manager flag read at 0x6a5198; constructor compares platform to linux and stores flag at self+0x810 (0x6a1ab8-0x6a1acc); DisableCompatibilityLayer clears it at 0x6a3da4."
+
+[[patches]]
+kind = "platform-state-read"
+virtual_address = 0x6a5360
+expected_word = 0x39604008
+evidence = "Compatibility-manager flag read at 0x6a5360; constructor compares platform to linux and stores flag at self+0x810 (0x6a1ab8-0x6a1acc); DisableCompatibilityLayer clears it at 0x6a3da4."
+
+[[patches]]
+kind = "platform-state-read"
+virtual_address = 0x6a57a4
+expected_word = 0x39604008
+evidence = "Compatibility-manager flag read at 0x6a57a4; constructor compares platform to linux and stores flag at self+0x810 (0x6a1ab8-0x6a1acc); DisableCompatibilityLayer clears it at 0x6a3da4."
+
+[[patches]]
+kind = "platform-state-read"
+virtual_address = 0x6a5c8c
+expected_word = 0x39604268
+evidence = "Compatibility-manager flag read at 0x6a5c8c; constructor compares platform to linux and stores flag at self+0x810 (0x6a1ab8-0x6a1acc); DisableCompatibilityLayer clears it at 0x6a3da4."
+
+[[patches]]
+kind = "platform-state-read"
+virtual_address = 0x6a5d28
+expected_word = 0x39604268
+evidence = "Compatibility-manager flag read at 0x6a5d28; constructor compares platform to linux and stores flag at self+0x810 (0x6a1ab8-0x6a1acc); DisableCompatibilityLayer clears it at 0x6a3da4."
+
+[[patches]]
+kind = "platform-state-read"
+virtual_address = 0x6a84c8
+expected_word = 0x39604008
+evidence = "Compatibility-manager flag read at 0x6a84c8; constructor compares platform to linux and stores flag at self+0x810 (0x6a1ab8-0x6a1acc); DisableCompatibilityLayer clears it at 0x6a3da4."
+
+[[patches]]
+kind = "platform-state-read"
+virtual_address = 0x6abe64
+expected_word = 0x39604008
+evidence = "Compatibility-manager flag read at 0x6abe64; constructor compares platform to linux and stores flag at self+0x810 (0x6a1ab8-0x6a1acc); DisableCompatibilityLayer clears it at 0x6a3da4."
+
+[[patches]]
+kind = "os-list-tool-gate"
+virtual_address = 0x6a585c
+expected_word = 0xb4fffca0
+evidence = "V_stristr at 0x6a5858 compares requested OS list against tool list. CBZ x0 at 0x6a585c returns false via 0x6a57f0. Null-tool test at 0x6a583c remains intact."

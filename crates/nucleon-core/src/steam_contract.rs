@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 const EMBEDDED_CONTRACTS: &[&str] = &[
     include_str!("../../../assets/steam-contracts/macos-arm64/client-1788652215.toml"),
     include_str!("../../../assets/steam-contracts/macos-arm64/client-1791918634.toml"),
+    include_str!("../../../assets/steam-contracts/macos-arm64/client-1792618285.toml"),
 ];
 
 fn reviewed_contract(image: &[u8]) -> Result<ClientContract> {
