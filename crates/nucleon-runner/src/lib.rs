@@ -1251,7 +1251,10 @@ fn execute_launch(prepared: PreparedLaunch, session: &mut RunSession) -> Result<
         "Target architecture: {}",
         if is_64 { "64-bit" } else { "32-bit" }
     ));
-    trace_runner(&format!("Launching game with Wine: {:?}", wine_args));
+    trace_runner(&format!(
+        "Launching game with Wine: {:?}",
+        nucleon_core::launch_profile::redact_arguments(&wine_args)
+    ));
 
     for key in [
         "STEAM_COMPAT_APP_ID",

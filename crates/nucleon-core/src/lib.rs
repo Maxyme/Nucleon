@@ -15,6 +15,7 @@ pub mod gptk_abi;
 mod graphics_bundle;
 pub mod guard;
 pub mod launch;
+pub mod launch_profile;
 pub mod managed_runtime;
 pub mod manifest;
 pub mod paths;

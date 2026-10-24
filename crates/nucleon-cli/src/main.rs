@@ -25,6 +25,68 @@ mod tests {
     use super::*;
 
     #[test]
+    fn saved_launch_commands_accept_arbitrary_exes_and_explicit_authentication() {
+        for args in [
+            vec![
+                "nucleon",
+                "app",
+                "add",
+                "other-game",
+                "/Games/Other Game.exe",
+                "--prefix",
+                "/Prefixes/Other",
+                "--wine",
+                "wine-id",
+                "--env",
+                "CUSTOM=with spaces=and equals",
+                "--",
+                "--game-option",
+                "",
+            ],
+            vec!["nucleon", "app", "import", "talos2", "/config/launch.json"],
+            vec!["nucleon", "app", "run", "talos2", "--dry-run"],
+            vec![
+                "nucleon",
+                "app",
+                "run",
+                "other-game",
+                "--exe",
+                "/moved/Another.exe",
+                "--engine",
+                "dxmt",
+                "--",
+                "a b",
+            ],
+            vec!["nucleon", "app", "check", "talos2"],
+            vec![
+                "nucleon",
+                "app",
+                "add",
+                "epic-game",
+                "Game.exe",
+                "--legendary-app",
+                "arbitrary-id",
+                "--legendary",
+                "/tools/legendary",
+            ],
+        ] {
+            assert!(Cli::try_parse_from(args).is_ok());
+        }
+        assert!(
+            Cli::try_parse_from([
+                "nucleon",
+                "app",
+                "add",
+                "bad",
+                "Game.exe",
+                "--legendary-app",
+                "id"
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
     fn upscaler_commands_and_saved_preferences_parse_without_launching() {
         for args in [
             vec!["nucleon", "run", "Game.exe", "--upscaler", "fsr3.1"],
@@ -203,6 +265,11 @@ mod tests {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Save and launch EXEs with reusable runtime, prefix and store-authentication profiles
+    App {
+        #[command(subcommand)]
+        action: commands::app::Action,
+    },
     /// Run a Windows EXE directly, without Steam; use -- to pass program arguments
     Run(commands::application::RunArgs),
     /// Manage named environments shared by installers and installed programs
@@ -413,6 +480,7 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
+        Commands::App { action } => commands::app::run(action),
         Commands::Run(args) => commands::application::run(args),
         Commands::Bottle { action } => commands::application::bottle(action),
         Commands::Upscaler { action } => commands::upscaler::run(action),

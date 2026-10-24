@@ -84,6 +84,76 @@ include `NUCLEON_ROSETTA_ADVERTISE_AVX_COPY`, `NUCLEON_D3DM_MTL4` and
 `NUCLEON_D3DM_SUPPORT_DXR`. Intel prefix setup and execution use matching esync
 and msync settings so a server started during setup can also host the game.
 
+## Saved native launch profiles
+
+Save an EXE's runtime, existing prefix, working directory, environment and
+arguments, then launch it through Nucleon itself:
+
+```sh
+nucleon app add my-game "/Games/My Game/Game.exe" \
+  --prefix "/Prefixes/My Game" --wine /path/to/wine \
+  --emulator rosetta --engine dxmt -- --fullscreen
+nucleon app run my-game --dry-run
+nucleon app run my-game
+```
+
+`app run` accepts `--exe`, `--prefix`, `--cwd` and the normal runtime/graphics
+options as one-launch overrides. Arguments after `--` append to the saved game
+arguments. Paths and arguments are passed directly, without shell parsing.
+`nucleon run /another/path.exe` remains available without saving a profile.
+
+```sh
+nucleon app list
+nucleon app show my-game
+nucleon app run my-game --exe "/Moved Game/Game.exe" -- --another-option
+```
+
+For Epic games requiring authentication, Nucleon requests fresh JSON launch
+arguments from the installed Legendary tool, then runs the EXE through its own
+native runner. It does not run the old Python wrapper or Legendary's configured
+Wine/wrapper/pre-launch commands. The external Legendary binary remains required
+for account authentication; Nucleon does not implement Epic login. Use an
+existing signed-in Heroic/Legendary configuration:
+
+```sh
+nucleon app add epic-game "/Games/Epic Game/Game.exe" \
+  --prefix "/Prefixes/Epic Game" --wine /path/to/wine --emulator rosetta \
+  --legendary /path/to/legendary --legendary-app STORE_APP_ID \
+  --legendary-config /path/to/legendary-config
+nucleon app check epic-game
+nucleon app run epic-game
+```
+
+`app check` validates the profile and requests authentication arguments but never
+starts Wine or the game. `app run --dry-run` does not even request authentication.
+Fresh account arguments remain in memory, are not saved in the profile and are
+redacted from Nucleon's diagnostic argument traces. Imported store environment
+values are applied before explicit profile environment preferences.
+
+Use repeatable `app add --env NAME=value` for application-specific settings.
+Prefix/runtime identity must use typed options, rather than `WINEPREFIX`,
+`WINEARCH`, `NUCLEON_WINE`, `NUCLEON_ENGINE` or Steam identity variables.
+
+Advanced profiles can be imported with `nucleon app import NAME launch.json`.
+Schema 1 contains `application` (executable, arguments and cwd), `settings`
+(the same fields as bottle settings), optional `prefix`, `environment` and
+optional `authentication` (provider `legendary`, binary, app_id and config).
+Relative file paths resolve against the JSON document; a relative upscaler
+renderer resolves against the EXE directory, matching the upscaler manager.
+Profiles are stored under Nucleon's support directory in `applications/`.
+Existing entries require explicit `--replace` to overwrite.
+
+The migrated local Talos profile launches with:
+
+```sh
+nucleon app run talos2
+```
+
+It preserves the existing Epic prefix, Rosetta/GPTK runtime and prepared native
+FSR 4.1.1 Lite configuration. Importing it does not run the game. Upscaler
+bindings are installation-specific; moving a modded game still requires its
+normal provider preparation and validation at the new path.
+
 ## Create and configure a bottle
 
 A bottle is a named environment with shared prefix data, graphics preferences

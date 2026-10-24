@@ -1,3 +1,4 @@
+pub mod app;
 pub mod application;
 pub mod backends;
 pub mod d7vk;

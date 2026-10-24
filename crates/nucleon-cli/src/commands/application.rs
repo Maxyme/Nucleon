@@ -25,7 +25,7 @@ pub struct SettingsArgs {
 }
 
 impl SettingsArgs {
-    fn settings(self) -> Result<Settings> {
+    pub(crate) fn settings(self) -> Result<Settings> {
         let settings = Settings {
             upscaler: self.upscaler.map(nucleon_core::upscaler::Settings::selected),
             wine: self.wine, emulator: self.emulator, engine: self.engine,
