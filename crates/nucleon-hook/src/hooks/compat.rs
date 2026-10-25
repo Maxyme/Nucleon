@@ -17,6 +17,12 @@ static INSTALLATION: Mutex<InstallationState> = Mutex::new(InstallationState {
     restart_required: false,
 });
 
+fn eligibility_for_tool(steam_enabled: bool, appid: u32, tool: Option<&str>) -> bool {
+    steam_enabled
+        || (appid != 0
+            && tool.is_some_and(|tool| tool == "nucleon" || tool.starts_with("nucleon-")))
+}
+
 /// Safety: Frida invokes this only for the reviewed self/u32/bool entry point.
 /// The original is published before transaction activation. We never dereference
 /// self, discover tool pointers, or retain foreign object pointers.
@@ -30,12 +36,14 @@ unsafe extern "C" fn eligibility_override(manager: *mut c_void, appid: u32) -> b
     if native_result || appid == 0 {
         return native_result;
     }
-    // No Rust panic may escape a native callback. Steam remains the fallback if
-    // filesystem/appinfo inspection fails or panics.
+    // A selected Windows tool must remain eligible while Steam replaces a native
+    // depot. Looking at the currently installed files here makes eligibility flip
+    // as each platform finishes downloading, causing an endless depot switch.
+    // No Rust panic may escape a native callback; failed mapping reads leave
+    // Steam's original result unchanged.
     std::panic::catch_unwind(|| {
-        nucleon_core::steam::native_detect::app_native_status(&appid.to_string())
-            .map(|native| !native)
-            .unwrap_or(native_result)
+        let tool = nucleon_core::steam::mapped_compat_tool(appid);
+        eligibility_for_tool(native_result, appid, tool.as_deref())
     })
     .unwrap_or(native_result)
 }
@@ -166,4 +174,30 @@ pub fn install_contract(image: PinnedImage, reviewed: &ValidatedContract) -> Res
         reviewed.contract().client.uuid
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn explicit_tools_stay_enabled_during_native_to_windows_depot_switches() {
+        // Braid and GoNNER initially have Mac depots, then partial/mixed files,
+        // then Windows depots. None of those transitions may disable the tool.
+        for appid in [26800, 437570] {
+            for tool in ["nucleon", "nucleon-wine", "nucleon-fex"] {
+                assert!(eligibility_for_tool(false, appid, Some(tool)));
+            }
+        }
+    }
+
+    #[test]
+    fn unselected_native_games_and_other_tools_keep_steam_eligibility() {
+        for tool in [None, Some(""), Some("proton"), Some("nucleonish")] {
+            assert!(!eligibility_for_tool(false, 26800, tool));
+            assert!(eligibility_for_tool(true, 26800, tool));
+        }
+        assert!(!eligibility_for_tool(false, 0, Some("nucleon")));
+        assert!(eligibility_for_tool(true, 0, Some("nucleon")));
+    }
 }

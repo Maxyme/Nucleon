@@ -17,10 +17,9 @@ pub fn run_launch(
     }
     println!("==> Launching game AppID {}...", appid);
 
-    // Ensure Steam update guard, permissions, manifests, WebUI, and compat mappings are clean
+    // Repair integration without changing Steam's depot/update state.
     let _ = guard::run_guard_once(super::find_hook_dylib().as_deref());
     let _ = steam::fix_steam_permissions();
-    let _ = steam::sanitize_installed_app_manifests();
     let _ = steam::patch_steamui_chunks();
     let _ = steam::migrate_compat_mappings();
 

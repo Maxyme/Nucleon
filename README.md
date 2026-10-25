@@ -165,6 +165,5 @@ These are projects that share a similar goal, and were used as inspiration for t
 ## License
 
 [GPL-3.0-only](LICENSE). Third-party runtimes retain their own licenses and
-redistribution requirements. [NOTICE.md](NOTICE.md) records attribution,
-historical permissions, and unresolved provenance questions. The change does
-not revoke earlier grants or authorize redistribution of Valve or Apple components.
+redistribution requirements. [NOTICE.md](NOTICE.md) records third-party
+attribution and component notices.

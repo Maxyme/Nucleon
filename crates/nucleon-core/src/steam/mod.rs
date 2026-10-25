@@ -370,9 +370,6 @@ pub fn install_compatibility_tool(runner_bin: &Path) -> Result<()> {
     // Ensure all installed games in steamapps/ are registered in libraryfolders.vdf
     let _ = sync_library_folders();
 
-    // Sanitize any app manifests stuck in UpdateRequired (StateFlags 6)
-    let _ = sanitize_installed_app_manifests();
-
     // Ensure Steam downloading and library permissions prevent "missing file privileges"
     let _ = fix_steam_permissions();
 

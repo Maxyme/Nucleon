@@ -258,7 +258,7 @@ pub fn heal_steam(hook_source: Option<&Path>) -> Result<HealResult> {
         result.webui_patched_count = steam::patch_steamui_chunks()?;
     }
 
-    // 5. Clean native games and wildcard "0" from CompatToolMapping
+    // 5. Clean the global wildcard while preserving explicit per-game choices.
     steam::migrate_compat_mappings()?;
     result.mappings_cleaned = true;
 

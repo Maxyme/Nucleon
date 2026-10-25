@@ -1,4 +1,3 @@
-use super::native_detect::find_native_mac_appids;
 use crate::fs_util::atomic_write_file;
 use crate::paths;
 use crate::runner;
@@ -30,10 +29,10 @@ pub fn migrate_compat_mappings() -> Result<()> {
     let mut updated = content;
     let mut modified = false;
 
-    // Collect native macOS AppIDs to ensure they are never forced into CompatToolMapping.
-    // Also include "0" (global wildcard) so that wildcard priority 250 does not hijack native games.
-    let mut native_appids = find_native_mac_appids();
-    native_appids.insert("0".to_string());
+    // Never choose a tool globally. Per-game mappings are explicit selections,
+    // including Windows versions of games with obsolete native Mac binaries.
+    // Removing those mappings during a depot switch restarts the Mac download.
+    let native_appids = HashSet::new();
 
     // We do NOT inject unmapped installed games into CompatToolMapping with priority 250.
     // Doing so locks the "Force compatibility tool" checkbox on and converts native macOS games into Wine games.
@@ -46,7 +45,7 @@ pub fn migrate_compat_mappings() -> Result<()> {
     }
 
     if modified {
-        let _ = atomic_write_file(&config_path, updated);
+        atomic_write_file(&config_path, updated)?;
     }
     Ok(())
 }
@@ -152,126 +151,6 @@ pub fn sync_library_folders() -> Result<Vec<u32>> {
     Ok(restored_appids)
 }
 
-fn set_vdf_str_field(obj: &mut keyvalues_parser::Obj<'static>, key: &str, new_val: &str) -> bool {
-    let current = obj
-        .get(key)
-        .and_then(|v| v.first())
-        .and_then(|v| v.get_str());
-    if current != Some(new_val) {
-        obj.insert(
-            std::borrow::Cow::Owned(key.to_string()),
-            vec![keyvalues_parser::Value::Str(std::borrow::Cow::Owned(
-                new_val.to_string(),
-            ))],
-        );
-        true
-    } else {
-        false
-    }
-}
-
-/// Scans all appmanifest_*.acf files and clears UpdateRequired / UpdateQueued / UpdatePaused
-/// for apps whose game directories are already populated on disk, setting them to StateFlags 4 (fully installed),
-/// AutoUpdateBehavior 1 (only update on launch, preventing background download queueing), and zeroing download counters.
-pub fn sanitize_installed_app_manifests() -> Result<usize> {
-    let steamapps = paths::steam_data_dir().join("steamapps");
-    if !steamapps.is_dir() {
-        return Ok(0);
-    }
-    let mut fixed_count = 0;
-    if let Ok(entries) = fs::read_dir(&steamapps) {
-        for entry in entries.flatten() {
-            let p = entry.path();
-            let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
-            if name.starts_with("appmanifest_")
-                && name.ends_with(".acf")
-                && let Ok(content) = fs::read_to_string(&p)
-            {
-                let Ok(partial) = keyvalues_parser::parse(&content) else {
-                    continue;
-                };
-                let mut vdf = keyvalues_parser::Vdf::from(partial).into_owned();
-
-                let installdir = if let keyvalues_parser::Value::Obj(ref obj) = vdf.value {
-                    obj.get("installdir")
-                        .and_then(|v| v.first())
-                        .and_then(|v| v.get_str())
-                        .map(|s| s.to_string())
-                } else {
-                    None
-                };
-
-                let game_dir = installdir
-                    .as_ref()
-                    .map(|dir| steamapps.join("common").join(dir));
-                let is_installed = game_dir.as_ref().map(|d| d.exists()).unwrap_or(false);
-
-                if is_installed && let keyvalues_parser::Value::Obj(ref mut obj) = vdf.value {
-                    let mut changed = false;
-
-                    // 1. Remove temporary sections
-                    if obj.remove("StagedDepots").is_some() {
-                        changed = true;
-                    }
-                    if obj.remove("DlcDownloads").is_some() {
-                        changed = true;
-                    }
-
-                    // 2. Set StateFlags to 4 (fully installed)
-                    if set_vdf_str_field(obj, "StateFlags", "4") {
-                        changed = true;
-                    }
-
-                    // 3. Set AutoUpdateBehavior to 1 (only update on launch)
-                    if set_vdf_str_field(obj, "AutoUpdateBehavior", "1") {
-                        changed = true;
-                    }
-
-                    // 4. Zero download and staging counters
-                    for field in &[
-                        "BytesToDownload",
-                        "BytesDownloaded",
-                        "BytesToStage",
-                        "BytesStaged",
-                        "ScheduledAutoUpdate",
-                        "UpdateResult",
-                    ] {
-                        if set_vdf_str_field(obj, field, "0") {
-                            changed = true;
-                        }
-                    }
-
-                    if changed {
-                        let _ = atomic_write_file(&p, vdf.to_string());
-                        log::info!(
-                            "Sanitized {} to StateFlags 4 & AutoUpdateBehavior 1 (ready to play)",
-                            name
-                        );
-                        fixed_count += 1;
-                    }
-                }
-            }
-        }
-    }
-
-    // Clean up temporary download staging/patch files in steamapps/downloading
-    let downloading = steamapps.join("downloading");
-    if downloading.is_dir()
-        && let Ok(entries) = fs::read_dir(&downloading)
-    {
-        for entry in entries.flatten() {
-            let p = entry.path();
-            let _ = if p.is_dir() {
-                fs::remove_dir_all(&p)
-            } else {
-                fs::remove_file(&p)
-            };
-        }
-    }
-
-    Ok(fixed_count)
-}
-
 /// Helper to recursively find a nested object by key in a KeyValues AST.
 fn find_child_obj_mut<'a>(
     obj: &'a mut keyvalues_parser::Obj<'static>,
@@ -300,7 +179,8 @@ fn find_child_obj_mut<'a>(
     None
 }
 
-/// Ensures all target Windows AppIDs are mapped to "nucleon", while stripping native AppIDs and wildcard "0".
+/// Map requested Windows AppIDs without replacing existing per-game choices.
+/// Remove the global wildcard; native detection only prevents adding new mappings.
 pub fn update_compat_tool_mapping(
     content: &str,
     target_appids: &[String],
@@ -365,14 +245,8 @@ fn update_compat_tool_mapping_with(
         return (content.to_string(), false);
     };
 
-    // 1. Remove native AppIDs and wildcard "0"
-    let to_remove: Vec<String> = compat
-        .keys()
-        .filter(|appid| native_appids.contains(appid.as_ref()))
-        .map(|k| k.to_string())
-        .collect();
-    for appid in to_remove {
-        compat.remove(appid.as_str());
+    // 1. Preserve per-game choices even while a Mac depot is still installed.
+    if compat.remove("0").is_some() {
         modified = true;
     }
 
@@ -403,6 +277,9 @@ fn update_compat_tool_mapping_with(
 
     // 3. Ensure target AppIDs are mapped
     for target_id in target_appids {
+        if target_id == "0" || native_appids.contains(target_id) {
+            continue;
+        }
         if !compat.contains_key(target_id.as_str()) {
             let mut entry_obj = keyvalues_parser::Obj::new();
             entry_obj.insert(
@@ -778,7 +655,7 @@ mod tests {
     }
 
     #[test]
-    fn test_update_compat_tool_mapping_excludes_native_and_wildcard() {
+    fn migration_removes_wildcard_but_preserves_explicit_native_game_choices() {
         let sample = r#""InstallConfigStore"
 {
 	"Software"
@@ -815,20 +692,28 @@ mod tests {
 	}
 }"#;
 
-        let target_appids = vec!["228980".to_string(), "690790".to_string()];
+        let target_appids = vec![
+            "0".to_string(),
+            "228980".to_string(),
+            "690790".to_string(),
+            "1091501".to_string(),
+        ];
         let mut native_appids = HashSet::new();
         native_appids.insert("0".to_string());
         native_appids.insert("1091500".to_string());
+        native_appids.insert("1091501".to_string());
 
         let (result, modified) = update_compat_tool_mapping(sample, &target_appids, &native_appids);
         assert!(modified);
 
-        // Wildcard 0 and Cyberpunk 1091500 must not be in CompatToolMapping
-        assert!(!result.contains(
-            r#""0"
-					{"#
-        ));
-        assert!(!result.contains(r#""1091500""#));
+        assert_eq!(compat_tool_for_appid(&result, 0), None);
+        // An existing explicit choice survives even if native files are present.
+        assert_eq!(
+            compat_tool_for_appid(&result, 1091500).as_deref(),
+            Some("nucleon")
+        );
+        // Native games with no selection are never automatically opted in.
+        assert_eq!(compat_tool_for_appid(&result, 1091501), None);
 
         // Windows apps 228980 and 690790 must be mapped to nucleon
         assert!(result.contains(r#""228980""#));
@@ -847,6 +732,30 @@ mod tests {
             }
         }
         assert_eq!(depth, 0);
+    }
+
+    #[test]
+    fn braid_and_gonner_mappings_survive_native_partial_and_windows_depots() {
+        let sample = r#""Steam" { "CompatToolMapping" {} "unrelated" "preserved" }"#;
+        let (mapped, _) = set_compat_tool_mapping(sample, 26800, "nucleon-wine");
+        let (mapped, _) = set_compat_tool_mapping(&mapped, 437570, "nucleon");
+        for native in [
+            HashSet::from(["26800".into(), "437570".into()]),
+            HashSet::from(["437570".into()]),
+            HashSet::new(),
+        ] {
+            let (updated, changed) = update_compat_tool_mapping_with(&mapped, &[], &native, true);
+            assert!(!changed);
+            assert_eq!(updated, mapped);
+            assert_eq!(
+                compat_tool_for_appid(&updated, 26800).as_deref(),
+                Some("nucleon-wine")
+            );
+            assert_eq!(
+                compat_tool_for_appid(&updated, 437570).as_deref(),
+                Some("nucleon")
+            );
+        }
     }
 
     #[test]

@@ -139,7 +139,9 @@ pub fn run(action: GuardAction) -> Result<()> {
                         ));
                     }
                     if res.mappings_cleaned {
-                        ui::success("Cleaned native macOS games from CompatToolMapping");
+                        ui::success(
+                            "Checked compatibility mappings; preserved per-game selections",
+                        );
                     }
                     if res.contract_cached {
                         ui::success(

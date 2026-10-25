@@ -1,37 +1,29 @@
-# Third-party provenance
+# Third-party notices
 
-Nucleon is distributed under GNU GPL version 3 only (`GPL-3.0-only`), effective
-2026-10-13. Copyright (c) 2026 Nucleon Contributors. See `LICENSE` for the full
-terms, including the warranty disclaimer and source distribution requirements.
+Copyright (c) 2026 Nucleon Contributors. Nucleon is distributed under GNU GPL
+version 3 only (`GPL-3.0-only`); see [LICENSE](LICENSE).
 
+## Source and dependencies
 
-## Runtime components
-
-- Wine and Wine-source patches retain Wine's LGPL terms and source notices.
-  The Rosetta WoW64 workaround is derived from dttdrv/wiage's Wine/CodeWeavers
+- Rust dependencies retain their respective licenses and copyright notices.
+  Versions are recorded in [Cargo.lock](Cargo.lock).
+- Wine patches in [assets/patches](assets/patches/) retain Wine's LGPL terms.
+  The Rosetta WoW64 workaround derives from dttdrv/wiage's Wine/CodeWeavers
   implementation (CW HACK 20760), under LGPL-2.1-or-later. The Steam redirect
-  modifies Wine's LGPL-2.1-or-later loader. Native Rust build orchestration is
-  covered by Nucleon's GPL-3.0-only license. Built runtime copies retain the
-  applied patches, Wine license, authors, source references, and build receipts.
-- The experimental ARM64 runtime uses the pinned MacRunner/HyperBridge and
-  Tolkara forks listed in `assets/wine/recipes/arm64-fex.toml`. FEX and
-  HyperBridge retain their MIT notices. The shared-data read decoder is copied
-  unchanged at build time from MacRunner's Wine fork, under Wine's LGPL terms;
-  Nucleon's downstream integration patch records that source and its checksum.
-  The optional DXMT test uses the reference archive's graphics components and
-  records their hashes; it does not build those components from source.
+  modifies Wine's LGPL-2.1-or-later loader. Patched runtime copies retain Wine's
+  license, authors, applied patches and build receipts.
+
+## Runtime and upscaler components
+
+- Imported Wine/FEX runtimes, Mesa, DXVK, DXMT, VKD3D-Proton and D7VK retain the
+  licenses and notices supplied with their source and runtime packages.
 - `lsteamclient` binaries require their exact source revision and applicable
-  Steamworks SDK notices.
-- The `steam.exe` helper derived from Proton's steam-helper uses BSD-3-Clause,
-  with separately licensed Steamworks, OpenVR, and Wine headers as applicable.
-- Valve client libraries, Apple GPTK/D3DMetal, and graphics translation runtimes
-  retain their own terms. Nucleon's license does not grant redistribution rights
-  to those components.
-- The DX12 prototype builds Mesa KosmicKrisp with a pinned Steamac patch series.
-  Mesa retains its file-specific licenses and notices; Steamac is Apache-2.0,
-  and imported upstream patches retain their own notices. Source pins, patch
-  hashes and native build receipts are kept with the private driver. Official
-  VKD3D-Proton releases retain LGPL-2.1-or-later terms; DXVK retains its
-  zlib/libpng license. The shader probe can use a separately licensed Microsoft
-  compiler from a local game;
-  that proprietary DLL is not redistributed by this repository.
+  Steamworks SDK notices. Proton-derived `steam.exe` helpers retain BSD-3-Clause
+  terms and the notices for any Steamworks, OpenVR and Wine headers used.
+- Optional upscaler providers use OptiScaler, its MetalFX fork, OptiPatcher and
+  native FSR4 sources. Pinned releases and revisions are recorded in
+  [dependencies.json](tools/upscalers/dependencies.json); provider installation
+  retains upstream license and notice files.
+- Valve client libraries and Apple GPTK/D3DMetal retain their own terms.
+  Nucleon's license does not grant redistribution rights to third-party
+  components.
