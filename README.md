@@ -31,13 +31,40 @@ their selected runtime, preferences, installed files and saves across launches.
 See [standalone usage](STANDALONE.md) for saved applications, configuration and
 runtime selection.
 
-An experimental [Talos 2 FSR4 Lite integration](tools/upscalers/README.md) can
-prepare a private GPTK/MetalFX hook and game-local DLSS bridge without starting
-the game. It includes integrity checks, a launch preview and rollback; Talos
-compatibility still requires a separate game test.
-Managed [upscaler selection](UPSCALING.md) shares preferences across direct EXEs,
-bottles and Steam, with preparation previews, integrity checks and rollback.
-The [design](UPSCALING-PLAN.md) records runtime/backend compatibility gates.
+## Upscaling games
+
+Nucleon can use OptiScaler to replace a game's existing temporal upscaler with
+FSR2, FSR 3.1, experimental XeSS, MetalFX or native FSR 4.1.1/Lite. It works
+with direct EXEs, saved applications, bottles and Steam.
+
+Eligible games are **x64 DX11/DX12 games with compatible DLSS, FSR2/3/3.1 or
+XeSS inputs**. Support depends on the game and runtime; meeting these requirements
+does not guarantee compatibility. MetalFX/native FSR4 additionally requires
+**DX12, DLSS input and a complete matching Intel GPTK runtime**. Managed upscaling
+currently excludes x86 games, native Vulkan, ARM64EC graphics and plain WineD3D.
+Unreal XeSS input is also excluded; XeSS output is experimental and DX12-only.
+
+For a DX12 game exposing DLSS, using an already working vkd3d runtime:
+
+```sh
+nucleon upscaler install stock
+nucleon upscaler prepare /games/Game/Game.exe --backend fsr3.1 --input dlss \
+  --wine /path/to/runtime --engine vkd3d --graphics-api dx12
+nucleon run /games/Game/Game.exe --wine /path/to/runtime --engine vkd3d \
+  --graphics-api dx12 --upscaler fsr3.1
+```
+
+Quit the game before preparation; add `--dry-run` to `prepare` to preview its
+changes first. Use the game's actual rendering EXE, or specify `--renderer` for
+a separate launcher. Keep the runtime, engine and prefix/bottle consistent with
+your normal launch. In the game, enable the selected **input** (DLSS in this
+example) and choose its quality preset; OptiScaler supplies the requested output.
+
+Use `nucleon upscaler status /games/Game/Game.exe` to inspect the binding, or
+`nucleon upscaler restore /games/Game/Game.exe` after quitting to restore owned
+files. See the [quick setup guide](tools/upscalers/README.md) for GPTK/native FSR4
+and [upscaler reference](UPSCALING.md) for compatibility, saved preferences and
+activation checks. Preparation alone does not establish in-game activation.
 
 ## Running locally
 

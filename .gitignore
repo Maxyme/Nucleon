@@ -32,3 +32,5 @@ __pycache__/
 
 # Local investigation notes
 /docs/
+/findings/
+/debug/

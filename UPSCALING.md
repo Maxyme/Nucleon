@@ -82,16 +82,16 @@ recipe or one detected input; it rejects ambiguity. Select that input and its
 quality preset inside the game. OptiScaler redirects the input to your chosen
 output. Nucleon does not add temporal inputs to an arbitrary game.
 
-The Talos recipe enables the pinned OptiPatcher plugin to address its DLSS
-availability gate. Install that dependency explicitly:
+Some game-specific recipes require the pinned OptiPatcher plugin to expose their
+DLSS input. If preparation reports that this dependency is required, install it:
 
 ```sh
 nucleon upscaler install patcher
 ```
 
 The rolling release is checksum-pinned and will fail if replaced upstream.
-`--archive /path/OptiPatcher.asi` can reuse the matching binary. Other games do
-not inherit the Talos patch or an assumption that DLSS is universally unlocked.
+`--archive /path/OptiPatcher.asi` can reuse the matching binary. The plugin is
+enabled only by a matching recipe; it does not universally unlock DLSS.
 The initial recipes keep frame generation, GPU spoofing and the overlay off.
 
 ## Launch selection and saved configuration
@@ -119,7 +119,7 @@ Profiles and bottle settings share this strict JSON schema:
   "upscaler": {
     "backend": "fsr4-native-lite",
     "input": "dlss",
-    "renderer": "Talos2/Binaries/Win64/Talos2-Win64-Shipping.exe"
+    "renderer": "Project/Binaries/Win64/Game-Win64-Shipping.exe"
   }
 }
 ```
@@ -186,35 +186,18 @@ not scaler GPU cost or measured presentation FPS. Missing or invalid optional
 measurements appear as `null`. Stock provider activation remains `not-observed`; its log and a
 separate game/image test are needed. A selectable DLSS menu item is insufficient.
 
-## Existing Talos preparation
+## Game compatibility and store launchers
 
-The prior [Talos helper](tools/upscalers/README.md) and its installed files remain
-unchanged until explicit migration:
+Compatibility is determined by the game's rendering API, upscaler input and
+selected runtime, rather than a blanket list of supported titles. The routes
+above describe what Nucleon accepts for preparation; each game still needs an
+in-game image and activation check. A game without a compatible temporal input
+cannot gain one merely by selecting an output backend.
 
-```sh
-nucleon upscaler migrate-talos
-```
+Keep the game's working prefix/bottle and store authentication route when
+launching with upscaling. Saved applications can supply store arguments through
+the configured authentication provider; see [saved launch profiles](STANDALONE.md#saved-native-launch-profiles).
+Keep live authentication arguments out of saved profiles and shared logs.
 
-Migration transfers ownership and retains the original backup records. It does
-not start Wine, change game bytes, or replace the original GPTK framework. The
-old helper refuses to restore a journal owned by the generic manager. Its
-existing validated native artifacts can remain in use; switching providers
-requires installing the new provider dependencies. Generic commands refuse to
-take over the unmigrated Talos journal automatically.
-
-After migration, the existing Talos authentication wrapper reads the new owner
-and forwards its selected `--upscaler`. Its preparation/status/preview paths
-still do not start the game. The generic manager owns subsequent restoration.
-
-Store authentication is still the store launcher's responsibility. Keep Epic
-launch arguments out of saved profiles and shared logs. Talos and other game
-validation must be run as a separate requested step.
-
-Talos has now passed the stock FSR 3.1 baseline and FSR 4.1.1 Lite gameplay
-tests with the corrected bridge and complete input masks. The game's **DLSS**
-selection supplies the inputs to native FSR Lite. See the
-[validated configuration and evidence](TALOS2-UPSCALING.md).
-
-See [UPSCALING-PLAN.md](UPSCALING-PLAN.md) for the design and remaining promotion
-gates, and the dependency source/license links in the provider catalog and
-[native preparation guide](tools/upscalers/README.md).
+See the [quick setup guide](tools/upscalers/README.md) and
+[provider catalog](tools/upscalers/dependencies.json) for dependencies and sources.
