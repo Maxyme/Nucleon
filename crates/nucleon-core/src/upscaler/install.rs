@@ -187,12 +187,19 @@ fn digest_reader(reader: &mut impl Read) -> Result<String> {
 
 fn stock(root: &Path, provider: &str, archive: Option<&Path>) -> Result<()> {
     let catalog = assets::catalog();
-    let spec = &catalog[if provider == "stock" {
-        "stock"
+    let (url, expected, version) = if provider == "stock" {
+        (
+            catalog.stock.url,
+            catalog.stock.sha_256,
+            catalog.stock.version,
+        )
     } else {
-        "optiscaler"
-    }];
-    let expected = spec["sha256"].as_str().unwrap();
+        (
+            catalog.optiscaler.url,
+            catalog.optiscaler.sha_256,
+            catalog.optiscaler.version,
+        )
+    };
     let target = assets::provider_path(root, provider)?
         .parent()
         .unwrap()
@@ -200,7 +207,7 @@ fn stock(root: &Path, provider: &str, archive: Option<&Path>) -> Result<()> {
     generation(&target, provider, |stage| {
         let mut input = match archive {
             Some(path) => fs::File::open(path)?,
-            None => crate::downloads::download(spec["url"].as_str().unwrap(), DOWNLOAD_LIMIT)?,
+            None => crate::downloads::download(url, DOWNLOAD_LIMIT)?,
         };
         let len = input.metadata()?.len();
         ensure!(
@@ -213,7 +220,7 @@ fn stock(root: &Path, provider: &str, archive: Option<&Path>) -> Result<()> {
         );
         input.rewind()?;
         extract(input, len, stage, EXTRACT_LIMIT)?;
-        manifest(stage, provider, spec["version"].as_str().unwrap(), None)
+        manifest(stage, provider, version, None)
     })
 }
 
@@ -253,46 +260,7 @@ fn native(root: &Path, wine: &Path, source: Option<&Path>) -> Result<()> {
         .join("providers/native")
         .join(assets::native_key(&digest)?);
     generation(&target, "native", |stage| {
-        let scripts = tempfile::tempdir_in(root)?;
-        for (name, content) in [
-            (
-                "native_build.py",
-                include_str!("../../../../tools/upscalers/native_build.py"),
-            ),
-            (
-                "native.py",
-                include_str!("../../../../tools/upscalers/native.py"),
-            ),
-            (
-                "dependencies.json",
-                include_str!("../../../../tools/upscalers/dependencies.json"),
-            ),
-            (
-                "fsr4_depth_compat.h",
-                include_str!("../../../../tools/upscalers/fsr4_depth_compat.h"),
-            ),
-            (
-                "test_depth_compat.m",
-                include_str!("../../../../tools/upscalers/test_depth_compat.m"),
-            ),
-        ] {
-            fs::write(scripts.path().join(name), content)?;
-        }
-        let mut cmd = Command::new("python3");
-        cmd.arg(scripts.path().join("native_build.py"))
-            .arg("--output")
-            .arg(stage.join("fsr4"))
-            .arg("--cache")
-            .arg(root.join("cache"))
-            .arg("--wine")
-            .arg(&wine);
-        if let Some(source) = source {
-            cmd.arg("--source").arg(source.canonicalize()?);
-        }
-        ensure!(
-            cmd.status()?.success(),
-            "Native FSR build failed; provider was not published"
-        );
+        super::native::build(root, &stage.join("fsr4"), &wine, source)?;
         ensure!(
             crate::staging::digest(&wine.join("lib/external/D3DMetal.framework/D3DMetal"))?
                 == digest,
@@ -326,6 +294,7 @@ pub fn install(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::repo_assets::FIXTURES;
     use proptest::prelude::*;
     use std::io::Cursor;
 
@@ -493,6 +462,43 @@ mod tests {
     }
 
     #[test]
+    fn native_source_failure_preserves_the_prior_generation_and_original_framework() {
+        let temp = tempfile::tempdir().unwrap();
+        let wine = temp.path().join("wine");
+        let framework = wine.join("lib/external/D3DMetal.framework/D3DMetal");
+        fs::create_dir_all(framework.parent().unwrap()).unwrap();
+        fs::write(&framework, b"original framework").unwrap();
+        let source = temp.path().join("unverified-source");
+        fs::create_dir(&source).unwrap();
+        // A self-declared source receipt is not an authority for executable build inputs.
+        fs::write(
+            source.join(".nucleon-source.json"),
+            br#"{"commit":"329d1d7367b6b948a53486505198a5d254f02809","files":{}}"#,
+        )
+        .unwrap();
+        let target = temp
+            .path()
+            .join("providers/native")
+            .join(assets::native_key(&crate::staging::digest(&framework).unwrap()).unwrap());
+        fs::create_dir_all(&target).unwrap();
+        fs::write(
+            target.join("prior-data"),
+            b"preserve failed generation for retry",
+        )
+        .unwrap();
+        for _ in 0..2 {
+            assert!(install(temp.path(), "native", None, Some(&wine), Some(&source)).is_err());
+            assert_eq!(
+                fs::read(target.join("prior-data")).unwrap(),
+                b"preserve failed generation for retry"
+            );
+            assert!(!target.join("provider.json").exists());
+            assert_eq!(fs::read(&framework).unwrap(), b"original framework");
+            assert_eq!(fs::read_dir(target.parent().unwrap()).unwrap().count(), 1);
+        }
+    }
+
+    #[test]
     fn publication_failure_preserves_the_destination_and_cleans_staging() {
         let temp = tempfile::tempdir().unwrap();
         let target = temp.path().join("unexpected-file");
@@ -507,7 +513,10 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let wine = temp.path().join("wine");
         let original = wine.join("lib/wine/x86_64-windows/nvngx-on-metalfx.dll");
-        let bytes = include_bytes!("fixtures/ngx-forward.bin");
+        let bytes = FIXTURES
+            .get_file("upscaler/ngx-forward.bin")
+            .unwrap()
+            .contents();
         fs::create_dir_all(original.parent().unwrap()).unwrap();
         fs::write(&original, bytes).unwrap();
         let digest = crate::staging::digest(&original).unwrap();

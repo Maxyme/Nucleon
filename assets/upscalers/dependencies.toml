@@ -1,0 +1,25 @@
+schema = 1
+
+[fsr4]
+repository = "UzenUPoZiTiV4ik/fsr4-native-macos"
+commit = "329d1d7367b6b948a53486505198a5d254f02809"
+tree = "329d1d7367b6b948a53486505198a5d254f02809"
+
+[optiscaler]
+version = "v0.9.4-witcher3-metalfx-308613e"
+repository = "vm99cs8fnw/OptiScaler-witcher3-skipspoof"
+upstream_base = "optiscaler/OptiScaler v0.9.4"
+url = "https://github.com/vm99cs8fnw/OptiScaler-witcher3-skipspoof/releases/download/v0.9.4-witcher3-metalfx/OptiScaler-witcher3-metalfx-308613e-essentials.7z"
+sha256 = "ed775e658101a0501d6c17c92a1bb3268dfda9eba506c71306890f5a577968dd"
+
+[optipatcher]
+version = "rolling-20261022"
+source_commit = "44b8106"
+url = "https://github.com/optiscaler/OptiPatcher/releases/download/rolling/OptiPatcher.asi"
+sha256 = "aa900233612905ab3fd1ed36205646c1743363350b2f047c5b6af425259447db"
+
+[stock]
+version = "v0.9.4"
+repository = "optiscaler/OptiScaler"
+url = "https://github.com/optiscaler/OptiScaler/releases/download/v0.9.4/Optiscaler_0.9.4-final.20260718._MM.7z"
+sha256 = "575cb4df866116093df75af607e37fd70e10f5163e0f23fd5c804142e80ef0ad"

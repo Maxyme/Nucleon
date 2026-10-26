@@ -1,4 +1,5 @@
 //! Structured per-game choices shared by Steam launches and diagnostic wrappers.
+use crate::repo_assets::ASSETS;
 use crate::{
     detector::GraphicsApi,
     runtime::{ResolvedRuntime, SteamProtocol},
@@ -67,9 +68,13 @@ pub struct GameProfile {
 
 impl GameProfile {
     pub fn fex_default(appid: &str) -> Self {
-        let mut profiles: std::collections::BTreeMap<String, Self> =
-            serde_json::from_str(include_str!("../../../assets/arm64-fex-profiles.json"))
-                .expect("Embedded FEX profiles must match the profile schema");
+        let mut profiles: std::collections::BTreeMap<String, Self> = serde_json::from_slice(
+            ASSETS
+                .get_file("arm64-fex-profiles.json")
+                .expect("Embedded FEX profiles")
+                .contents(),
+        )
+        .expect("Embedded FEX profiles must match the profile schema");
         profiles.remove(appid).unwrap_or_default()
     }
     /// Fill absent fields without overriding explicit false or auto choices.

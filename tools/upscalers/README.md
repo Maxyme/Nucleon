@@ -1,130 +1,68 @@
-# Talos 2: native FSR4 Lite preparation
+# Upscaler providers
 
-This experimental integration stages **FSR 4.1.1 Lite (`lossy`)** behind Talos's
-DLSS inputs. It combines OptiPatcher, a pinned OptiScaler MetalFX passthrough
-fork, GPTK's own `nvngx-on-metalfx.dll`, and the native macOS FSR4 hook.
-Both the stock FSR 3.1 baseline and native FSR 4.1.1 Lite passed gameplay tests.
-For Lite, the user confirmed the DLSS option, responsive menus and working
-movement; native status recorded 5,358 replaced frames and a clean exit.
-See the [current Talos results](../../TALOS2-UPSCALING.md).
+Nucleon manages optional upscalers for eligible x64 DX11/DX12 games. A game must
+already expose a supported DLSS, FSR2/3/3.1 or XeSS input. Compatibility depends
+on the game, runtime and graphics backend; see [supported routes](../../UPSCALING.md).
 
-Nucleon's shared [upscaler manager](../../UPSCALING.md) now provides typed launch
-choices and game-local ownership. Existing Talos preparations remain with this
-helper until `nucleon upscaler migrate-talos` transfers the journal. The store
-wrapper then forwards the generic owner's choice; restoration uses the manager.
-
-`prepare` builds and runs **synthetic native Metal tests only**. It never runs
-Wine, Legendary or Talos, changes registry settings, or edits Heroic preferences.
-Only the explicit `launch` and internal `wrapper` commands can start the game.
-
-## Prepare and inspect
-
-Requirements: Python 3.11+, Xcode with its Metal Toolchain component, `dxc`,
-`spirv-cross`, `spirv-val`, Rosetta, a built Nucleon CLI and a working complete
-Intel GPTK bundle. `xcrun metal --version` must succeed. If necessary, install the
-official compiler component using `xcodebuild -downloadComponent MetalToolchain`.
-
-From the Nucleon repository:
+Install and prepare a stock provider for a DX12 game with DLSS input:
 
 ```sh
-python3 tools/upscalers/talos2.py prepare
-python3 tools/upscalers/talos2.py status
-python3 tools/upscalers/talos2.py launch --dry-run
+nucleon upscaler install stock
+nucleon upscaler prepare /games/Game/Game.exe --backend fsr3.1 --input dlss \
+  --wine /path/to/runtime --engine vkd3d --graphics-api dx12 --dry-run
 ```
 
-The defaults select the installed Heroic Talos 2 game/prefix and GPTK 4.0 beta 3.
-`prepare --help` lists overrides. Downloaded dependencies are pinned in
-`dependencies.json`; assets are checked against their release SHA-256 digests,
-and FSR source files against the pinned Git blob identities. A changed rolling
-OptiPatcher download fails its checksum rather than silently installing an update.
-`--fsr-source`, `--optiscaler` and `--optipatcher` can reuse verified local inputs.
-
-Private sources, shaders, the copied framework, logs and rollback records live in:
-
-```text
-~/Library/Application Support/nucleon/upscalers/talos2-fsr4-lite/
-```
-
-No original runtime or game executable is patched. Setup stages these files
-beside the **renderer**, under `Talos2/Binaries/Win64/`:
-
-```text
-dxgi.dll                                      OptiScaler proxy
-OptiScaler.ini                                MetalFX passthrough, FG/spoofing/overlay off
-OptiScaler/plugins/OptiPatcher.asi              Talos DLSS availability patch
-nvngx.dll                                    Original Wine builtin PE loader entry
-nvngx-on-metalfx.dll                          Selected GPTK's original-named bridge
-OptiScaler/nucleon-metalfx/nvngx.dll            Complete NGX forwarding DLL
-```
-
-The overlay is disabled to avoid unnecessary D3D11 overlay hooks during this
-first DX12 test. The native FSR panel remains enabled. Its private configuration
-starts in Lite mode, and its log can distinguish an active replacement from a
-fallback to regular MetalFX. Selecting FSR4 in stock OptiScaler is not this path.
-
-## macOS 27.2 compatibility adaptation
-
-The synthetic live hook test exposed a missing `isDepthReversed` getter on
-`_MFXTemporalScalingEffectBBR`. `fsr4_depth_compat.h` captures the real
-`setDepthReversed:` value, using the public getter when present. An unavailable
-value falls back to MetalFX. Subclass hooks preserve the original superclass
-setter, including either hook installation order. A generated source overlay
-uses this adaptation; pinned upstream source files remain unchanged.
-
-Setup tests the accessor shim, loads the copied framework, computes synthetic
-FSR4 Lite frames through the native INT8 backend, and compares the live hook's
-output with the standalone reference. Original framework hashes are checked
-before and after the build. Results are recorded in
-`fsr4/dist/crossover/nucleon-validation.json` and `profile.json`.
-
-## Later game test — explicit separate step
-
-When ready to start the game:
+Quit the game, inspect the preview, then repeat without `--dry-run` to prepare
+its files. Use the actual rendering EXE, or supply `--renderer` for a separate
+launcher. Launch with the same runtime and graphics choices, and enable the
+chosen input in the game's settings:
 
 ```sh
-python3 tools/upscalers/talos2.py launch
+nucleon run /games/Game/Game.exe --wine /path/to/runtime --engine vkd3d \
+  --graphics-api dx12 --upscaler fsr3.1
+nucleon upscaler status /games/Game/Game.exe
 ```
 
-This uses Heroic's existing Legendary account configuration to obtain fresh Epic
-authentication and wraps the game with Nucleon, Rosetta and the same GPTK bundle.
-No authentication arguments are saved in the profile. Legendary output stays in
-a private log because it can include credentials. Avoid sharing raw game logs.
+After quitting, `nucleon upscaler restore /games/Game/Game.exe` restores owned
+files. Saved applications, bottles and Steam can use the same provider choices.
 
-In the game, first confirm DLSS is selectable, select DLSS Quality, and verify
-the FSR panel reports **FSR 4.1.1 active**. An open game window or an enabled
-menu item alone does not establish that FSR4 Lite is processing frames.
+## MetalFX and native FSR4
 
-## Restore
-
-Quit the game and its prefix, then run:
+These routes additionally require DX12, DLSS input and a complete matching Intel
+GPTK runtime. Install the MetalFX provider and the forwarding bridge first:
 
 ```sh
-python3 tools/upscalers/talos2.py restore
+nucleon upscaler install metalfx
+nucleon upscaler install bridge --wine /path/to/complete/gptk/wine
 ```
 
-Original files, permissions and symlinks are backed up before deployment.
-Removal checks every installed file and backup before changing anything. It
-refuses to overwrite later user/game edits, including a changed OptiScaler INI;
-preserve those changes before restoring. An interrupted deployment has a journal
-and can be restored. Another active prefix or Nucleon session blocks setup/removal.
-The private build and backups remain available after removal.
-
-## Validation without a game
+The bridge requires `x86_64-w64-mingw32-gcc`. To build the optional native FSR4
+provider, also run:
 
 ```sh
-python3 -m unittest discover -s tools/upscalers -p 'test_*.py' -v
-clang -fobjc-arc -arch x86_64 -Wall -Wextra -Werror -framework Foundation \
-  tools/upscalers/test_depth_compat.m -o /tmp/nucleon-depth-compat
-arch -x86_64 /tmp/nucleon-depth-compat
+nucleon upscaler install native --wine /path/to/complete/gptk/wine
 ```
 
-Sources and licenses:
+Native requirements are Python 3.11+ for upstream FSR4's build and shader tools,
+Rosetta, Xcode with its Metal Toolchain, and `dxc`, `spirv-cross` and `spirv-val`
+on PATH. `xcrun metal --version` must succeed. `--source /path/to/source` reuses a
+local source tree; every required file is checked against the pinned source lock.
 
-- FSR4: https://github.com/UzenUPoZiTiV4ik/fsr4-native-macos (MIT source and retained third-party notices)
-- MetalFX OptiScaler fork: https://github.com/vm99cs8fnw/OptiScaler-witcher3-skipspoof
-- OptiScaler: https://github.com/optiscaler/OptiScaler (GPL-3.0)
-- OptiPatcher: https://github.com/optiscaler/OptiPatcher
+Rust owns downloads, source verification, compatibility patches, compiler setup,
+build sequencing and validation reports. Original upstream source files remain
+intact; generated overlays adapt depth handling and keep each game's panel state
+private. The build validates synthetic Lite and full-quality Metal frames and
+checks that the original GPTK framework remains unchanged. It never launches Wine
+or a game. Gameplay activation must be checked separately through game-local
+status and native frame reports.
 
-The fork was demonstrated upstream with Witcher 3. Talos now initializes this
-bridge and processes native Lite frames; the separate gameplay and performance
-validation status is linked above.
+Provider installation stages and validates a generation before atomic
+publication. Failed builds preserve the previous generation, and retries can
+repair incomplete installations. Existing provider identities remain compatible.
+
+Pinned inputs and notices:
+
+- [Provider releases and upstream revision](../../assets/upscalers/dependencies.toml)
+- [Reviewed native source-file hashes](../../assets/upscalers/fsr4-source.json)
+- [Third-party notices](../../NOTICE.md)
+- [Complete upscaler guide](../../UPSCALING.md)

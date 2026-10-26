@@ -40,7 +40,9 @@ Stock/MetalFX archives are verified and extracted in Rust; they do not require
 Python. Provider updates are built and validated in a separate folder, then
 published atomically. Failed attempts leave the previous generation intact, and
 a retry can repair an incomplete generation. Existing provider identities remain
-compatible. Python is used only by the native source build adapter.
+compatible. Rust handles native source downloads, pinned-file verification,
+compatibility patches, build sequencing and validation reports. Python is still
+required by the pinned upstream FSR4 build and shader-generation tools.
 
 The bridge command also needs `x86_64-w64-mingw32-gcc`. It builds a small x64
 export-forwarding DLL from the selected runtime's NGX exports. The actual vendor
@@ -50,7 +52,7 @@ load and sends calls through the forwarding DLL under `OptiScaler/nucleon-metalf
 All game-local files participate in the same ownership and rollback transaction.
 
 Release archives and source revisions are pinned in
-[dependencies.json](tools/upscalers/dependencies.json). Use `--archive /file.7z`
+[dependencies.toml](assets/upscalers/dependencies.toml). Use `--archive /file.7z`
 with stock/metalfx to reuse a matching archive, or `--source /verified/fsr/tree`
 with native to reuse source carrying the setup tool's Git-blob manifest.
 An unexpected checksum is rejected. Installation retains dependency notices;
@@ -206,4 +208,4 @@ the configured authentication provider; see [saved launch profiles](STANDALONE.m
 Keep live authentication arguments out of saved profiles and shared logs.
 
 See the [quick setup guide](tools/upscalers/README.md) and
-[provider catalog](tools/upscalers/dependencies.json) for dependencies and sources.
+[provider catalog](assets/upscalers/dependencies.toml) for dependencies and sources.

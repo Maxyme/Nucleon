@@ -1,4 +1,5 @@
 use super::read;
+use crate::repo_assets::ASSETS;
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -60,36 +61,51 @@ pub(crate) fn read_provider(path: &Path) -> Result<Provider> {
     }
     Ok(p)
 }
-pub(crate) fn catalog() -> serde_json::Value {
-    serde_json::from_str(include_str!(
-        "../../../../tools/upscalers/dependencies.json"
-    ))
-    .expect("Pinned upscaler catalog")
+static_toml::static_toml! {
+    #[allow(dead_code)]
+    static CATALOG = include_toml!("../../assets/upscalers/dependencies.toml");
 }
+
+pub(crate) fn catalog() -> &'static catalog::Catalog {
+    &CATALOG
+}
+
+static_toml::static_toml! {
+    static BUILDERS = include_toml!("../../assets/upscalers/builder-identities.toml");
+}
+
+fn builder_identities() -> Result<&'static builders::Builders> {
+    for identity in [BUILDERS.native, BUILDERS.bridge] {
+        ensure!(
+            identity.len() == 64 && identity.bytes().all(|b| b.is_ascii_hexdigit()),
+            "Upscaler builder identity must be a SHA-256 digest"
+        );
+    }
+    Ok(&BUILDERS)
+}
+
 pub(crate) fn native_key(original_digest: &str) -> Result<String> {
     use sha2::{Digest, Sha256};
-    let native = format!(
-        "{:x}",
-        Sha256::digest(include_bytes!("../../../../tools/upscalers/native.py"))
-    );
+    let identities = builder_identities()?;
     let adapter = format!(
         "{:x}",
-        Sha256::digest(include_bytes!(
-            "../../../../tools/upscalers/fsr4_depth_compat.h"
-        ))
+        Sha256::digest(
+            ASSETS
+                .get_file("upscalers/fsr4_depth_compat.h")
+                .expect("Embedded depth compatibility shim")
+                .contents()
+        )
     );
     crate::staging::key(&[
         original_digest,
-        catalog()["fsr4"]["commit"].as_str().unwrap(),
-        &native,
+        catalog().fsr_4.commit,
+        identities.native,
         &adapter,
     ])
 }
 pub(crate) fn bridge_key(original_digest: &str) -> Result<String> {
-    // Preserve the identity of existing ngx-forward-v1 installations. This is the
-    // SHA-256 of the retired Python builder; the Rust builder emits the same ABI.
-    const BUILDER_V1: &str = "cfe24edc4b0056c1abc42f95b93ff28fd2bf6d13aaf57b0a7caa5b727fbbcc41";
-    crate::staging::key(&[original_digest, BUILDER_V1])
+    let identities = builder_identities()?;
+    crate::staging::key(&[original_digest, identities.bridge])
 }
 pub(crate) fn bridge_provider(root: &Path, bridge: &Path) -> Result<PathBuf> {
     let key = bridge_key(&crate::staging::digest(bridge)?)?;
@@ -106,15 +122,15 @@ pub(crate) fn bridge_provider(root: &Path, bridge: &Path) -> Result<PathBuf> {
 pub(crate) fn provider_path(root: &Path, provider: &str) -> Result<PathBuf> {
     ensure!(matches!(provider, "stock" | "metalfx"), "Unknown provider");
     let spec = catalog();
-    let key = if provider == "stock" {
-        "stock"
+    let digest = if provider == "stock" {
+        spec.stock.sha_256
     } else {
-        "optiscaler"
+        spec.optiscaler.sha_256
     };
     Ok(root
         .join("providers")
         .join(provider)
-        .join(spec[key]["sha256"].as_str().unwrap())
+        .join(digest)
         .join("provider.json"))
 }
 pub(crate) fn verify_patcher(root: &Path) -> Result<PathBuf> {
@@ -124,7 +140,7 @@ pub(crate) fn verify_patcher(root: &Path) -> Result<PathBuf> {
         "This game requires 'nucleon upscaler install patcher'"
     );
     ensure!(
-        crate::staging::digest(&path)? == catalog()["optipatcher"]["sha256"].as_str().unwrap(),
+        crate::staging::digest(&path)? == catalog().optipatcher.sha_256,
         "OptiPatcher checksum mismatch"
     );
     ensure!(
@@ -135,12 +151,11 @@ pub(crate) fn verify_patcher(root: &Path) -> Result<PathBuf> {
 }
 pub fn install_patcher(root: &Path, source: Option<&Path>) -> Result<()> {
     let c = catalog();
-    let spec = &c["optipatcher"];
+    let spec = &c.optipatcher;
     let bytes = match source {
         Some(p) => fs::read(p)?,
         None => {
-            let mut file =
-                crate::downloads::download(spec["url"].as_str().unwrap(), 16 * 1024 * 1024)?;
+            let mut file = crate::downloads::download(spec.url, 16 * 1024 * 1024)?;
             let mut bytes = vec![];
             std::io::Read::read_to_end(&mut file, &mut bytes)?;
             bytes
@@ -148,7 +163,7 @@ pub fn install_patcher(root: &Path, source: Option<&Path>) -> Result<()> {
     };
     use sha2::{Digest, Sha256};
     ensure!(
-        format!("{:x}", Sha256::digest(&bytes)) == spec["sha256"].as_str().unwrap(),
+        format!("{:x}", Sha256::digest(&bytes)) == spec.sha_256,
         "OptiPatcher checksum mismatch"
     );
     ensure!(

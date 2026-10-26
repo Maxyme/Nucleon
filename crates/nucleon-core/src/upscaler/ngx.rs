@@ -84,31 +84,37 @@ pub(super) fn verify_forwarder(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::repo_assets::FIXTURES;
     use proptest::prelude::*;
-    const FORWARDER: &[u8] = include_bytes!("fixtures/ngx-forward.bin");
+    fn forwarder() -> &'static [u8] {
+        FIXTURES
+            .get_file("upscaler/ngx-forward.bin")
+            .unwrap()
+            .contents()
+    }
 
     #[test]
     fn library_reads_complete_exports_and_verifies_forward_targets() {
-        let names = exports(FORWARDER).unwrap();
+        let names = exports(forwarder()).unwrap();
         assert_eq!(names.len(), REQUIRED.len());
-        verify_forwarder(FORWARDER, &names).unwrap();
-        let mut wrong = FORWARDER.to_vec();
+        verify_forwarder(forwarder(), &names).unwrap();
+        let mut wrong = forwarder().to_vec();
         let start = wrong
             .windows(b"nvngx-on-metalfx.".len())
             .position(|w| w == b"nvngx-on-metalfx.")
             .unwrap();
         wrong[start] = b'x';
         assert!(verify_forwarder(&wrong, &names).is_err());
-        let mut missing = FORWARDER.to_vec();
+        let mut missing = forwarder().to_vec();
         // Modify the named export and its forward target without changing table layout.
         for start in (0..missing.len() - b"Init_ProjectID".len())
-            .filter(|i| FORWARDER[*i..].starts_with(b"Init_ProjectID"))
+            .filter(|i| forwarder()[*i..].starts_with(b"Init_ProjectID"))
         {
             missing[start] = b'X';
         }
         assert!(exports(&missing).is_err());
         for length in [0, 2, 64, 128, 256, 512] {
-            assert!(exports(&FORWARDER[..length]).is_err());
+            assert!(exports(&forwarder()[..length]).is_err());
         }
     }
 
@@ -119,16 +125,16 @@ mod tests {
         }
         #[test]
         fn mutated_exports_never_bypass_name_or_forward_target_checks(
-            edits in prop::collection::vec((0..FORWARDER.len(), any::<u8>()), 1..24)
+            edits in prop::collection::vec((0..forwarder().len(), any::<u8>()), 1..24)
         ) {
-            let mut data = FORWARDER.to_vec();
+            let mut data = forwarder().to_vec();
             for (offset, byte) in edits { data[offset] = byte; }
             if let Ok(names) = exports(&data) {
                 prop_assert!(REQUIRED.iter().all(|s| names.contains_key(&format!("NVSDK_NGX_D3D12_{s}"))), "Required exports must remain present");
                 prop_assert!(names.keys().all(|n| n.len() < 512 && n.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')));
             }
-            if verify_forwarder(&data, &exports(FORWARDER).unwrap()).is_ok() {
-                prop_assert!(exports(&data).unwrap() == exports(FORWARDER).unwrap());
+            if verify_forwarder(&data, &exports(forwarder()).unwrap()).is_ok() {
+                prop_assert!(exports(&data).unwrap() == exports(forwarder()).unwrap());
             }
         }
     }

@@ -16,14 +16,9 @@ struct Source {
     url: String,
     revision: String,
 }
-#[derive(Deserialize)]
-struct Pins {
-    sources: BTreeMap<String, Source>,
-    darwin: Darwin,
-}
-#[derive(Deserialize)]
-struct Darwin {
-    teb_tsd_offset: String,
+static_toml::static_toml! {
+    #[allow(dead_code)]
+    static PINS = include_toml!("../../assets/wine/recipes/arm64ec-graphics.toml");
 }
 #[derive(Deserialize, PartialEq)]
 struct Build {
@@ -233,9 +228,6 @@ pub(crate) fn validate_selected(
             && Some(vkd3d.root.canonicalize()?) == runtime.graphics.vkd3d,
         "Graphics override does not match the ARM64EC frontend pairing"
     );
-    let pins: Pins = toml::from_str(include_str!(
-        "../../../assets/wine/recipes/arm64ec-graphics.toml"
-    ))?;
     ensure!(
         contract.builds.len() == 2,
         "ARM64EC pairing requires exactly DXVK and VKD3D build receipts"
@@ -252,8 +244,9 @@ pub(crate) fn validate_selected(
         dxvk_build.toolchain.is_object() && dxvk_build.toolchain == vkd3d_build.toolchain,
         "ARM64EC frontends require the same compiler toolchain provenance"
     );
-    let thread_pointer = format!("-DNUCLEON_TEB_TSD_OFFSET={}", pins.darwin.teb_tsd_offset);
-    for (component, root, files) in [
+    let teb_tsd_offset: &str = PINS.darwin.teb_tsd_offset;
+    let thread_pointer = format!("-DNUCLEON_TEB_TSD_OFFSET={teb_tsd_offset}");
+    for (component, root, files, expected_source) in [
         (
             "dxvk",
             &dxvk.root,
@@ -261,6 +254,7 @@ pub(crate) fn validate_selected(
                 ("d3d11.dll", dxvk.x64_d3d11.as_deref()),
                 ("dxgi.dll", dxvk.x64_dxgi.as_deref()),
             ],
+            (PINS.sources.dxvk.url, PINS.sources.dxvk.revision),
         ),
         (
             "vkd3d",
@@ -269,6 +263,7 @@ pub(crate) fn validate_selected(
                 ("d3d12.dll", Some(vkd3d.x64_d3d12.as_path())),
                 ("d3d12core.dll", vkd3d.x64_d3d12core.as_deref()),
             ],
+            (PINS.sources.vkd_3_d.url, PINS.sources.vkd_3_d.revision),
         ),
     ] {
         let build = contract
@@ -278,8 +273,11 @@ pub(crate) fn validate_selected(
         ensure!(
             build.architecture == FrontendAbi::Arm64Ec
                 && build.status == "BUILT_NOT_EXECUTION_VALIDATED"
-                && Some(&build.source) == pins.sources.get(component)
-                && Some(&build.mingw_source) == pins.sources.get("mingw")
+                && (build.source.url.as_str(), build.source.revision.as_str()) == expected_source
+                && (
+                    build.mingw_source.url.as_str(),
+                    build.mingw_source.revision.as_str()
+                ) == (PINS.sources.mingw.url, PINS.sources.mingw.revision)
                 && ["-Dc_args=", "-Dcpp_args="]
                     .iter()
                     .all(|prefix| build.options.iter().any(|option| {
@@ -370,9 +368,13 @@ pub(crate) fn fixture() -> (tempfile::TempDir, ResolvedRuntime) {
     for name in ["dllcrt2.o", "emutls.o", "darwin-teb.h"] {
         fs::write(shared.join("crt").join(name), name).unwrap();
     }
-    let pin: toml::Value = toml::from_str(include_str!(
-        "../../../assets/wine/recipes/arm64ec-graphics.toml"
-    ))
+    let pin: toml::Value = toml::from_str(
+        crate::repo_assets::ASSETS
+            .get_file("wine/recipes/arm64ec-graphics.toml")
+            .unwrap()
+            .contents_utf8()
+            .unwrap(),
+    )
     .unwrap();
     let mut builds = serde_json::Map::new();
     for (component, names) in [

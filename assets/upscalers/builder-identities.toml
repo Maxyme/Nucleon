@@ -1,0 +1,5 @@
+# Provider-key compatibility identities, originally the retired Python builders'
+# SHA-256 digests. Preserve them while the Rust builders emit the same model and
+# overlay ABI; change deliberately when the build's behavior changes.
+native = "8d855c16898eeff08fd95e5d7f10bc31ae06f141e85b8964025dfa6c3708bdde"
+bridge = "cfe24edc4b0056c1abc42f95b93ff28fd2bf6d13aaf57b0a7caa5b727fbbcc41"

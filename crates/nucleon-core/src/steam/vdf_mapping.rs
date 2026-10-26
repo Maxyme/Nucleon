@@ -605,6 +605,7 @@ pub fn unmap_app_compat_tool(appid: u32) -> Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::repo_assets::FIXTURES;
 
     #[test]
     fn test_compat_tool_for_appid_reads_the_mapped_tool() {
@@ -866,7 +867,11 @@ mod tests {
 
     #[test]
     fn test_parse_config_vdf_fixture() {
-        let content = include_str!("../../tests/fixtures/steam_config.vdf");
+        let content = FIXTURES
+            .get_file("steam_config.vdf")
+            .unwrap()
+            .contents_utf8()
+            .unwrap();
         let parsed = keyvalues_parser::parse(content);
         assert!(
             parsed.is_ok(),

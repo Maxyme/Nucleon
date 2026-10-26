@@ -22,7 +22,7 @@ version 3 only (`GPL-3.0-only`); see [LICENSE](LICENSE).
   terms and the notices for any Steamworks, OpenVR and Wine headers used.
 - Optional upscaler providers use OptiScaler, its MetalFX fork, OptiPatcher and
   native FSR4 sources. Pinned releases and revisions are recorded in
-  [dependencies.json](tools/upscalers/dependencies.json); provider installation
+  [dependencies.toml](assets/upscalers/dependencies.toml); provider installation
   retains upstream license and notice files.
 - Valve client libraries and Apple GPTK/D3DMetal retain their own terms.
   Nucleon's license does not grant redistribution rights to third-party

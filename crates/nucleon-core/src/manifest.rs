@@ -1,10 +1,12 @@
 use crate::paths;
 use anyhow::{Context, Result, bail};
+use manifest_dir_macros::file_path;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-pub const BRIDGE_MANIFEST_JSON: &str = include_str!("../../../assets/bridge-manifest.json");
+pub const BRIDGE_MANIFEST_JSON: &str =
+    include_str!(file_path!("../../assets/bridge-manifest.json"));
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct BridgeFileEntry {

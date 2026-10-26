@@ -3,6 +3,7 @@
 //! Download a reviewed Wine build or rebuild one matched PE module into a new
 //! runtime copy. No global environment, original runtime, or active selection
 //! is modified. Runtime artifacts retain Wine's LGPL license.
+use crate::repo_assets::ASSETS;
 use crate::{
     artifacts::{copy_tree, digest},
     fs_util::atomic_write_file,
@@ -18,11 +19,6 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 pub const RECOMMENDED_VERSION: &str = "11.18";
-const RECIPE: &str = include_str!("../../../assets/wine/recipes/11.18.toml");
-const ROSETTA_PATCH: &str =
-    include_str!("../../../assets/patches/wine-11.18-wow64cpu-rosetta.patch");
-const STEAM_PATCH: &str =
-    include_str!("../../../assets/patches/wine-11.18-steamclient-redirect-experimental.patch");
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -57,10 +53,15 @@ impl WinePatch {
         }
     }
     fn payload(self) -> &'static str {
-        match self {
-            Self::Rosetta => ROSETTA_PATCH,
-            Self::SteamRedirect => STEAM_PATCH,
-        }
+        let path = match self {
+            Self::Rosetta => "patches/wine-11.18-wow64cpu-rosetta.patch",
+            Self::SteamRedirect => "patches/wine-11.18-steamclient-redirect-experimental.patch",
+        };
+        ASSETS
+            .get_file(path)
+            .expect("Embedded Wine patch")
+            .contents_utf8()
+            .expect("UTF-8 Wine patch")
     }
     fn relative_module(self) -> PathBuf {
         PathBuf::from(format!("lib/wine/x86_64-windows/{}.dll", self.module()))
@@ -89,7 +90,13 @@ fn recipe(version: &str) -> Result<Recipe> {
         version == RECOMMENDED_VERSION,
         "Unsupported Wine {version}; reviewed recipes currently cover only {RECOMMENDED_VERSION}"
     );
-    let result: Recipe = toml::from_str(RECIPE)?;
+    let result: Recipe = toml::from_str(
+        ASSETS
+            .get_file("wine/recipes/11.18.toml")
+            .context("Missing embedded Wine recipe")?
+            .contents_utf8()
+            .context("Wine recipe must be UTF-8")?,
+    )?;
     ensure!(
         result.version == version,
         "Embedded Wine recipe version mismatch"

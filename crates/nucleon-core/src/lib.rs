@@ -23,6 +23,7 @@ pub mod prefix;
 pub mod prefix_session;
 pub mod process;
 pub mod profile;
+mod repo_assets;
 pub mod runner;
 pub mod runtime;
 pub mod runtime_selection;

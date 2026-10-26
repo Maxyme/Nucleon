@@ -2,6 +2,7 @@
 
 //! Exact-client contracts. ABI data comes from
 //! the installed Valve image.
+use crate::repo_assets::ASSETS;
 use crate::{client_image, fs_util::atomic_write_file, paths};
 use anyhow::{Context, Result, bail, ensure};
 use object::{Object, ObjectSection, ObjectSegment, read::macho::MachHeader};
@@ -11,18 +12,21 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const EMBEDDED_CONTRACTS: &[&str] = &[
-    include_str!("../../../assets/steam-contracts/macos-arm64/client-1788652215.toml"),
-    include_str!("../../../assets/steam-contracts/macos-arm64/client-1791918634.toml"),
-    include_str!("../../../assets/steam-contracts/macos-arm64/client-1792618285.toml"),
-];
+fn embedded_contracts() -> impl Iterator<Item = &'static str> {
+    ASSETS
+        .get_dir("steam-contracts/macos-arm64")
+        .expect("Embedded Steam contracts")
+        .files()
+        .filter(|file| file.path().extension().is_some_and(|ext| ext == "toml"))
+        .map(|file| file.contents_utf8().expect("UTF-8 Steam contract"))
+}
 
 fn reviewed_contract(image: &[u8]) -> Result<ClientContract> {
     let slice = client_image::extract_arm64_slice(image)?;
     let file = object::File::parse(slice)?;
     let uuid = file.mach_uuid()?.context("Steam image has no UUID")?;
     let uuid: String = uuid.iter().map(|byte| format!("{byte:02x}")).collect();
-    for embedded in EMBEDDED_CONTRACTS {
+    for embedded in embedded_contracts() {
         let contract: ClientContract = toml::from_str(embedded)?;
         if contract.client.uuid == uuid {
             return Ok(contract);
@@ -296,7 +300,7 @@ mod tests {
     #[test]
     fn reviewed_contracts_have_unique_identities_and_valid_instruction_kinds() {
         let mut uuids = HashSet::new();
-        for embedded in EMBEDDED_CONTRACTS {
+        for embedded in embedded_contracts() {
             let contract: ClientContract = toml::from_str(embedded).unwrap();
             assert!(uuids.insert(contract.client.uuid));
             assert!(!contract.patches.is_empty());
@@ -308,7 +312,8 @@ mod tests {
 
     #[test]
     fn loaded_header_needs_no_symbol_table_payload() {
-        let contract: ClientContract = toml::from_str(EMBEDDED_CONTRACTS[0]).unwrap();
+        let contract: ClientContract =
+            toml::from_str(embedded_contracts().next().unwrap()).unwrap();
         let uuid: Vec<u8> = (0..32)
             .step_by(2)
             .map(|offset| {

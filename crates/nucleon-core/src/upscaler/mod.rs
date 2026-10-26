@@ -1,6 +1,7 @@
 //! Optional, game-local temporal upscaling. Providers remain experimental until game-tested.
 mod assets;
 mod install;
+mod native;
 mod ngx;
 mod transaction;
 

@@ -1,4 +1,5 @@
 //! Shared component downloads: validate a fresh tree before publishing it as one generation.
+use crate::repo_assets::ASSETS;
 use anyhow::{Context, Result, ensure};
 use serde::Deserialize;
 use std::{
@@ -48,8 +49,14 @@ fn source(id: &str) -> Result<&'static Source> {
     static CATALOG: OnceLock<std::result::Result<Catalog, String>> = OnceLock::new();
     let catalog = CATALOG
         .get_or_init(|| {
-            parse_catalog(include_str!("../../../assets/downloads.toml"))
-                .map_err(|error| format!("{error:#}"))
+            parse_catalog(
+                ASSETS
+                    .get_file("downloads.toml")
+                    .expect("Embedded download catalog")
+                    .contents_utf8()
+                    .expect("UTF-8 download catalog"),
+            )
+            .map_err(|error| format!("{error:#}"))
         })
         .as_ref()
         .map_err(|error| anyhow::anyhow!("{error}"))?;
