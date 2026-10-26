@@ -953,13 +953,23 @@ const DIAGNOSTIC_VARIABLES: &[&str] = &[
     "WINEDLLPATH_PREPEND",
 ];
 
+/// Include explicit child entries as well as inherited variables when cleaning.
+pub(crate) fn command_environment_keys(
+    command: &Command,
+) -> std::collections::BTreeSet<std::ffi::OsString> {
+    std::env::vars_os()
+        .map(|(key, _)| key)
+        .chain(command.get_envs().map(|(key, _)| key.to_owned()))
+        .collect()
+}
+
 /// Strip foreign Wine/FEX/dyld state without changing the parent's environment.
 pub fn clean_command(command: &mut Command) {
     // Remove explicit command entries too, even if absent from the parent.
     for name in FEATURE_OVERRIDES.iter().chain(DIAGNOSTIC_VARIABLES) {
         command.env_remove(name);
     }
-    for (key, _) in std::env::vars_os() {
+    for key in command_environment_keys(command) {
         let name = key.to_string_lossy();
         if [
             "WINE",
@@ -982,7 +992,7 @@ pub fn clean_command(command: &mut Command) {
 
 /// Standalone children must not acquire a parent's Steam identity or bridge settings.
 pub fn clean_standalone_command(command: &mut Command) {
-    for (key, _) in std::env::vars_os() {
+    for key in command_environment_keys(command) {
         let name = key.to_string_lossy();
         if name.starts_with("STEAM_") || name.starts_with("Steam") {
             command.env_remove(key);

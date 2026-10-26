@@ -53,18 +53,27 @@ pub struct RunArgs {
     pub cwd: Option<PathBuf>,
     #[command(flatten)]
     pub settings: SettingsArgs,
+    /// Resolve and preview without starting Wine or changing a prefix
+    #[arg(long)]
+    pub dry_run: bool,
     /// Arguments passed unchanged to the Windows program, after --
     #[arg(last = true)]
     pub arguments: Vec<String>,
 }
 
 pub fn run(args: RunArgs) -> Result<()> {
-    nucleon_runner::run_standalone(nucleon_runner::StandaloneRequest {
+    let resolved = nucleon_runner::resolve_standalone(nucleon_runner::StandaloneRequest {
         application: Application::new(&args.executable, args.arguments, args.cwd.as_deref())?,
         bottle: args.bottle,
         settings: args.settings.settings()?,
         prefix: args.prefix,
-    })
+    })?;
+    if args.dry_run {
+        println!("{}", serde_json::to_string_pretty(&resolved.preview())?);
+        Ok(())
+    } else {
+        resolved.run(Default::default())
+    }
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]

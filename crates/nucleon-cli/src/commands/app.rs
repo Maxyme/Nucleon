@@ -5,7 +5,7 @@ use nucleon_core::{
     application::Application,
     launch_profile::{Authentication, LaunchProfile},
 };
-use std::{collections::BTreeMap, path::PathBuf, process::Command};
+use std::{path::PathBuf, process::Command};
 
 #[derive(Debug, Subcommand)]
 pub enum Action {
@@ -152,7 +152,7 @@ pub fn run(action: Action) -> Result<()> {
         Action::Check { name } => {
             let mut profile = LaunchProfile::load(&name)?;
             profile.normalize(&std::env::current_dir()?)?;
-            profile.settings.resolve_runtime()?;
+            resolve(&profile)?;
             let arguments = profile.authentication_arguments()?;
             println!(
                 "{name}: profile valid; {} store arguments obtained. Credentials were not printed. No game was started.",
@@ -182,92 +182,79 @@ fn selected(options: &Options) -> Result<LaunchProfile> {
         .settings()?
         .with_defaults(profile.settings);
     profile.normalize(&std::env::current_dir()?)?;
-    profile.settings.resolve_runtime()?;
     Ok(profile)
 }
 
-fn dispatch_command(
-    options: &Options,
-    auth: Vec<String>,
-    environment: &BTreeMap<String, String>,
-) -> Result<Command> {
+const LAUNCH_REQUEST: &str = "NUCLEON_LAUNCH_REQUEST";
+
+fn resolve(profile: &LaunchProfile) -> Result<nucleon_runner::ResolvedStandalone> {
+    nucleon_runner::resolve_standalone(nucleon_runner::StandaloneRequest {
+        application: profile.application.clone(),
+        bottle: None,
+        settings: profile.settings.clone(),
+        prefix: profile.prefix.clone(),
+    })
+}
+
+fn dispatch_command(options: &Options, profile: &LaunchProfile) -> Result<Command> {
     let mut command = Command::new(std::env::current_exe()?);
     nucleon_core::launch_profile::clean_profile_command(&mut command);
     command.args(["app", "dispatch", &options.name]);
-    for (key, value) in [
-        ("--exe", &options.executable),
-        ("--prefix", &options.prefix),
-        ("--cwd", &options.cwd),
-    ] {
-        if let Some(value) = value {
-            command.arg(key).arg(value);
-        }
+    if options.dry_run {
+        command.arg("--dry-run");
     }
-    // These are typed overrides only. Saved settings (including scaler input/renderer)
-    // are loaded unchanged by dispatch instead of flattening them into backend-only flags.
-    let settings = serde_json::to_value(options.settings.clone().settings()?)?;
-    for (field, flag) in [
-        ("wine", "--wine"),
-        ("emulator", "--emulator"),
-        ("engine", "--engine"),
-        ("graphics_api", "--graphics-api"),
-    ] {
-        if let Some(value) = settings[field].as_str() {
-            command.args([flag, value]);
-        }
-    }
-    if let Some(value) = settings["hud"].as_bool() {
-        command.arg(format!("--hud={value}"));
-    }
-    if let Some(value) = settings["upscaler"]["backend"].as_str() {
-        command.args(["--upscaler", value]);
-    }
+    // Freeze the selected profile before re-exec; no second profile load, default
+    // selection, or command-line flattening can change it. Never put it in argv.
     command
-        .envs(environment)
+        .envs(&profile.environment)
+        .env(LAUNCH_REQUEST, serde_json::to_string(profile)?)
         .arg("--")
-        .args(auth)
         .args(&options.arguments);
     Ok(command)
 }
 
 fn launch(options: Options, dispatch: bool) -> Result<()> {
-    let mut profile = selected(&options)?;
+    if !dispatch {
+        let profile = selected(&options)?;
+        let mut command = dispatch_command(&options, &profile)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            return Err(command.exec())
+                .context("Could not execute Nucleon's native application launcher");
+        }
+        #[cfg(not(unix))]
+        {
+            anyhow::ensure!(command.status()?.success(), "Application launch failed");
+            return Ok(());
+        }
+    }
+    // Preview and execution both resolve inside the same clean environment with
+    // the saved variables applied. Preview never obtains store credentials.
+    let profile = match std::env::var(LAUNCH_REQUEST) {
+        Ok(json) => serde_json::from_str::<LaunchProfile>(&json)
+            .context("Invalid application dispatch request")?,
+        Err(std::env::VarError::NotPresent) => selected(&options)?,
+        Err(error) => return Err(error.into()),
+    };
+    let mut resolved = resolve(&profile)?;
     if options.dry_run {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&serde_json::json!({
-                "name":options.name,"executable":profile.application.executable,"prefix":profile.prefix,
-                "cwd":profile.application.cwd,"settings":profile.settings,"authentication":profile.authentication,
-                "environment_keys":profile.environment.keys().collect::<Vec<_>>(),
-                "arguments":nucleon_core::launch_profile::redact_arguments(&profile.application.arguments.iter().chain(&options.arguments).cloned().collect::<Vec<_>>()),
-                "authenticated":false,"executed":false
-            }))?
-        );
+        resolved.append_arguments(options.arguments);
+        let mut preview = resolved.preview();
+        preview["name"] = options.name.into();
+        preview["settings"] = serde_json::to_value(&profile.settings)?;
+        preview["authentication"] = serde_json::to_value(&profile.authentication)?;
+        preview["environment_keys"] =
+            serde_json::to_value(profile.environment.keys().collect::<Vec<_>>())?;
+        println!("{}", serde_json::to_string_pretty(&preview)?);
         return Ok(());
     }
-    if dispatch {
-        profile.application.arguments.extend(options.arguments);
-        return nucleon_runner::run_standalone(nucleon_runner::StandaloneRequest {
-            application: profile.application,
-            bottle: None,
-            settings: profile.settings,
-            prefix: profile.prefix,
-        });
-    }
     let auth = profile.authentication_arguments()?;
+    resolved.append_arguments(auth.arguments);
+    resolved.append_arguments(options.arguments);
     let mut environment = auth.environment;
     environment.extend(profile.environment);
-    let mut command = dispatch_command(&options, auth.arguments, &environment)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        Err(command.exec()).context("Could not execute Nucleon's native application launcher")
-    }
-    #[cfg(not(unix))]
-    {
-        anyhow::ensure!(command.status()?.success(), "Application launch failed");
-        Ok(())
-    }
+    resolved.run(environment)
 }
 
 #[cfg(test)]
@@ -285,12 +272,20 @@ mod tests {
             dry_run: false,
             arguments: vec!["--game-option".into(), "a b".into(), "".into()],
         };
-        let command = dispatch_command(
-            &options,
-            vec!["-AUTH_PASSWORD=token value".into()],
-            &BTreeMap::new(),
-        )
-        .unwrap();
+        let profile = LaunchProfile {
+            schema: 1,
+            application: Application {
+                executable: options.executable.clone().unwrap(),
+                arguments: vec!["saved argument".into()],
+                cwd: None,
+                upscaler: None,
+            },
+            settings: Default::default(),
+            prefix: options.prefix.clone(),
+            environment: [("GAME_OPTION".into(), "a b".into())].into(),
+            authentication: None,
+        };
+        let command = dispatch_command(&options, &profile).unwrap();
         let args = command
             .get_args()
             .map(|s| s.to_string_lossy().into_owned())
@@ -301,17 +296,26 @@ mod tests {
                 "app",
                 "dispatch",
                 "any-game",
-                "--exe",
-                "/other path/ü Game.exe",
-                "--prefix",
-                "/prefix with spaces",
                 "--",
-                "-AUTH_PASSWORD=token value",
                 "--game-option",
                 "a b",
                 ""
             ]
         );
+        let snapshot = command
+            .get_envs()
+            .find(|(k, _)| *k == LAUNCH_REQUEST)
+            .unwrap()
+            .1
+            .unwrap();
+        let frozen: LaunchProfile = serde_json::from_str(snapshot.to_str().unwrap()).unwrap();
+        assert_eq!(
+            frozen.application.executable,
+            profile.application.executable
+        );
+        assert_eq!(frozen.prefix, profile.prefix);
+        assert_eq!(frozen.application.arguments, profile.application.arguments);
+        assert_eq!(frozen.environment, profile.environment);
         assert_ne!(command.get_program(), "sh");
         assert_ne!(command.get_program(), "python3");
     }

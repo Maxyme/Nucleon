@@ -203,7 +203,7 @@ impl LaunchProfile {
 pub fn clean_profile_command(command: &mut Command) {
     crate::launch::clean_command(command);
     crate::launch::clean_standalone_command(command);
-    for (key, _) in std::env::vars_os() {
+    for key in crate::launch::command_environment_keys(command) {
         let name = key.to_string_lossy();
         if (name.starts_with("NUCLEON_") && name != "NUCLEON_SUPPORT_DIR")
             || ["FSR4_", "D3DM_", "D3DMETAL_"]

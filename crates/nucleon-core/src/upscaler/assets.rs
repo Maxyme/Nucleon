@@ -1,7 +1,6 @@
-use super::{read, transaction};
-use anyhow::{Context, Result, ensure};
+use super::read;
+use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
-use std::process::Command;
 use std::{
     collections::BTreeMap,
     fs,
@@ -37,11 +36,22 @@ pub(crate) fn read_provider(path: &Path) -> Result<Provider> {
             relative.display()
         );
     }
+    let required: &[&str] = match p.provider.as_str() {
+        "bridge" => &["nvngx.dll"],
+        "native" => &[], // Native manifests also cover external shader compiler identities.
+        "stock" | "metalfx" => &["OptiScaler.dll", "OptiScaler.ini"],
+        _ => anyhow::bail!("Unknown provider manifest"),
+    };
+    ensure!(
+        required
+            .iter()
+            .all(|name| p.files.contains_key(Path::new(name))),
+        "Provider manifest omits required files"
+    );
     if p.provider == "bridge" {
-        ensure!(
-            crate::runtime_checks::pe(Some(&root.join("nvngx.dll")), true),
-            "NGX forwarder must be x64"
-        );
+        let bytes = fs::read(root.join("nvngx.dll"))?;
+        let names = super::ngx::exports(&bytes)?;
+        super::ngx::verify_forwarder(&bytes, &names)?;
     } else if p.provider != "native" {
         ensure!(
             crate::runtime_checks::pe(Some(&root.join("OptiScaler.dll")), true),
@@ -76,12 +86,10 @@ pub(crate) fn native_key(original_digest: &str) -> Result<String> {
     ])
 }
 pub(crate) fn bridge_key(original_digest: &str) -> Result<String> {
-    use sha2::{Digest, Sha256};
-    let source = format!(
-        "{:x}",
-        Sha256::digest(include_bytes!("../../../../tools/upscalers/ngx_bridge.py"))
-    );
-    crate::staging::key(&[original_digest, &source])
+    // Preserve the identity of existing ngx-forward-v1 installations. This is the
+    // SHA-256 of the retired Python builder; the Rust builder emits the same ABI.
+    const BUILDER_V1: &str = "cfe24edc4b0056c1abc42f95b93ff28fd2bf6d13aaf57b0a7caa5b727fbbcc41";
+    crate::staging::key(&[original_digest, BUILDER_V1])
 }
 pub(crate) fn bridge_provider(root: &Path, bridge: &Path) -> Result<PathBuf> {
     let key = bridge_key(&crate::staging::digest(bridge)?)?;
@@ -113,7 +121,7 @@ pub(crate) fn verify_patcher(root: &Path) -> Result<PathBuf> {
     let path = root.join("plugins/OptiPatcher.asi");
     ensure!(
         path.is_file(),
-        "Talos recipe requires 'nucleon upscaler install patcher'"
+        "This game requires 'nucleon upscaler install patcher'"
     );
     ensure!(
         crate::staging::digest(&path)? == catalog()["optipatcher"]["sha256"].as_str().unwrap(),
@@ -143,93 +151,12 @@ pub fn install_patcher(root: &Path, source: Option<&Path>) -> Result<()> {
         format!("{:x}", Sha256::digest(&bytes)) == spec["sha256"].as_str().unwrap(),
         "OptiPatcher checksum mismatch"
     );
+    ensure!(
+        crate::runtime_checks::pe_abi(&bytes)? == crate::runtime_checks::PeAbi::X64,
+        "OptiPatcher must be x64"
+    );
     fs::create_dir_all(root.join("plugins"))?;
     crate::fs_util::atomic_write_file(root.join("plugins/OptiPatcher.asi"), bytes)?;
     verify_patcher(root)?;
-    Ok(())
-}
-/// Embedded source build tools keep installed CLIs independent of their original checkout.
-pub fn install(
-    root: &Path,
-    provider: &str,
-    archive: Option<&Path>,
-    wine: Option<&Path>,
-    source: Option<&Path>,
-) -> Result<()> {
-    ensure!(
-        matches!(provider, "stock" | "metalfx" | "native" | "bridge"),
-        "Choose stock, metalfx, native, bridge or patcher"
-    );
-    fs::create_dir_all(root)?;
-    let _lock = transaction::lock(&root.join(".provider.lock"))?;
-    let scripts = tempfile::tempdir_in(root)?;
-    for (name, content) in [
-        (
-            "ngx_bridge.py",
-            include_str!("../../../../tools/upscalers/ngx_bridge.py"),
-        ),
-        (
-            "install.py",
-            include_str!("../../../../tools/upscalers/install.py"),
-        ),
-        (
-            "native.py",
-            include_str!("../../../../tools/upscalers/native.py"),
-        ),
-        (
-            "dependencies.json",
-            include_str!("../../../../tools/upscalers/dependencies.json"),
-        ),
-        (
-            "fsr4_depth_compat.h",
-            include_str!("../../../../tools/upscalers/fsr4_depth_compat.h"),
-        ),
-        (
-            "test_depth_compat.m",
-            include_str!("../../../../tools/upscalers/test_depth_compat.m"),
-        ),
-    ] {
-        fs::write(scripts.path().join(name), content)?;
-    }
-    let mut cmd = Command::new("python3");
-    cmd.arg(scripts.path().join("install.py"))
-        .arg(provider)
-        .arg("--root")
-        .arg(root);
-    for (flag, path) in [
-        ("--archive", archive),
-        ("--wine", wine),
-        ("--source", source),
-    ] {
-        if let Some(p) = path {
-            cmd.arg(flag).arg(p.canonicalize()?);
-        }
-    }
-    ensure!(
-        cmd.status()?.success(),
-        "Upscaler provider installation failed; no game was launched"
-    );
-    if provider == "bridge" {
-        bridge_provider(
-            root,
-            &wine
-                .context("Bridge provider requires Wine")?
-                .join("lib/wine/x86_64-windows/nvngx-on-metalfx.dll"),
-        )?;
-    } else if provider != "native" {
-        read_provider(&provider_path(root, provider)?)?;
-    } else {
-        let digest = crate::staging::digest(
-            &wine
-                .context("Native provider requires Wine")?
-                .join("lib/external/D3DMetal.framework/D3DMetal"),
-        )?;
-        read_provider(
-            &root
-                .join("providers/native")
-                .join(native_key(&digest)?)
-                .join("provider.json"),
-        )?;
-    }
     Ok(())
 }

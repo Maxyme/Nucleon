@@ -104,6 +104,10 @@ pub(crate) enum PeAbi {
 
 /// Do not mistake AMD64 hybrid headers or ordinary ARM64 code for an x64 frontend.
 pub(crate) fn pe_abi(data: &[u8]) -> Result<PeAbi> {
+    pe_abi_from(data)
+}
+
+pub(crate) fn pe_abi_from<'data, R: object::read::ReadRef<'data>>(data: R) -> Result<PeAbi> {
     use object::{endian::LittleEndian as LE, read::pe::ImageNtHeaders};
     let image = object::File::parse(data)?;
     if let object::File::Pe32(pe) = &image {
@@ -122,15 +126,21 @@ pub(crate) fn pe_abi(data: &[u8]) -> Result<PeAbi> {
                 false
             } else {
                 let config = directory.data(data, &pe.section_table())?;
-                let size = config
-                    .get(..4)
-                    .map(|b| u32::from_le_bytes(b.try_into().unwrap()) as usize)
-                    .unwrap_or(0);
+                // Load configurations grow over time. Read the documented structure
+                // with object, zero-filling fields absent from older versions.
+                type Config = object::pe::ImageLoadConfigDirectory64;
+                let size = object::Bytes(config)
+                    .read::<object::endian::U32<LE>>()
+                    .map_err(|()| anyhow::anyhow!("Truncated PE load configuration"))?
+                    .get(LE) as usize;
                 anyhow::ensure!(size <= config.len(), "Truncated PE load configuration");
-                size >= 208
-                    && config
-                        .get(200..208)
-                        .is_some_and(|b| b.iter().any(|v| *v != 0))
+                let mut padded = [0_u8; size_of::<Config>()];
+                let copied = size.min(padded.len());
+                padded[..copied].copy_from_slice(&config[..copied]);
+                let (header, _) = object::pod::from_bytes::<Config>(&padded)
+                    .map_err(|()| anyhow::anyhow!("Invalid PE load configuration"))?;
+                size >= std::mem::offset_of!(Config, chpe_metadata_pointer) + size_of::<u64>()
+                    && header.chpe_metadata_pointer.get(LE) != 0
             }
         } else {
             false

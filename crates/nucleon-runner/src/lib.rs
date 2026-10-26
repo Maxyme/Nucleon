@@ -22,7 +22,7 @@ mod session;
 mod standalone;
 use process::{OwnedChild, TERMINATION_GRACE};
 use session::{RunSession, trace as trace_runner};
-pub use standalone::{StandaloneRequest, run_standalone};
+pub use standalone::{ResolvedStandalone, StandaloneRequest, resolve_standalone, run_standalone};
 
 /// Resolve once so compatibility checks and execution use the same Wine.
 fn resolve_wine_override(
@@ -1022,12 +1022,15 @@ fn run_with_args_inner(args: &[String], session: &mut RunSession) -> Result<RunO
             wait: verb == "waitforexitandrun",
             consume_override: override_path.filter(|_| launch_override.is_some()),
             upscaler: effective_profile.upscaler,
-        },
+            environment: Default::default(),
+        }
+        .resolve()?,
         session,
     )
 }
 
 struct PreparedLaunch {
+    environment: std::collections::BTreeMap<String, String>,
     upscaler: Option<nucleon_core::upscaler::Settings>,
     plan: LaunchPlan,
     data_path: PathBuf,
@@ -1040,7 +1043,53 @@ struct PreparedLaunch {
     consume_override: Option<PathBuf>,
 }
 
-fn execute_launch(prepared: PreparedLaunch, session: &mut RunSession) -> Result<RunOutcome> {
+/// Side-effect-free decisions shared by preview and execution. Installation state is
+/// checked again under its lock when execution begins.
+struct ResolvedLaunch {
+    prepared: PreparedLaunch,
+    scaler_root: PathBuf,
+    scaler_choice: nucleon_core::upscaler::Settings,
+    resolved_scaler: nucleon_core::upscaler::Resolved,
+}
+
+impl PreparedLaunch {
+    fn resolve(self) -> Result<ResolvedLaunch> {
+        let scaler_root = nucleon_core::upscaler::root();
+        let scaler_choice = self.upscaler.clone().unwrap_or_else(|| {
+            nucleon_core::upscaler::Settings::selected(nucleon_core::upscaler::Backend::Game)
+        });
+        let resolved_scaler = nucleon_core::upscaler::resolve_for_launch(
+            &scaler_root,
+            &self.plan,
+            Path::new(&self.arguments[0]),
+            &scaler_choice,
+        )?;
+        if self.upscaler.is_some() || scaler_choice.backend != nucleon_core::upscaler::Backend::Game
+        {
+            nucleon_core::upscaler::preview(&scaler_root, &resolved_scaler)?;
+        }
+        nucleon_core::upscaler::validate_raw_overrides(
+            config::environment("NUCLEON_WINEDLLOVERRIDES")?
+                .as_deref()
+                .unwrap_or(""),
+            scaler_choice.backend,
+        )?;
+        Ok(ResolvedLaunch {
+            prepared: self,
+            scaler_root,
+            scaler_choice,
+            resolved_scaler,
+        })
+    }
+}
+
+fn execute_launch(resolved: ResolvedLaunch, session: &mut RunSession) -> Result<RunOutcome> {
+    let ResolvedLaunch {
+        prepared,
+        scaler_root,
+        scaler_choice,
+        resolved_scaler,
+    } = resolved;
     let PreparedLaunch {
         upscaler,
         mut plan,
@@ -1052,31 +1101,12 @@ fn execute_launch(prepared: PreparedLaunch, session: &mut RunSession) -> Result<
         overlay: enable_overlay,
         wait,
         consume_override,
+        environment,
     } = prepared;
     let target_exe = PathBuf::from(&game_args[0]);
-    // Resolve before prefix initialization, and hold the installation lock through game cleanup.
-    let scaler_root = nucleon_core::upscaler::root();
-    let scaler_choice = upscaler.clone().unwrap_or_else(|| {
-        nucleon_core::upscaler::Settings::selected(nucleon_core::upscaler::Backend::Game)
-    });
     if upscaler.is_some() {
         session.upscaler_requested(&scaler_choice)?;
     }
-    let resolved_scaler = nucleon_core::upscaler::resolve_for_launch(
-        &scaler_root,
-        &plan,
-        &target_exe,
-        &scaler_choice,
-    )?;
-    if upscaler.is_some() || scaler_choice.backend != nucleon_core::upscaler::Backend::Game {
-        nucleon_core::upscaler::preview(&scaler_root, &resolved_scaler)?;
-    }
-    nucleon_core::upscaler::validate_raw_overrides(
-        config::environment("NUCLEON_WINEDLLOVERRIDES")?
-            .as_deref()
-            .unwrap_or(""),
-        scaler_choice.backend,
-    )?;
     let scaler_installation = if scaler_choice.backend != nucleon_core::upscaler::Backend::Game {
         Some(nucleon_core::upscaler::Installation::open(
             &scaler_root,
@@ -1280,9 +1310,14 @@ fn execute_launch(prepared: PreparedLaunch, session: &mut RunSession) -> Result<
     }
 
     let mut cmd = plan.runtime.command(&wine_bin);
+    cmd.envs(&environment);
     nucleon_core::launch::clean_command(&mut cmd);
     if scaler_installation.is_some() || upscaler.is_some() {
-        for (key, _) in env::vars_os() {
+        let keys = env::vars_os()
+            .map(|(key, _)| key)
+            .chain(environment.keys().map(std::ffi::OsString::from))
+            .collect::<Vec<_>>();
+        for key in keys {
             let key_text = key.to_string_lossy();
             if key_text.starts_with("FSR4_")
                 || key_text == "D3DMETAL_FRAMEWORK_PATH"
@@ -1295,6 +1330,7 @@ fn execute_launch(prepared: PreparedLaunch, session: &mut RunSession) -> Result<
     if !plan.steam_integration {
         nucleon_core::launch::clean_standalone_command(&mut cmd);
     }
+    cmd.env_remove("NUCLEON_LAUNCH_REQUEST");
     cmd.args(&wine_args);
     // Clear parent injection; exec_env supplies only the native renderer on opt-in.
     cmd.env_remove("DYLD_INSERT_LIBRARIES")

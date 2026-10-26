@@ -2,8 +2,6 @@ use anyhow::{Context, Result, ensure};
 use clap::Subcommand;
 use nucleon_core::{
     application::Settings,
-    detector::TargetEngine,
-    launch::{GraphicsComponents, LaunchPlan},
     upscaler::{self, Backend, Input, Installation},
 };
 use std::path::PathBuf;
@@ -103,53 +101,27 @@ pub fn run(action: Action) -> Result<()> {
             let settings = Settings {
                 wine,
                 emulator,
-                engine: Some(engine.clone()),
+                engine: Some(engine),
+                graphics_api: graphics_api
+                    .map(|value| {
+                        serde_json::from_value::<nucleon_core::profile::GraphicsPreference>(
+                            value.into(),
+                        )
+                    })
+                    .transpose()?,
+                upscaler: Some(upscaler::Settings {
+                    backend,
+                    input,
+                    renderer: renderer.clone(),
+                }),
                 ..Default::default()
             };
-            let runtime = settings.resolve_runtime()?;
-            let guest = nucleon_core::detector::executable_guest(&executable)?;
-            let target = renderer
-                .as_ref()
-                .map(|p| executable.parent().unwrap().join(p))
-                .unwrap_or_else(|| executable.clone());
-            let api = match graphics_api {
-                Some(value) => serde_json::from_value::<nucleon_core::profile::GraphicsPreference>(
-                    value.into(),
-                )?
-                .api()
-                .unwrap_or_else(|| nucleon_core::detector::detect_target_engine(&target).api),
-                None => nucleon_core::detector::detect_target_engine(&target).api,
-            };
-            let selected_engine = nucleon_core::configuration::engine("--engine", &engine)?;
-            let mut graphics = if matches!(
-                selected_engine,
-                TargetEngine::WineStaging | TargetEngine::Gptk
-            ) {
-                GraphicsComponents::default()
-            } else {
-                GraphicsComponents::discover(&runtime, None, None)?
-            };
-            graphics.gptk = GraphicsComponents::bundled_gptk(&runtime);
-            let engine = match selected_engine {
-                TargetEngine::Auto => graphics
-                    .available(
-                        &runtime,
-                        &api,
-                        guest == nucleon_core::runtime::GuestAbi::X64,
-                    )
-                    .select(&api)?,
-                selected => selected,
-            };
-            let plan = LaunchPlan::new(
-                runtime,
-                prefix.clone().unwrap_or_else(|| root.join("unused-prefix")),
-                engine,
-                graphics,
-                guest == nucleon_core::runtime::GuestAbi::X64,
-                Some(false),
-                &api,
-            )?
-            .without_steam();
+            let plan = nucleon_core::application::resolve_launch(
+                &executable,
+                &root,
+                prefix.as_deref().or(Some(&root.join("unused-prefix"))),
+                &settings,
+            )?;
             let resolved = upscaler::resolve(
                 &root,
                 &plan,

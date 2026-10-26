@@ -253,8 +253,7 @@ fn metalfx_bridge_keeps_vendor_name_and_all_owned_dlls_restore_together() {
     let key = assets::bridge_key(&crate::staging::digest(&bridge).unwrap()).unwrap();
     let directory = f.root.join("providers/bridge").join(key);
     fs::create_dir_all(&directory).unwrap();
-    let mut forwarding = original.clone();
-    forwarding.extend_from_slice(b"forwarder fixture");
+    let forwarding = include_bytes!("fixtures/ngx-forward.bin").to_vec();
     fs::write(directory.join("nvngx.dll"), &forwarding).unwrap();
     save(
         &directory.join("provider.json"),

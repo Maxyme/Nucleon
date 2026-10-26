@@ -10,7 +10,6 @@ use std::sync::OnceLock;
 /// Validate a standalone target before creating or updating a Wine prefix.
 pub fn executable_guest(path: &Path) -> anyhow::Result<crate::runtime::GuestAbi> {
     use anyhow::{Context, ensure};
-    use object::endian::LittleEndian as LE;
     let file =
         fs::File::open(path).with_context(|| format!("Read executable {}", path.display()))?;
     let cache = object::read::ReadCache::new(file);
@@ -22,30 +21,15 @@ pub fn executable_guest(path: &Path) -> anyhow::Result<crate::runtime::GuestAbi>
         "Expected a Windows executable (PE), not a library or other file: {}",
         path.display()
     );
-    // Hybrid AMD64 headers still contain ARM64 code. Do not classify them as an
-    // ordinary x64 application merely because the COFF machine says AMD64.
-    if let object::File::Pe64(pe) = &image
-        && let Some(directory) = pe.data_directory(object::pe::IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG)
-        && directory.virtual_address.get(LE) != 0
-    {
-        let config = directory.data(&cache, &pe.section_table())?;
-        let size = config
-            .get(..4)
-            .map(|b| u32::from_le_bytes(b.try_into().unwrap()) as usize)
-            .context("Truncated executable load configuration")?;
-        ensure!(
-            size <= config.len(),
-            "Truncated executable load configuration"
-        );
-        ensure!(
-            size < 208 || !config[200..208].iter().any(|b| *b != 0),
-            "Unsupported ARM64EC/ARM64X executable: {}; choose an x86 or x64 executable",
-            path.display()
-        );
-    }
-    match image.architecture() {
-        object::Architecture::I386 => Ok(crate::runtime::GuestAbi::X86),
-        object::Architecture::X86_64 => Ok(crate::runtime::GuestAbi::X64),
+    match crate::runtime_checks::pe_abi_from(&cache)? {
+        crate::runtime_checks::PeAbi::X86 => Ok(crate::runtime::GuestAbi::X86),
+        crate::runtime_checks::PeAbi::X64 => Ok(crate::runtime::GuestAbi::X64),
+        crate::runtime_checks::PeAbi::Arm64Ec | crate::runtime_checks::PeAbi::Arm64X => {
+            anyhow::bail!(
+                "Unsupported ARM64EC/ARM64X executable: {}; choose an x86 or x64 executable",
+                path.display()
+            )
+        }
         other => anyhow::bail!(
             "Unsupported executable architecture {other:?}: {}; choose an x86 or x64 executable",
             path.display()
@@ -473,19 +457,7 @@ fn scan_directory_for_graphics_api(dir: &Path, depth: u32) -> Option<GraphicsApi
 
 /// Inspects raw executable bytes to determine whether the binary is 64-bit (PE32+) or 32-bit (PE32).
 pub fn is_pe_64_bit(data: &[u8]) -> bool {
-    if let Ok(file) = object::File::parse(data) {
-        return file.is_64();
-    }
-    // Fallback: check PE machine type in header directly
-    if data.len() >= 0x40 {
-        let pe_offset =
-            u32::from_le_bytes([data[0x3c], data[0x3d], data[0x3e], data[0x3f]]) as usize;
-        if pe_offset + 6 <= data.len() && &data[pe_offset..pe_offset + 4] == b"PE\0\0" {
-            let machine = u16::from_le_bytes([data[pe_offset + 4], data[pe_offset + 5]]);
-            return machine == 0x8664; // IMAGE_FILE_MACHINE_AMD64
-        }
-    }
-    false
+    matches!(object::File::parse(data), Ok(object::File::Pe64(_)))
 }
 
 /// Inspects a target executable on disk to determine whether it is a 64-bit binary.
@@ -494,7 +466,7 @@ pub fn is_pe_file_64_bit(path: &Path) -> bool {
     if let Ok(file) = fs::File::open(path) {
         let cache = object::read::ReadCache::new(file);
         if let Ok(image) = object::File::parse(&cache) {
-            return image.is_64();
+            return matches!(image, object::File::Pe64(_));
         }
     }
     if let Ok(data) = fs::read(path) {
@@ -1108,29 +1080,11 @@ mod tests {
 
     #[test]
     fn test_is_pe_64_bit() {
-        // Construct minimal mock PE headers
-        let mut pe64 = vec![0u8; 0x100];
-        pe64[0] = b'M';
-        pe64[1] = b'Z';
-        pe64[0x3c] = 0x80; // PE offset at 0x80
-        pe64[0x80] = b'P';
-        pe64[0x81] = b'E';
-        pe64[0x82] = 0;
-        pe64[0x83] = 0;
-        pe64[0x84] = 0x64; // IMAGE_FILE_MACHINE_AMD64 (0x8664)
-        pe64[0x85] = 0x86;
-        assert!(is_pe_64_bit(&pe64));
-
-        let mut pe32 = vec![0u8; 0x100];
-        pe32[0] = b'M';
-        pe32[1] = b'Z';
-        pe32[0x3c] = 0x80;
-        pe32[0x80] = b'P';
-        pe32[0x81] = b'E';
-        pe32[0x82] = 0;
-        pe32[0x83] = 0;
-        pe32[0x84] = 0x4c; // IMAGE_FILE_MACHINE_I386 (0x014c)
-        pe32[0x85] = 0x01;
-        assert!(!is_pe_64_bit(&pe32));
+        assert!(is_pe_64_bit(&crate::runtime_checks::test_pe_image(0x8664)));
+        assert!(!is_pe_64_bit(&crate::runtime_checks::test_pe_image(0x14c)));
+        assert!(!is_pe_64_bit(
+            &crate::runtime_checks::test_pe_image(0x8664)[..150]
+        ));
+        assert!(!is_pe_64_bit(&crate::runtime_checks::test_image("wine", 1)));
     }
 }

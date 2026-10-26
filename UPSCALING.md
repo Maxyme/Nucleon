@@ -36,6 +36,12 @@ and `spirv-val` on PATH. The selected Intel GPTK bundle must contain its matched
 `lib/external/D3DMetal.framework` and Windows MetalFX bridge. Original framework
 bytes are checked before and after building a private copy.
 
+Stock/MetalFX archives are verified and extracted in Rust; they do not require
+Python. Provider updates are built and validated in a separate folder, then
+published atomically. Failed attempts leave the previous generation intact, and
+a retry can repair an incomplete generation. Existing provider identities remain
+compatible. Python is used only by the native source build adapter.
+
 The bridge command also needs `x86_64-w64-mingw32-gcc`. It builds a small x64
 export-forwarding DLL from the selected runtime's NGX exports. The actual vendor
 bridge retains its `nvngx-on-metalfx.dll` filename. A separate Wine builtin entry

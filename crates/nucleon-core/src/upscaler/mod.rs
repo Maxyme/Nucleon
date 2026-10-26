@@ -1,5 +1,7 @@
 //! Optional, game-local temporal upscaling. Providers remain experimental until game-tested.
 mod assets;
+mod install;
+mod ngx;
 mod transaction;
 
 use crate::{
@@ -8,7 +10,8 @@ use crate::{
     runtime::{ExecutionMode, FrontendAbi},
 };
 use anyhow::{Context, Result, ensure};
-pub use assets::{Provider, install, install_patcher};
+pub use assets::{Provider, install_patcher};
+pub use install::install;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, HashMap},

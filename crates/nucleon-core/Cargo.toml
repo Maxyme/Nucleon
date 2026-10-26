@@ -29,6 +29,11 @@ tar = { workspace = true }
 flate2 = { workspace = true }
 zstd = { workspace = true }
 lzma-rs = "0.3"
+sevenz-rust = { version = "0.6.1", default-features = false }
+
+[dev-dependencies]
+proptest = { version = "1.9", default-features = false, features = ["std"] }
+sevenz-rust = { version = "0.6.1", default-features = false, features = ["compress"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics = { workspace = true }

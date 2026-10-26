@@ -1,0 +1,14 @@
+; Regenerate ngx-forward.bin with:
+; x86_64-w64-mingw32-gcc -shared -nostdlib ngx-forward.def -Wl,--entry,0 -Wl,--no-insert-timestamp -o ngx-forward.bin
+; This synthetic DLL forwards exports only; it contains no game or vendor code.
+LIBRARY nvngx
+EXPORTS
+NVSDK_NGX_D3D12_Init_Ext=nvngx-on-metalfx.NVSDK_NGX_D3D12_Init_Ext
+NVSDK_NGX_D3D12_Init_ProjectID=nvngx-on-metalfx.NVSDK_NGX_D3D12_Init_ProjectID
+NVSDK_NGX_D3D12_AllocateParameters=nvngx-on-metalfx.NVSDK_NGX_D3D12_AllocateParameters
+NVSDK_NGX_D3D12_GetParameters=nvngx-on-metalfx.NVSDK_NGX_D3D12_GetParameters
+NVSDK_NGX_D3D12_GetCapabilityParameters=nvngx-on-metalfx.NVSDK_NGX_D3D12_GetCapabilityParameters
+NVSDK_NGX_D3D12_CreateFeature=nvngx-on-metalfx.NVSDK_NGX_D3D12_CreateFeature
+NVSDK_NGX_D3D12_EvaluateFeature=nvngx-on-metalfx.NVSDK_NGX_D3D12_EvaluateFeature
+NVSDK_NGX_D3D12_DestroyParameters=nvngx-on-metalfx.NVSDK_NGX_D3D12_DestroyParameters
+NVSDK_NGX_D3D12_ReleaseFeature=nvngx-on-metalfx.NVSDK_NGX_D3D12_ReleaseFeature

@@ -177,71 +177,37 @@ impl StageReport {
     }
 }
 
-/// Reads a little-endian `u16`, yielding `None` instead of panicking on a truncated image.
-/// Every header field below is read this way.
-fn u16_at(data: &[u8], offset: usize) -> Option<u16> {
-    Some(u16::from_le_bytes(
-        data.get(offset..offset + 2)?.try_into().ok()?,
-    ))
-}
-
-fn u32_at(data: &[u8], offset: usize) -> Option<u32> {
-    Some(u32::from_le_bytes(
-        data.get(offset..offset + 4)?.try_into().ok()?,
-    ))
-}
-
-/// Locates the file ranges a PE image maps into memory, plus whether they are executable.
-///
-/// Written by hand rather than through an object-file library because it needs exactly two things —
-/// mapped byte ranges and execute permission — and must stay correct for images produced by Apple's
-/// linker without inheriting a parser's opinion of what counts as valid. Every offset is bounds
-/// checked; anything questionable yields `None`, which callers treat as "cannot rewrite".
+/// Read section boundaries and permissions through object. Reject malformed or
+/// truncated images before any opcode or symbol is rewritten.
 fn mapped_regions(data: &[u8]) -> Option<Vec<MappedRegion>> {
-    let signature = u32_at(data, 0x3c)? as usize;
-    if data.get(signature..signature + 4)? != b"PE\0\0" {
-        return None;
-    }
-    let number_of_sections = u16_at(data, signature + 6)? as usize;
-    let optional_header_size = u16_at(data, signature + 20)? as usize;
-    // The COFF file header is 20 bytes and directly follows the 4-byte signature.
-    let sections_start = signature
-        .checked_add(24)?
-        .checked_add(optional_header_size)?;
-
-    let mut regions = Vec::with_capacity(number_of_sections);
-    for index in 0..number_of_sections {
-        let header = sections_start.checked_add(index.checked_mul(40)?)?;
-        let virtual_size = u32_at(data, header + 8)? as usize;
-        let raw_size = u32_at(data, header + 16)? as usize;
-        let raw_address = u32_at(data, header + 20)? as usize;
-        let characteristics = u32_at(data, header + 36)? as usize;
-        if raw_address == 0 || raw_size == 0 {
+    use object::endian::LittleEndian as LE;
+    let image = object::File::parse(data).ok()?;
+    let sections = match &image {
+        object::File::Pe32(image) => image.section_table(),
+        object::File::Pe64(image) => image.section_table(),
+        _ => return None,
+    };
+    let mut regions = Vec::new();
+    for section in sections.iter() {
+        let (start, size) = section.pe_file_range();
+        if start == 0 || size == 0 {
             continue;
         }
-        // Section data is `min(SizeOfRawData, VirtualSize)` bytes of the range that exists in the
-        // file; trailing alignment padding belongs to no section and must not be rewritten.
-        let meaningful = virtual_size.min(raw_size).max(1);
-        let start = raw_address;
-        let end = raw_address
-            .checked_add(meaningful)?
-            .min(raw_address.checked_add(raw_size)?)
-            .min(data.len());
-        if end <= start {
-            continue;
+        let start = start as usize;
+        let end = start.checked_add(size as usize)?;
+        data.get(start..end)?;
+        if regions
+            .iter()
+            .any(|r: &MappedRegion| start < r.range.end && r.range.start < end)
+        {
+            return None;
         }
         regions.push(MappedRegion {
             range: start..end,
-            // IMAGE_SCN_MEM_EXECUTE
-            executable: characteristics & 0x2000_0000 != 0,
+            executable: section.characteristics.get(LE) & object::pe::IMAGE_SCN_MEM_EXECUTE != 0,
         });
     }
-
-    if regions.is_empty() {
-        None
-    } else {
-        Some(regions)
-    }
+    (!regions.is_empty()).then_some(regions)
 }
 
 fn region_containing(
@@ -291,42 +257,48 @@ fn is_unixlib_init_site(data: &[u8], offset: usize) -> bool {
 /// from the dispatcher spelling to Apple's plain one, because that direction fits in the space the
 /// longer name occupies; anything else is reported rather than approximated.
 pub fn bridge_image(bytes: &mut [u8], host: WineUnixCallAbi) -> Result<Option<ImageBridge>> {
-    // Whichever name the image actually binds to wins the comparison; a stray occurrence elsewhere is
-    // not an import. The dispatcher spelling is the more specific marker, so it takes precedence when
-    // both names appear in one binary.
-    let bound_to_dispatcher = !find_symbols(bytes, DISPATCHER_SYMBOL).is_empty();
-    let bound_to_plain = !find_symbols(bytes, PLAIN_SYMBOL).is_empty();
-    if !bound_to_dispatcher && !bound_to_plain {
-        // Not a Unix-call image at all: an ordinary DLL, or one already carrying the host's name only.
+    let dispatcher_hits = find_symbols(bytes, DISPATCHER_SYMBOL);
+    let plain_hits = find_symbols(bytes, PLAIN_SYMBOL);
+    if dispatcher_hits.is_empty() && plain_hits.is_empty() {
         return Ok(None);
     }
     let foreign = match host {
         WineUnixCallAbi::Plain => DISPATCHER_SYMBOL,
         WineUnixCallAbi::Dispatcher => PLAIN_SYMBOL,
     };
-
-    // Already naming what the host exports: leave the binary byte-identical to Apple's.
+    let regions = mapped_regions(bytes).with_context(|| format!(
+        "image references `{}` but its PE section table could not be parsed, so it cannot be retargeted onto a Wine exposing `{host}`",
+        String::from_utf8_lossy(foreign)
+    ))?;
+    // Debug/symbol-table copies are not loaded. In particular, a leftover debug
+    // dispatcher name must not make an already bridged image require rewriting.
+    let mapped = |offset: usize, size: usize| {
+        region_containing(&regions, offset, false).is_some_and(|r| {
+            offset
+                .checked_add(size)
+                .is_some_and(|end| end <= r.range.end)
+        })
+    };
+    let bound_to_dispatcher = dispatcher_hits
+        .iter()
+        .any(|p| mapped(*p, DISPATCHER_SYMBOL.len()));
+    let bound_to_plain = plain_hits.iter().any(|p| mapped(*p, PLAIN_SYMBOL.len()));
     if (bound_to_dispatcher && host == WineUnixCallAbi::Dispatcher)
-        || (!bound_to_dispatcher && host == WineUnixCallAbi::Plain)
+        || (!bound_to_dispatcher && bound_to_plain && host == WineUnixCallAbi::Plain)
     {
         return Ok(None);
     }
-    let foreign_hits = find_symbols(bytes, foreign);
+    let foreign_hits = if host == WineUnixCallAbi::Plain {
+        dispatcher_hits
+    } else {
+        plain_hits
+    };
     if foreign_hits.is_empty() {
         return Ok(None);
     }
-
-    let regions = mapped_regions(bytes).with_context(|| {
-        format!(
-            "image references `{}` but its PE section table could not be parsed, so it cannot be \
-             retargeted onto a Wine exposing `{host}`",
-            String::from_utf8_lossy(foreign)
-        )
-    })?;
-
     let symbol_sites: Vec<usize> = foreign_hits
         .iter()
-        .filter(|offset| region_containing(&regions, **offset, false).is_some())
+        .filter(|offset| mapped(**offset, foreign.len()))
         .copied()
         .collect();
     if symbol_sites.is_empty() {
@@ -553,6 +525,9 @@ mod tests {
     /// loads in `.text`, plus `symbols` copies of the dispatcher name in `.rdata`.
     fn unixlib_image(init_sites: usize, vtable_sites: usize, symbols: usize) -> Vec<u8> {
         let mut data = vec![0u8; 0x1000];
+        data[..2].copy_from_slice(b"MZ");
+        data[0x7c..0x7e].copy_from_slice(&0x8664u16.to_le_bytes());
+        data[0x90..0x92].copy_from_slice(&0x20bu16.to_le_bytes());
         data[0x3c..0x40].copy_from_slice(&0x78u32.to_le_bytes());
         data[0x78..0x7c].copy_from_slice(b"PE\0\0");
         data[0x7e..0x80].copy_from_slice(&2u16.to_le_bytes()); // two sections
@@ -619,6 +594,38 @@ mod tests {
         write_symbol(&mut data, tail, DISPATCHER_SYMBOL);
 
         data
+    }
+
+    use proptest::prelude::*;
+    proptest! {
+        #[test]
+        fn varied_thunks_preserve_unrelated_code_and_rewriting_is_idempotent(
+            inits in 1_usize..6, vtables in 0_usize..10, symbols in 1_usize..6
+        ) {
+            let mut image = unixlib_image(inits, vtables, symbols);
+            let original = image.clone();
+            let report = bridge_image(&mut image, WineUnixCallAbi::Plain).unwrap().unwrap();
+            prop_assert_eq!(report.init_sites_patched, inits);
+            prop_assert_eq!(report.symbol_rewrites, symbols);
+            for offset in 0..image.len() {
+                let thunk = (0..inits).any(|i| (TEXT_FILE_OFFSET + i * 34 + 16..TEXT_FILE_OFFSET + i * 34 + 19).contains(&offset));
+                let symbol = (0..symbols).any(|i| (RDATA_FILE_OFFSET + i * (DISPATCHER_SYMBOL.len()+8)..RDATA_FILE_OFFSET + i * (DISPATCHER_SYMBOL.len()+8)+DISPATCHER_SYMBOL.len()).contains(&offset));
+                if !thunk && !symbol { prop_assert_eq!(image[offset], original[offset]); }
+            }
+            let once = image.clone();
+            prop_assert!(bridge_image(&mut image, WineUnixCallAbi::Plain).unwrap().is_none());
+            prop_assert_eq!(image, once);
+        }
+        #[test]
+        fn invalid_images_fail_without_partial_rewrites(data in prop::collection::vec(any::<u8>(), 0..4096)) {
+            let mut image = data;
+            image.extend_from_slice(DISPATCHER_SYMBOL);
+            image.push(0);
+            let original = image.clone();
+            if bridge_image(&mut image, WineUnixCallAbi::Plain).is_err() {
+                prop_assert_eq!(image, original);
+            }
+        }
     }
 
     #[test]
@@ -890,8 +897,46 @@ mod tests {
             // Retargeting onto Apple's base Wine must find exactly one thunk per image…
             let mut bytes = original.clone();
             let bridge = bridge_image(&mut bytes, WineUnixCallAbi::Plain)
-                .unwrap_or_else(|err| panic!("{}: {err:#}", entry.display()))
-                .expect("legacy image must be retargeted");
+                .unwrap_or_else(|err| panic!("{}: {err:#}", entry.display()));
+            let Some(bridge) = bridge else {
+                // Installed toolkits may already be bridged while retaining the
+                // old spelling in debug data. Verify the actual mapped name and
+                // the exact compatible init thunk instead of treating debug text
+                // as evidence that another rewrite is necessary.
+                let regions = mapped_regions(&original).unwrap();
+                assert!(
+                    find_symbols(&original, DISPATCHER_SYMBOL)
+                        .iter()
+                        .all(|p| region_containing(&regions, *p, false).is_none()),
+                    "{}",
+                    entry.display()
+                );
+                assert!(
+                    find_symbols(&original, PLAIN_SYMBOL)
+                        .iter()
+                        .any(|p| region_containing(&regions, *p, false).is_some()),
+                    "{}",
+                    entry.display()
+                );
+                let sites = find_in_ranges(&original, &PASS_RSI_BY_VALUE, |p| {
+                    region_containing(&regions, p, true).is_some()
+                        && is_unixlib_init_site(&original, p)
+                });
+                assert_eq!(
+                    sites.len(),
+                    1,
+                    "{}: expected one compatible init thunk",
+                    entry.display()
+                );
+                assert_eq!(
+                    bytes,
+                    original,
+                    "{}: compatible image must not change",
+                    entry.display()
+                );
+                checked += 1;
+                continue;
+            };
             assert_eq!(
                 bridge.init_sites_patched,
                 1,

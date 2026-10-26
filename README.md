@@ -26,6 +26,10 @@ nucleon bottle add my-game game /path/to/installed/Game.exe
 nucleon bottle run my-game game
 ```
 
+Add `--dry-run` to `nucleon run` or `nucleon app run` to inspect the selected
+runtime, engine, graphics components and prefix. Preview uses the same resolution
+as execution, without authenticating, starting Wine or changing a prefix.
+
 Without `--bottle`, each canonical EXE path gets its own environment. Bottles keep
 their selected runtime, preferences, installed files and saves across launches.
 See [standalone usage](STANDALONE.md) for saved applications, configuration and

@@ -68,6 +68,71 @@ impl Settings {
     }
 }
 
+/// Resolve ordinary EXE launches and upscaler previews with the same runtime,
+/// target-API and component policy. This does not create any launch state.
+pub fn resolve_launch(
+    executable: &Path,
+    data: &Path,
+    prefix: Option<&Path>,
+    settings: &Settings,
+) -> Result<crate::launch::LaunchPlan> {
+    use crate::{
+        detector::TargetEngine,
+        launch::{GraphicsComponents, LaunchPlan},
+        runtime::GuestAbi,
+    };
+    settings.validate()?;
+    let guest = crate::detector::executable_guest(executable)?;
+    let runtime = settings.resolve_runtime()?;
+    runtime.require_guest(guest == GuestAbi::X64)?;
+    crate::runtime_selection::check_host(&runtime)?;
+    let target = settings
+        .upscaler
+        .as_ref()
+        .and_then(|s| s.renderer.as_ref())
+        .map(|renderer| executable.parent().unwrap_or(Path::new(".")).join(renderer))
+        .unwrap_or_else(|| executable.into());
+    let api = settings
+        .profile()
+        .graphics_api(&target, &crate::detector::detect_target_engine(&target).api)?;
+    let requested = settings
+        .engine
+        .as_deref()
+        .map(|e| configuration::engine("--engine", e))
+        .transpose()?
+        .unwrap_or(TargetEngine::Auto);
+    let mut components = if matches!(requested, TargetEngine::WineStaging | TargetEngine::Gptk) {
+        GraphicsComponents::default()
+    } else {
+        GraphicsComponents::discover(&runtime, None, None)?
+    };
+    components.gptk = GraphicsComponents::bundled_gptk(&runtime);
+    let engine = if requested == TargetEngine::Auto {
+        components
+            .available(&runtime, &api, guest == GuestAbi::X64)
+            .select(&api)?
+    } else {
+        requested
+    };
+    ensure!(
+        engine != TargetEngine::Gptk || (components.gptk && guest == GuestAbi::X64),
+        "GPTK requires a complete compatible Intel Wine runtime with bundled D3DMetal and an x64 target; select it with --wine, or choose another engine"
+    );
+    let prefix = prefix
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| paths::game_prefix(data, &runtime));
+    Ok(LaunchPlan::new(
+        runtime,
+        prefix,
+        engine,
+        components,
+        guest == GuestAbi::X64,
+        Some(false),
+        &api,
+    )?
+    .without_steam())
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Application {
@@ -254,6 +319,60 @@ impl Bottle {
 mod tests {
     use super::*;
     use crate::runtime::{self, ExecutionMode};
+
+    use proptest::prelude::*;
+
+    fn choices() -> impl Strategy<Value = Settings> {
+        (
+            prop::option::of(any::<bool>()),
+            prop::option::of("[a-z]{1,16}"),
+            prop::option::of(0_usize..3),
+            prop::option::of(0_usize..3),
+            prop::option::of(0_usize..2),
+            prop::option::of(0_usize..3),
+        )
+            .prop_map(|(hud, wine, engine, api, emulator, scaler)| Settings {
+                hud,
+                wine,
+                engine: engine.map(|i| ["auto", "wine", "gptk"][i].into()),
+                graphics_api: api.map(|i| {
+                    [
+                        crate::profile::GraphicsPreference::Auto,
+                        crate::profile::GraphicsPreference::Dx11,
+                        crate::profile::GraphicsPreference::Dx12,
+                    ][i]
+                }),
+                emulator: emulator.map(|i| [Emulator::Rosetta, Emulator::Fex][i]),
+                upscaler: scaler.map(|i| {
+                    crate::upscaler::Settings::selected(
+                        [
+                            crate::upscaler::Backend::Game,
+                            crate::upscaler::Backend::Fsr31,
+                            crate::upscaler::Backend::Metalfx,
+                        ][i],
+                    )
+                }),
+            })
+    }
+
+    proptest! {
+        #[test]
+        fn explicit_choices_survive_inherited_defaults(explicit in choices(), defaults in choices()) {
+            let chosen = serde_json::to_value(&explicit).unwrap();
+            let inherited = serde_json::to_value(&defaults).unwrap();
+            let effective = serde_json::to_value(explicit.with_defaults(defaults)).unwrap();
+            for (key, value) in chosen.as_object().unwrap() {
+                let expected = if value.is_null() { &inherited[key] } else { value };
+                prop_assert_eq!(&effective[key], expected);
+            }
+        }
+        #[test]
+        fn launch_app_and_bottle_precedence_is_associative(launch in choices(), app in choices(), bottle in choices()) {
+            let sequential = launch.clone().with_defaults(app.clone()).with_defaults(bottle.clone());
+            let layered = launch.with_defaults(app.with_defaults(bottle));
+            prop_assert_eq!(serde_json::to_value(sequential).unwrap(), serde_json::to_value(layered).unwrap());
+        }
+    }
 
     #[test]
     fn bottles_pin_runtime_update_atomically_and_preserve_data() {
