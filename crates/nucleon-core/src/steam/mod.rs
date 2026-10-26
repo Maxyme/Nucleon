@@ -40,7 +40,7 @@ pub fn registered_gptk_tool_display_name() -> Option<String> {
     if vdf_path.is_file()
         && let Ok(content) = fs::read_to_string(&vdf_path)
     {
-        return extract_vdf_display_name(&content).map(|s| s.to_string());
+        return extract_vdf_display_name(&content);
     }
     None
 }
@@ -56,7 +56,7 @@ pub fn registered_kosmickrisp_tool_display_name() -> Option<String> {
     if vdf_path.is_file()
         && let Ok(content) = fs::read_to_string(&vdf_path)
     {
-        return extract_vdf_display_name(&content).map(|s| s.to_string());
+        return extract_vdf_display_name(&content);
     }
     None
 }
@@ -72,7 +72,7 @@ pub fn registered_dxvk_tool_display_name() -> Option<String> {
     if vdf_path.is_file()
         && let Ok(content) = fs::read_to_string(&vdf_path)
     {
-        return extract_vdf_display_name(&content).map(|s| s.to_string());
+        return extract_vdf_display_name(&content);
     }
     None
 }
@@ -88,7 +88,7 @@ pub fn registered_vkd3d_tool_display_name() -> Option<String> {
     if vdf_path.is_file()
         && let Ok(content) = fs::read_to_string(&vdf_path)
     {
-        return extract_vdf_display_name(&content).map(|s| s.to_string());
+        return extract_vdf_display_name(&content);
     }
     None
 }
@@ -104,7 +104,7 @@ pub fn registered_dxmt_tool_display_name() -> Option<String> {
     if vdf_path.is_file()
         && let Ok(content) = fs::read_to_string(&vdf_path)
     {
-        return extract_vdf_display_name(&content).map(|s| s.to_string());
+        return extract_vdf_display_name(&content);
     }
     None
 }
@@ -124,8 +124,29 @@ pub fn is_wine_runtime_tool_registered(tool_id: &str) -> bool {
         .is_file()
 }
 
-pub fn extract_vdf_display_name(content: &str) -> Option<&str> {
-    content.split("\"display_name\"").nth(1)?.split('"').nth(1)
+pub fn extract_vdf_display_name(content: &str) -> Option<String> {
+    use keyvalues_parser::Value;
+    let parsed = keyvalues_parser::parse(content).ok()?;
+    if parsed.key == "display_name" {
+        return parsed.value.get_str().map(str::to_owned);
+    }
+    if parsed.key != "compatibilitytools" {
+        return None;
+    }
+    let tools = parsed
+        .value
+        .get_obj()?
+        .get("compat_tools")?
+        .first()?
+        .get_obj()?;
+    tools.values().flatten().find_map(|value| {
+        value
+            .get_obj()?
+            .get("display_name")?
+            .iter()
+            .find_map(Value::get_str)
+            .map(str::to_owned)
+    })
 }
 
 pub fn registered_wine_tools() -> Vec<(String, String)> {
@@ -142,8 +163,7 @@ pub fn registered_wine_tools() -> Vec<(String, String)> {
                         && let Ok(content) = fs::read_to_string(&vdf_path)
                     {
                         let display_name = extract_vdf_display_name(&content)
-                            .unwrap_or(&folder_name)
-                            .to_string();
+                            .unwrap_or_else(|| folder_name.clone());
                         tools.push((folder_name, display_name));
                     }
                 }
@@ -508,10 +528,34 @@ mod tests {
   }
 }
 "#;
-        assert_eq!(extract_vdf_display_name(sample), Some("Nucleon (Wine 9.0)"));
+        assert_eq!(
+            extract_vdf_display_name(sample).as_deref(),
+            Some("Nucleon (Wine 9.0)")
+        );
 
         // Fallback test with non-standard whitespace / formatting
         let flat = "\"display_name\"\t\"Custom Wine Tool\"";
-        assert_eq!(extract_vdf_display_name(flat), Some("Custom Wine Tool"));
+        assert_eq!(
+            extract_vdf_display_name(flat).as_deref(),
+            Some("Custom Wine Tool")
+        );
+    }
+
+    #[test]
+    fn display_name_parser_decodes_escapes_and_ignores_comment_decoys() {
+        let name = "Nucleon \"Wine\\Metal\" & café 中文\nnext";
+        let contents = format!(
+            "// \"display_name\" \"wrong name\"\n{}",
+            vdf::generate_compatibilitytool_vdf("nucleon-wine", name)
+        );
+        assert_eq!(extract_vdf_display_name(&contents).as_deref(), Some(name));
+        for invalid in [
+            "// \"display_name\" \"comment only\"",
+            "\"other_metadata\" { \"display_name\" \"decoy\" }",
+            "\"compatibilitytools\" { \"compat_tools\" {",
+            "\"compatibilitytools\" { \"compat_tools\" \"not an object\" }",
+        ] {
+            assert_eq!(extract_vdf_display_name(invalid), None);
+        }
     }
 }

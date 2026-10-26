@@ -1,34 +1,45 @@
 use anyhow::{Context, Result, ensure};
+use keyvalues_parser::{Obj, Value, Vdf};
 use std::fs;
 use std::path::Path;
 
 pub fn generate_compatibilitytool_vdf(tool_name: &str, display_name: &str) -> String {
-    format!(
-        r#""compatibilitytools"
-{{
-  "compat_tools"
-  {{
-    "{tool_name}"
-    {{
-      "install_path" "."
-      "display_name" "{display_name}"
-      "from_oslist" "windows"
-      "to_oslist" "macos"
-    }}
-  }}
-}}
-"#
+    Vdf::new(
+        "compatibilitytools".into(),
+        vdf_object([(
+            "compat_tools",
+            vdf_object([(
+                tool_name,
+                vdf_object([
+                    ("install_path", Value::Str(".".into())),
+                    ("display_name", Value::Str(display_name.into())),
+                    ("from_oslist", Value::Str("windows".into())),
+                    ("to_oslist", Value::Str("macos".into())),
+                ]),
+            )]),
+        )]),
     )
+    .to_string()
 }
 
 pub fn generate_toolmanifest_vdf() -> String {
-    r#""manifest"
-{
-  "version" "2"
-  "commandline" "/run %verb%"
-}
-"#
+    Vdf::new(
+        "manifest".into(),
+        vdf_object([
+            ("version", Value::Str("2".into())),
+            ("commandline", Value::Str("/run %verb%".into())),
+        ]),
+    )
     .to_string()
+}
+
+fn vdf_object<'a>(fields: impl IntoIterator<Item = (&'a str, Value<'a>)>) -> Value<'a> {
+    Value::Obj(
+        fields
+            .into_iter()
+            .map(|(key, value)| (key.into(), vec![value]))
+            .collect::<Obj<'a>>(),
+    )
 }
 
 pub fn generate_run_script() -> String {
@@ -238,7 +249,7 @@ pub fn write_compatibilitytool_vdf(target: &Path) -> Result<()> {
     }
     let content =
         generate_compatibilitytool_vdf("nucleon", "Nucleon (Wine + Automatic Graphics Backend)");
-    fs::write(target, content).with_context(|| {
+    crate::fs_util::atomic_write_file(target, content).with_context(|| {
         format!(
             "Failed to write compatibilitytool.vdf at {}",
             target.display()
@@ -251,6 +262,77 @@ pub fn write_compatibilitytool_vdf(target: &Path) -> Result<()> {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    fn tool_fields(contents: &str, tool_name: &str) -> std::collections::BTreeMap<String, String> {
+        let parsed = keyvalues_parser::parse(contents).unwrap();
+        assert_eq!(parsed.key, "compatibilitytools");
+        let root = parsed.value.get_obj().unwrap();
+        assert_eq!(root.len(), 1);
+        let tools = root.get("compat_tools").unwrap()[0].get_obj().unwrap();
+        assert_eq!(tools.len(), 1);
+        let definitions = tools.get(tool_name).unwrap();
+        assert_eq!(definitions.len(), 1);
+        definitions[0]
+            .get_obj()
+            .unwrap()
+            .iter()
+            .map(|(key, values)| {
+                assert_eq!(values.len(), 1);
+                (key.to_string(), values[0].get_str().unwrap().to_owned())
+            })
+            .collect()
+    }
+
+    #[test]
+    fn compatibility_metadata_round_trips_special_characters_without_extra_fields() {
+        for tool_name in ["nucleon", "tool \"quoted\"\\café", "工具\tname"] {
+            for display_name in [
+                "Nucleon \"test\"",
+                "Wine & <Metal> / café 中文",
+                "C:\\Games\\new\\runtime\tline\nnext\rreturn",
+                "\"\n}\n\"injected\" \"value\" //",
+                "",
+            ] {
+                let contents = generate_compatibilitytool_vdf(tool_name, display_name);
+                let fields = tool_fields(&contents, tool_name);
+                assert_eq!(fields.len(), 4);
+                assert_eq!(fields["display_name"], display_name);
+                assert_eq!(fields["install_path"], ".");
+                assert_eq!(fields["from_oslist"], "windows");
+                assert_eq!(fields["to_oslist"], "macos");
+                assert_eq!(
+                    crate::steam::extract_vdf_display_name(&contents).as_deref(),
+                    Some(display_name)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn tool_manifest_keeps_the_exact_steam_command_and_schema() {
+        let contents = generate_toolmanifest_vdf();
+        let parsed = keyvalues_parser::parse(&contents).unwrap();
+        assert_eq!(parsed.key, "manifest");
+        let fields = parsed.value.get_obj().unwrap();
+        assert_eq!(fields.len(), 2);
+        assert_eq!(fields["version"][0].get_str(), Some("2"));
+        assert_eq!(fields["commandline"][0].get_str(), Some("/run %verb%"));
+    }
+
+    #[test]
+    fn published_tool_metadata_preserves_quoted_names() {
+        let temp = tempdir().unwrap();
+        let tool = installed_tool(temp.path());
+        let runner = temp.path().join("runner-source");
+        let name = "nucleon-\"quoted\"";
+        let display = "Nucleon \"Wine\\Metal\" & café";
+        write_tool_bundle(&tool, name, display, &runner).unwrap();
+        let contents = fs::read_to_string(tool.join("compatibilitytool.vdf")).unwrap();
+        let fields = tool_fields(&contents, name);
+        assert_eq!(fields.len(), 4);
+        assert_eq!(fields["display_name"], display);
+        no_staging_directories(temp.path());
+    }
 
     fn installed_tool(root: &Path) -> std::path::PathBuf {
         let runner = root.join("runner-source");
@@ -482,12 +564,15 @@ mod tests {
         .unwrap();
 
         let vdf_content = fs::read_to_string(tool_dir.join("compatibilitytool.vdf")).unwrap();
-        assert!(vdf_content.contains(r#""nucleon-kosmickrisp""#));
-        assert!(
-            vdf_content.contains(r#""display_name" "Nucleon (Wine + Mesa KosmicKrisp Vulkan)""#)
+        let fields = tool_fields(&vdf_content, "nucleon-kosmickrisp");
+        assert_eq!(fields.len(), 4);
+        assert_eq!(
+            fields["display_name"],
+            "Nucleon (Wine + Mesa KosmicKrisp Vulkan)"
         );
-        assert!(vdf_content.contains(r#""from_oslist" "windows""#));
-        assert!(vdf_content.contains(r#""to_oslist" "macos""#));
+        assert_eq!(fields["install_path"], ".");
+        assert_eq!(fields["from_oslist"], "windows");
+        assert_eq!(fields["to_oslist"], "macos");
 
         let run_content = fs::read_to_string(tool_dir.join("run")).unwrap();
         assert!(run_content.contains(r#"export NUCLEON_ENGINE="kosmickrisp""#));

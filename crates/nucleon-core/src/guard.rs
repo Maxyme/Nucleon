@@ -315,50 +315,45 @@ pub fn run_guard_once(hook_source: Option<&Path>) -> Result<HealResult> {
 }
 
 /// Generates the launchd LaunchAgent XML plist configuration.
-pub fn generate_launchagent_plist(binary_path: &Path) -> String {
-    let home = paths::home_dir();
-    let home_str = home.to_string_lossy();
-    let bin_str = binary_path.to_string_lossy();
-    let log_path = paths::guard_log();
-    let log_str = log_path.to_string_lossy();
+pub fn generate_launchagent_plist(binary_path: &Path) -> Result<String> {
+    launchagent_plist_for_paths(binary_path, &paths::steam_data_dir(), &paths::guard_log())
+}
 
-    format!(
-        r#"<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-	<key>Label</key>
-	<string>{label}</string>
-	<key>ProgramArguments</key>
-	<array>
-		<string>{bin}</string>
-		<string>guard</string>
-		<string>run</string>
-	</array>
-	<key>RunAtLoad</key>
-	<true/>
-	<key>ThrottleInterval</key>
-	<integer>10</integer>
-	<key>WatchPaths</key>
-	<array>
-		<string>/Applications/Steam.app/Contents/Info.plist</string>
-		<string>/Applications/Steam.app/Contents/MacOS</string>
-		<string>{home}/Library/Application Support/Steam/package</string>
-		<string>{home}/Library/Application Support/Steam/Steam.AppBundle/Steam</string>
-		<string>{home}/Library/Application Support/Steam/Steam.AppBundle/Steam/Contents/MacOS/steamui</string>
-	</array>
-	<key>StandardOutPath</key>
-	<string>{log}</string>
-	<key>StandardErrorPath</key>
-	<string>{log}</string>
-</dict>
-</plist>
-"#,
-        label = GUARD_LABEL,
-        bin = bin_str,
-        home = home_str,
-        log = log_str
-    )
+fn launchagent_plist_for_paths(
+    binary_path: &Path,
+    steam_data: &Path,
+    log: &Path,
+) -> Result<String> {
+    #[derive(Serialize)]
+    #[serde(rename_all = "PascalCase")]
+    struct LaunchAgent<'a> {
+        label: &'static str,
+        program_arguments: (&'a Path, &'static str, &'static str),
+        run_at_load: bool,
+        throttle_interval: u64,
+        watch_paths: [PathBuf; 5],
+        standard_out_path: &'a Path,
+        standard_error_path: &'a Path,
+    }
+
+    let agent = LaunchAgent {
+        label: GUARD_LABEL,
+        program_arguments: (binary_path, "guard", "run"),
+        run_at_load: true,
+        throttle_interval: 10,
+        watch_paths: [
+            paths::steam_info_plist(),
+            paths::steam_app().join("Contents/MacOS"),
+            steam_data.join("package"),
+            steam_data.join("Steam.AppBundle/Steam"),
+            steam_data.join("Steam.AppBundle/Steam/Contents/MacOS/steamui"),
+        ],
+        standard_out_path: log,
+        standard_error_path: log,
+    };
+    let mut xml = Vec::new();
+    plist::to_writer_xml(&mut xml, &agent).context("Serialize Steam Update Guard LaunchAgent")?;
+    String::from_utf8(xml).context("LaunchAgent XML is not UTF-8")
 }
 
 /// Checks if the LaunchAgent plist file exists in ~/Library/LaunchAgents.
@@ -409,7 +404,7 @@ pub fn install_launchagent(binary_path: Option<&Path>) -> Result<PathBuf> {
         paths::guard_bin()
     };
 
-    let plist_content = generate_launchagent_plist(&target_bin);
+    let plist_content = generate_launchagent_plist(&target_bin)?;
     let plist_path = paths::steam_guard_plist();
 
     if let Some(parent) = plist_path.parent() {
@@ -417,7 +412,7 @@ pub fn install_launchagent(binary_path: Option<&Path>) -> Result<PathBuf> {
             .with_context(|| format!("Failed to create {}", parent.display()))?;
     }
 
-    fs::write(&plist_path, plist_content).with_context(|| {
+    atomic_write_file(&plist_path, plist_content).with_context(|| {
         format!(
             "Failed to write LaunchAgent plist to {}",
             plist_path.display()
@@ -573,15 +568,81 @@ mod tests {
     #[test]
     fn test_generate_launchagent_plist() {
         let bin = PathBuf::from("/Users/test/nucleon");
-        let plist = generate_launchagent_plist(&bin);
+        let xml = generate_launchagent_plist(&bin).unwrap();
+        let value = plist::Value::from_reader_xml(xml.as_bytes()).unwrap();
+        let agent = value.as_dictionary().unwrap();
+        assert_eq!(agent.len(), 7);
+        assert_eq!(agent["Label"].as_string(), Some(GUARD_LABEL));
+        assert_eq!(agent["RunAtLoad"].as_boolean(), Some(true));
+        assert_eq!(agent["ThrottleInterval"].as_unsigned_integer(), Some(10));
+        let arguments = agent["ProgramArguments"].as_array().unwrap();
+        assert_eq!(arguments.len(), 3);
+        assert_eq!(arguments[0].as_string(), bin.to_str());
+        assert_eq!(arguments[1].as_string(), Some("guard"));
+        assert_eq!(arguments[2].as_string(), Some("run"));
+        let watches = agent["WatchPaths"].as_array().unwrap();
+        assert_eq!(watches.len(), 5);
+        assert_eq!(
+            watches[0].as_string(),
+            Some("/Applications/Steam.app/Contents/Info.plist")
+        );
+        assert_eq!(
+            agent["StandardOutPath"].as_string(),
+            paths::guard_log().to_str()
+        );
+        assert_eq!(agent["StandardErrorPath"], agent["StandardOutPath"]);
+    }
 
-        assert!(plist.contains("<string>com.nucleon.steam-guard</string>"));
-        assert!(plist.contains("<string>/Users/test/nucleon</string>"));
-        assert!(plist.contains("<string>guard</string>"));
-        assert!(plist.contains("<string>run</string>"));
-        assert!(plist.contains("<key>ThrottleInterval</key>"));
-        assert!(plist.contains("<key>WatchPaths</key>"));
-        assert!(plist.contains("<string>/Applications/Steam.app/Contents/Info.plist</string>"));
+    #[test]
+    fn launchagent_round_trips_special_characters_in_all_configurable_paths() {
+        let steam = Path::new("/Users/A & B/Library/<Steam> \"中文\"");
+        let log = Path::new("/tmp/Logs & <errors>/café \"log\".txt");
+        for bin in [
+            "/tmp/Nucleon & Tools/nucleon",
+            "/tmp/<tool> \"quoted\"/nucleon",
+            "/tmp/café 中文/nucleon",
+            "/tmp/tab\tand\nnewline/nucleon",
+        ] {
+            let xml = launchagent_plist_for_paths(Path::new(bin), steam, log).unwrap();
+            let value = plist::Value::from_reader_xml(xml.as_bytes()).unwrap();
+            let agent = value.as_dictionary().unwrap();
+            assert_eq!(agent.len(), 7);
+            assert_eq!(
+                agent["ProgramArguments"].as_array().unwrap()[0].as_string(),
+                Some(bin)
+            );
+            assert_eq!(agent["StandardOutPath"].as_string(), log.to_str());
+            assert_eq!(agent["StandardErrorPath"].as_string(), log.to_str());
+            let watches = agent["WatchPaths"].as_array().unwrap();
+            assert_eq!(watches.len(), 5);
+            for (value, expected) in watches[2..].iter().zip([
+                steam.join("package"),
+                steam.join("Steam.AppBundle/Steam"),
+                steam.join("Steam.AppBundle/Steam/Contents/MacOS/steamui"),
+            ]) {
+                assert_eq!(value.as_string(), expected.to_str());
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn launchagent_rejects_non_utf8_paths_instead_of_silently_replacing_them() {
+        use std::os::unix::ffi::OsStringExt;
+        let invalid = PathBuf::from(std::ffi::OsString::from_vec(b"/tmp/invalid-\xff".to_vec()));
+        let valid = Path::new("/tmp/valid");
+        for (binary, steam, log) in [
+            (invalid.as_path(), valid, valid),
+            (valid, invalid.as_path(), valid),
+            (valid, valid, invalid.as_path()),
+        ] {
+            let error = launchagent_plist_for_paths(binary, steam, log).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("Serialize Steam Update Guard LaunchAgent")
+            );
+        }
     }
 
     #[test]
