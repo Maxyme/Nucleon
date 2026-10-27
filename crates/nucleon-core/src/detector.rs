@@ -112,6 +112,7 @@ pub enum DetectionEvidence {
     Imports,
     DelayImports,
     DllNameHeuristic,
+    UnityDefault,
     None,
 }
 
@@ -121,6 +122,7 @@ impl DetectionEvidence {
             Self::Imports => "PE imports",
             Self::DelayImports => "PE delay-load imports",
             Self::DllNameHeuristic => "DLL-name heuristic",
+            Self::UnityDefault => "Unity Windows default (DirectX 11)",
             Self::None => "No graphics dependency found",
         }
     }
@@ -227,6 +229,10 @@ pub fn detect_target_engine(exe_path: &Path) -> GraphicsApiInfo {
         return info.clone();
     }
 
+    if let Some(info) = unity_default_graphics(exe_path) {
+        return info;
+    }
+
     // 2. If unknown (e.g. wrapper launcher), scan neighboring and subdirectories for game binaries
     if let Some(parent) = exe_path.parent()
         && let Some(info) = scan_directory_for_graphics_api(parent, 2)
@@ -235,6 +241,45 @@ pub fn detect_target_engine(exe_path: &Path) -> GraphicsApiInfo {
     }
 
     primary.unwrap_or_else(|| classify_libraries(&[]))
+}
+
+// Unity's Windows player supports several APIs in the same DLL. Its DLL names alone do not
+// identify the API selected for a game; DirectX 11 is the usual Windows default. Treat this
+// as a fallback only, leaving an explicit game graphics setting free to override it.
+fn unity_default_graphics(exe_path: &Path) -> Option<GraphicsApiInfo> {
+    let exe = fs::read(exe_path).ok()?;
+    let (is64, libraries) = match object::File::parse(exe.as_slice()).ok()? {
+        object::File::Pe32(file) => (false, pe_libraries(&file)),
+        object::File::Pe64(file) => (true, pe_libraries(&file)),
+        _ => return None,
+    };
+    if !libraries.iter().any(|(name, _)| name == "unityplayer.dll") {
+        return None;
+    }
+    let player = fs::read_dir(exe_path.parent()?)
+        .ok()?
+        .flatten()
+        .find(|entry| entry.file_name().eq_ignore_ascii_case("UnityPlayer.dll"))?
+        .path();
+    let data = fs::read(&player).ok()?;
+    let matches_arch = matches!(
+        (object::File::parse(data.as_slice()).ok()?, is64),
+        (object::File::Pe32(_), false) | (object::File::Pe64(_), true)
+    );
+    if !matches_arch
+        || !graphics_dll_hints(&data)
+            .iter()
+            .any(|(name, _)| name == "d3d11.dll")
+    {
+        return None;
+    }
+    Some(GraphicsApiInfo {
+        api: GraphicsApi::DirectX11,
+        engine: TargetEngine::Gptk,
+        detected_dll: Some("d3d11.dll".into()),
+        evidence: DetectionEvidence::UnityDefault,
+        binary: Some(player),
+    })
 }
 
 pub fn inspect_pe_file(path: &Path) -> Result<GraphicsApiInfo, anyhow::Error> {
@@ -839,6 +884,40 @@ mod tests {
         let detected = detect_target_engine(&wrapper);
         assert_eq!(detected.api, GraphicsApi::DirectX10);
         assert_eq!(detected.binary, Some(game.join("game.exe")));
+    }
+
+    #[test]
+    fn unity_player_defaults_to_dx11_only_for_matching_linked_player() {
+        let dir = tempfile::tempdir().unwrap();
+        let game = dir.path().join("game.exe");
+        let player = dir.path().join("UnityPlayer.dll");
+        fs::write(&game, pe_with_libraries(true, &["UnityPlayer.dll"], &[])).unwrap();
+        assert_eq!(detect_target_engine(&game).api, GraphicsApi::Unknown);
+
+        let mut unity = pe_with_libraries(true, &["kernel32.dll"], &[]);
+        unity.extend_from_slice(b"\0d3d12.dll\0d3d11.dll\0vulkan-1.dll\0");
+        fs::write(&player, unity).unwrap();
+        let info = detect_target_engine(&game);
+        assert_eq!(info.api, GraphicsApi::DirectX11);
+        assert_eq!(info.evidence, DetectionEvidence::UnityDefault);
+        assert_eq!(info.binary.as_deref(), Some(player.as_path()));
+
+        let mut other_arch = pe_with_libraries(false, &["kernel32.dll"], &[]);
+        other_arch.extend_from_slice(b"\0d3d11.dll\0");
+        fs::write(&player, other_arch).unwrap();
+        assert_eq!(detect_target_engine(&game).api, GraphicsApi::Unknown);
+        fs::write(&player, pe_with_libraries(true, &["kernel32.dll"], &[])).unwrap();
+        assert_eq!(detect_target_engine(&game).api, GraphicsApi::Unknown);
+
+        fs::write(&player, pe_with_libraries(true, &["d3d11.dll"], &[])).unwrap();
+        fs::write(&game, pe_with_libraries(true, &["kernel32.dll"], &[])).unwrap();
+        assert_eq!(detect_target_engine(&game).api, GraphicsApi::Unknown);
+        fs::write(
+            &game,
+            pe_with_libraries(true, &["UnityPlayer.dll", "d3d12.dll"], &[]),
+        )
+        .unwrap();
+        assert_eq!(detect_target_engine(&game).api, GraphicsApi::DirectX12);
     }
 
     #[test]

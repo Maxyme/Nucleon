@@ -192,14 +192,15 @@ pub fn install_compatibility_tool(runner_bin: &Path) -> Result<()> {
     let wine_root = None;
 
     // 1. Register Automatic tool: Nucleon (Wine + Automatic Graphics Backend)
-    // Automatic routing selects installed Metal or Vulkan backends, with WineD3D as a fallback.
+    // Leave the engine unset so per-game profiles can select a backend. With no profile or
+    // environment override the runner uses automatic routing by default.
     let auto_tool_dir = paths::steam_compat_tools_dir();
     vdf::write_tool_bundle_with_wine(
         &auto_tool_dir,
         "nucleon",
         "Nucleon (Wine + Automatic Graphics Backend)",
         runner_bin,
-        Some("auto"),
+        None,
         wine_root,
     )?;
     log::info!("Registered Steam compatibility tool: Nucleon (Wine + Automatic Graphics Backend)");
