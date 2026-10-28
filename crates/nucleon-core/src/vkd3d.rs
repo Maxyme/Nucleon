@@ -53,7 +53,7 @@ pub fn custom_vkd3d_path_file() -> PathBuf {
 }
 
 /// Locates a VKD3D-Proton bundle from environment, configured custom path,
-/// Nucleon support directory, or well-known system/Proton paths.
+/// Nucleon support directory, or well-known system paths.
 pub fn find_vkd3d_proton() -> Option<Vkd3dProtonBundle> {
     // 1. Explicit environment variables: VKD3D_PROTON_PATH then VKD3D_PATH
     let env_paths = ["VKD3D_PROTON_PATH", "VKD3D_PATH"]
@@ -91,29 +91,6 @@ fn find_vkd3d_proton_with(env_paths: &[PathBuf]) -> Option<Vkd3dProtonBundle> {
 
     if let Some(bundle) = crate::graphics_bundle::find(system_candidates, inspect_candidate_dir) {
         return Some(bundle);
-    }
-
-    // 5. Scan Steam Proton installs for vkd3d-proton if present
-    let steam_common = paths::home_dir().join("Library/Application Support/Steam/steamapps/common");
-    if steam_common.is_dir()
-        && let Ok(entries) = fs::read_dir(&steam_common)
-    {
-        for entry in entries.flatten() {
-            let p = entry.path();
-            let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
-            if name.starts_with("Proton") {
-                let vkd3d_dirs = [
-                    p.join("dist/lib64/wine/vkd3d-proton"),
-                    p.join("dist/lib/wine/vkd3d-proton"),
-                    p.join("dist/share/default_pfx/drive_c/windows/system32"),
-                ];
-                for vd in &vkd3d_dirs {
-                    if let Some(bundle) = inspect_candidate_dir(vd) {
-                        return Some(bundle);
-                    }
-                }
-            }
-        }
     }
 
     None

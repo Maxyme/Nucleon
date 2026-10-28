@@ -151,7 +151,7 @@ pub fn custom_dxvk_path_file() -> PathBuf {
 }
 
 /// Locates a DXVK bundle from environment, configured custom path,
-/// Nucleon support directory, Heroic tools, or well-known system/Proton paths.
+/// Nucleon support directory, Heroic tools, or well-known system paths.
 pub fn find_dxvk() -> Option<DxvkBundle> {
     if let Some(bundle) = crate::graphics_bundle::configured(
         &std::env::var("DXVK_PATH")
@@ -186,29 +186,6 @@ pub fn find_dxvk() -> Option<DxvkBundle> {
     ];
     if let Some(bundle) = crate::graphics_bundle::find(candidates, inspect_candidate_dir) {
         return Some(bundle);
-    }
-
-    // 6. Scan Steam Proton installs for dxvk if present
-    let steam_roots = [
-        paths::home_dir().join("Library/Application Support/Steam/steamapps/common"),
-        paths::home_dir().join(".local/share/Steam/steamapps/common"),
-    ];
-    for root in &steam_roots {
-        if let Ok(entries) = fs::read_dir(root) {
-            for entry in entries.flatten() {
-                let p = entry.path();
-                let name = p
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("")
-                    .to_lowercase();
-                if (name.contains("proton") || name.contains("dxvk"))
-                    && let Some(bundle) = inspect_candidate_dir(&p)
-                {
-                    return Some(bundle);
-                }
-            }
-        }
     }
 
     None

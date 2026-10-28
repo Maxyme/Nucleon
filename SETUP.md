@@ -134,6 +134,9 @@ nucleon kosmickrisp set-path /path/to/driver-or-icd
 These are alternatives, not a required sequence. Automatically fetched upstream
 releases may differ from the macOS builds used in confirmed profiles. Vulkan
 drivers must match Wine's host architecture and the backend's feature needs.
+Steam/Proton installations are not searched for graphics libraries. To use a
+particular external build, select its directory explicitly with `set-path` or a
+per-game profile.
 
 Nucleon's Automatic engine detects the game's graphics API and checks
 installed backends. Its default preference is GPTK then VKD3D-Proton for DX12;

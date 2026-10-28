@@ -1,6 +1,5 @@
 use crate::paths;
 use anyhow::Result;
-use std::fs;
 use std::path::{Path, PathBuf};
 
 /// Default release version from the embedded download catalog.
@@ -51,7 +50,7 @@ pub fn custom_d7vk_path_file() -> PathBuf {
 }
 
 /// Locates a D7VK bundle from environment, configured custom path,
-/// Nucleon support directory, or well-known system/Proton paths.
+/// Nucleon support directory, or well-known system paths.
 pub fn find_d7vk() -> Option<D7vkBundle> {
     // 1. Explicit environment variable: D7VK_PATH
     let env_paths = ["D7VK_PATH"]
@@ -87,29 +86,6 @@ fn find_d7vk_with(env_paths: &[PathBuf]) -> Option<D7vkBundle> {
     ];
     if let Some(bundle) = crate::graphics_bundle::find(candidates, inspect_candidate_dir) {
         return Some(bundle);
-    }
-
-    // 5. Scan Steam Proton installs for d7vk if present
-    let steam_roots = [
-        paths::home_dir().join("Library/Application Support/Steam/steamapps/common"),
-        paths::home_dir().join(".local/share/Steam/steamapps/common"),
-    ];
-    for root in &steam_roots {
-        if let Ok(entries) = fs::read_dir(root) {
-            for entry in entries.flatten() {
-                let p = entry.path();
-                let name = p
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("")
-                    .to_lowercase();
-                if (name.contains("proton") || name.contains("d7vk"))
-                    && let Some(bundle) = inspect_candidate_dir(&p)
-                {
-                    return Some(bundle);
-                }
-            }
-        }
     }
 
     None
@@ -200,6 +176,7 @@ pub fn fetch_d7vk(version: Option<&str>, dest_dir: Option<&Path>) -> Result<D7vk
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     use tempfile::tempdir;
 
     #[test]
