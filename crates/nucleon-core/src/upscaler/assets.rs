@@ -39,7 +39,7 @@ pub(crate) fn read_provider(path: &Path) -> Result<Provider> {
     }
     let required: &[&str] = match p.provider.as_str() {
         "bridge" => &["nvngx.dll"],
-        "native" => &[], // Native manifests also cover external shader compiler identities.
+        "native" | "native412" => &[], // Native manifests also cover external shader compiler identities.
         "stock" | "metalfx" => &["OptiScaler.dll", "OptiScaler.ini"],
         _ => anyhow::bail!("Unknown provider manifest"),
     };
@@ -53,7 +53,7 @@ pub(crate) fn read_provider(path: &Path) -> Result<Provider> {
         let bytes = fs::read(root.join("nvngx.dll"))?;
         let names = super::ngx::exports(&bytes)?;
         super::ngx::verify_forwarder(&bytes, &names)?;
-    } else if p.provider != "native" {
+    } else if !matches!(p.provider.as_str(), "native" | "native412") {
         ensure!(
             crate::runtime_checks::pe(Some(&root.join("OptiScaler.dll")), true),
             "Provider is not an ordinary x64 OptiScaler DLL"
@@ -84,7 +84,14 @@ fn builder_identities() -> Result<&'static builders::Builders> {
     Ok(&BUILDERS)
 }
 
+#[cfg(test)]
 pub(crate) fn native_key(original_digest: &str) -> Result<String> {
+    native_model_key(original_digest, super::native::Model::Fsr411)
+}
+pub(super) fn native_model_key(
+    original_digest: &str,
+    model: super::native::Model,
+) -> Result<String> {
     use sha2::{Digest, Sha256};
     let identities = builder_identities()?;
     let adapter = format!(
@@ -96,12 +103,11 @@ pub(crate) fn native_key(original_digest: &str) -> Result<String> {
                 .contents()
         )
     );
-    crate::staging::key(&[
-        original_digest,
-        catalog().fsr_4.commit,
-        identities.native,
-        &adapter,
-    ])
+    let mut inputs = vec![original_digest, model.commit(), identities.native, &adapter];
+    if model == super::native::Model::Fsr412 {
+        inputs.push(catalog().fsr_412.sha_256);
+    }
+    crate::staging::key(&inputs)
 }
 pub(crate) fn bridge_key(original_digest: &str) -> Result<String> {
     let identities = builder_identities()?;

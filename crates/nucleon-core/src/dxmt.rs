@@ -227,10 +227,6 @@ pub fn find_dxmt() -> Option<DxmtBundle> {
     None
 }
 
-pub fn is_dxmt_installed() -> bool {
-    find_dxmt().is_some()
-}
-
 pub fn set_custom_dxmt_path(path: &Path) -> Result<DxmtBundle> {
     crate::graphics_bundle::register(
         path,

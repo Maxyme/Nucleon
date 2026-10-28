@@ -4,7 +4,7 @@ use anyhow::{Context, Result, bail};
 use nucleon_core::configuration as config;
 use nucleon_core::launch::{GraphicsComponents, LaunchPlan};
 use nucleon_core::prefix_session::PrefixSession;
-use nucleon_core::profile::GameProfile as LaunchOverride;
+use nucleon_core::profile::GameProfile;
 use nucleon_core::runtime::ResolvedRuntime;
 use nucleon_core::{paths, runner};
 use std::env;
@@ -26,7 +26,7 @@ pub use standalone::{ResolvedStandalone, StandaloneRequest, resolve_standalone, 
 
 /// Resolve once so compatibility checks and execution use the same Wine.
 fn resolve_wine_override(
-    game_profile: &LaunchOverride,
+    game_profile: &GameProfile,
     profile_source: &str,
 ) -> Result<Option<PathBuf>> {
     if let Some(value) = &game_profile.wine {
@@ -36,36 +36,18 @@ fn resolve_wine_override(
     // A stale saved global selection must not silently select a different runtime.
     let saved = nucleon_core::wine::active_wine_selection_file();
     if let Some(value) = config::optional_file(&saved)? {
-        let value = value.trim();
-        if value.is_empty() || nucleon_core::wine::resolve_wine_runtime_by_query(value).is_none() {
-            return Err(config::invalid(
-                &saved.display().to_string(),
-                value,
-                "saved Wine runtime was not found",
-                "Run 'nucleon wine list', then 'nucleon wine use <name>', or 'nucleon wine reset'.",
-            ));
-        }
-        return Ok(nucleon_core::wine::resolve_wine_runtime_by_query(value).map(|r| r.root));
+        let runtime = nucleon_core::runtime_selection::named(value.trim())
+            .with_context(|| format!("Invalid saved Wine selection {}; run 'nucleon wine use <runtime>' or 'nucleon wine reset'", saved.display()))?;
+        return Ok(Some(runtime.root));
     }
-    config::component_path(
-        &[],
-        &nucleon_core::wine::custom_wine_path_file(),
-        "Wine installation was not found",
-        "nucleon wine clear-path",
-        |path| nucleon_core::wine::inspect_wine_dir(path, None, None).is_some(),
-    )?;
     Ok(None)
 }
 
-fn load_launch_settings(path: &Path) -> Result<Option<LaunchOverride>> {
-    LaunchOverride::load(path)
-}
-
 fn requested_engine(
-    temporary: Option<&LaunchOverride>,
+    temporary: Option<&GameProfile>,
     temporary_source: &str,
     environment: Option<&str>,
-    profile: &LaunchOverride,
+    profile: &GameProfile,
     profile_source: &str,
 ) -> Result<Option<nucleon_core::detector::TargetEngine>> {
     if let Some(value) = temporary.and_then(|p| p.engine.as_deref()) {
@@ -88,9 +70,9 @@ fn environment_boolean(name: &str) -> Result<Option<bool>> {
 }
 
 fn requested_upscaler(
-    temporary: Option<&LaunchOverride>,
+    temporary: Option<&GameProfile>,
     environment: Option<&str>,
-    profile: &LaunchOverride,
+    profile: &GameProfile,
 ) -> Result<Option<nucleon_core::upscaler::Settings>> {
     if let Some(settings) = temporary.and_then(|p| p.upscaler.clone()) {
         return Ok(Some(settings));
@@ -104,7 +86,7 @@ fn requested_upscaler(
 }
 
 fn validate_graphics_paths(
-    profile: &LaunchOverride,
+    profile: &GameProfile,
     source: &str,
     runtime: Option<&ResolvedRuntime>,
     engine: Option<nucleon_core::detector::TargetEngine>,
@@ -247,32 +229,6 @@ fn select_automatic_engine(
         GraphicsBackend::Dxmt => Ok(TargetEngine::Dxmt),
         GraphicsBackend::Dxvk => Ok(TargetEngine::Dxvk),
         GraphicsBackend::KosmicKrisp => Ok(TargetEngine::KosmicKrisp),
-    }
-}
-
-/// Determines whether to launch the game through the prefix's `steam.exe` client shim or directly.
-///
-/// Steamworks imports do not determine the launch protocol: 64-bit games such as DiRT Rally 2.0
-/// must launch directly even though they talk to Steam. The default preserves the existing legacy
-/// wrapper for 32-bit titles and direct execution for 64-bit titles, independently of graphics.
-/// Explicit user overrides (via CLI `use_steam_shim` or `NUCLEON_STEAM_SHIM` env var) take precedence.
-pub fn determine_wine_args(
-    game_args: &[String],
-    default_use_shim: bool,
-    steam_shim_exists: bool,
-    user_shim_override: Option<bool>,
-) -> Vec<String> {
-    let use_shim = match user_shim_override {
-        Some(explicit) => explicit && steam_shim_exists,
-        None => default_use_shim && steam_shim_exists,
-    };
-
-    if use_shim {
-        let mut wrapped = vec!["C:\\Program Files (x86)\\Steam\\steam.exe".to_string()];
-        wrapped.extend(game_args.to_vec());
-        wrapped
-    } else {
-        game_args.to_vec()
     }
 }
 
@@ -459,8 +415,8 @@ pub fn is_wine_game_process_line(
 
     let args_part = trimmed[pid_str.len()..].trim().to_lowercase();
 
-    // Ignore nucleon-runner and nucleon CLI
-    if args_part.contains("nucleon-runner") || args_part.contains("/nucleon ") {
+    // Ignore the supervising Nucleon CLI
+    if args_part.contains("/nucleon ") {
         return false;
     }
 
@@ -518,10 +474,6 @@ pub fn wine_process_pids(prefix: &Path) -> Vec<i32> {
         .collect()
 }
 
-pub fn is_wine_game_process_running(runner_dir: &Path, target_exe: &Path, prefix: &Path) -> bool {
-    is_wine_process_running(runner_dir, target_exe, prefix, false)
-}
-
 fn is_wine_process_running(
     runner_dir: &Path,
     target_exe: &Path,
@@ -574,21 +526,6 @@ struct RunOutcome {
     status: &'static str,
 }
 
-pub fn run_with_args(args: &[String]) -> Result<()> {
-    if args
-        .get(1)
-        .is_some_and(|verb| verb == "check-app-compatibility")
-    {
-        return Ok(());
-    }
-    let mut session = RunSession::create(args)?;
-    log_runner(&format!("Launch logs: {}", session.directory.display()));
-    let result = session
-        .configure()
-        .and_then(|()| run_with_args_inner(args, &mut session));
-    finish_run(&mut session, result)
-}
-
 fn finish_run(session: &mut RunSession, result: Result<RunOutcome>) -> Result<()> {
     match result {
         Ok(outcome) => {
@@ -612,75 +549,28 @@ fn finish_run(session: &mut RunSession, result: Result<RunOutcome>) -> Result<()
     }
 }
 
-fn run_with_args_inner(args: &[String], session: &mut RunSession) -> Result<RunOutcome> {
-    if args.len() < 2 {
-        bail!("Usage: nucleon-runner <verb> [args...]");
-    }
-    let verb = &args[1];
-    for arg in args {
-        if arg.contains("iscriptevaluator.exe") {
-            log_runner("Intercepted iscriptevaluator.exe, exiting cleanly");
-            return Ok(RunOutcome {
-                code: 0,
-                status: "skipped",
-            });
-        }
-    }
-
-    // Parse Steam compatibility environment
-    let compat_appid = session.appid.clone();
-    let compat_data_path = env::var_os("STEAM_COMPAT_DATA_PATH")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| paths::support_dir().join("default_prefix"));
-    // WINEPREFIX is deliberately not exported into this process' environment: every Wine and
-    // wineserver invocation receives it explicitly in its own environment map, which keeps the
-    // value from leaking to unrelated children (and mutating env while other threads read it).
-
-    // Determine target executable and arguments
-    // Steam invokes: nucleon-runner run <exe_path> [game_args...]
-    let game_args: Vec<String> = if args.len() > 2 {
-        args[2..].to_vec()
-    } else {
-        vec![]
-    };
-
-    if game_args.is_empty() {
-        log_runner("No game executable specified to run, exiting.");
-        return Ok(RunOutcome {
-            code: 0,
-            status: "skipped",
-        });
-    }
-
-    let target_exe = PathBuf::from(&game_args[0]);
+fn resolve_steam_launch(request: &SteamRequest) -> Result<ResolvedLaunch> {
+    let appid = request.appid.to_string();
+    let data_path = request.data_path.clone();
+    let target_exe = request.executable.clone();
+    let mut game_args = vec![
+        target_exe
+            .to_str()
+            .context("Game path must be UTF-8")?
+            .to_owned(),
+    ];
+    game_args.extend(request.arguments.clone());
 
     // The app id reaches the game only through its environment map (SteamAppId/SteamGameId below).
     // Writing `steam_appid.txt` next to the executable must never be done: it switches Steamworks
     // into standalone mode, which Denuvo-protected titles reject by raising a modal
     // "Application load error 3:0000065432" dialog during startup. The game then blocks forever in
     // that dialog with no input pump, presenting as an engine-independent hang before Direct3D is
-    // ever touched. It also silently mutates a Steam-managed game directory.
+    // ever touched. It also silently mutates the game installation.
 
-    let explicit_profile = config::environment("NUCLEON_GAME_PROFILE")?.map(PathBuf::from);
-    let override_path = compat_appid
-        .as_ref()
-        .map(|id| paths::support_dir().join(format!("launch_override_{id}.json")));
-    let override_source = override_path
-        .as_ref()
-        .map(|p| p.display().to_string())
-        .unwrap_or_else(|| "launch override".into());
-    let launch_override = if explicit_profile.is_some() {
-        None
-    } else {
-        override_path
-            .as_deref()
-            .map(load_launch_settings)
-            .transpose()?
-            .flatten()
-    };
-    let cli_request = launch_override
-        .as_ref()
-        .is_some_and(|p| p.wine.is_some() || p.emulator.is_some());
+    let request_settings = &request.overrides;
+    let override_source = "launch request";
+    let cli_request = request_settings.wine.is_some() || request_settings.emulator.is_some();
     let environment_wine = if cli_request {
         None
     } else {
@@ -697,67 +587,31 @@ fn run_with_args_inner(args: &[String], session: &mut RunSession) -> Result<RunO
     } else {
         config::environment("NUCLEON_EMULATOR")?
     };
-    let emulator = launch_override
-        .as_ref()
-        .and_then(|p| p.emulator)
-        .or(emulator_env
-            .as_deref()
-            .map(str::parse)
-            .transpose()
-            .context("Invalid NUCLEON_EMULATOR")?);
-    let wine_request = launch_override
-        .as_ref()
-        .and_then(|p| p.wine.as_deref())
+    let emulator = request_settings.emulator.or(emulator_env
+        .as_deref()
+        .map(str::parse)
+        .transpose()
+        .context("Invalid NUCLEON_EMULATOR")?);
+    let wine_request = request_settings
+        .wine
+        .as_deref()
         .or(environment_wine.as_ref().map(|(_, value)| value.as_str()));
     let request_source = environment_wine
         .as_ref()
         .map(|(name, _)| name.as_str())
-        .unwrap_or(&override_source);
+        .unwrap_or(override_source);
     let explicit_runtime = nucleon_core::runtime_selection::resolve(wine_request, emulator)
         .with_context(|| format!("Invalid runtime request from {request_source}"))?;
     let explicit_runtime_request = explicit_runtime.is_some();
-    // An explicit launch request supersedes tool defaults, including a stale FEX pin.
-    let fex_selection = if explicit_runtime_request {
-        None
-    } else {
-        config::environment(nucleon_core::steam::fex::SELECTION_ENV)?
-            .map(|path| nucleon_core::steam::fex::load_selection(Path::new(&path)))
-            .transpose()?
-    };
-    let mut selected_runtime = explicit_runtime.or(fex_selection);
+    let mut selected_runtime = explicit_runtime;
     let mut is_fex = selected_runtime
         .as_ref()
         .is_some_and(|r| r.mode == nucleon_core::runtime::ExecutionMode::Arm64Fex);
     let loaded_native_profile = is_fex;
-    let mut profile_path = explicit_profile.clone().or_else(|| {
-        compat_appid
-            .as_ref()
-            .map(|id| paths::game_profiles_dir(is_fex).join(format!("{id}.json")))
-    });
-    let mut profile_source = profile_path
-        .as_ref()
-        .map(|p| p.display().to_string())
-        .unwrap_or_else(|| "game profile".into());
-    let loaded_profile = profile_path
-        .as_deref()
-        .map(load_launch_settings)
-        .transpose()?
-        .flatten();
-    if explicit_profile.is_some() && loaded_profile.is_none() {
-        bail!("Explicit game profile was not found: {profile_source}");
-    }
-    let mut game_profile = loaded_profile.unwrap_or_default();
+    let mut profile_path = paths::game_profiles_dir(is_fex).join(format!("{appid}.json"));
+    let mut profile_source = profile_path.display().to_string();
+    let mut game_profile = GameProfile::load(&profile_path)?.unwrap_or_default();
     let wine_override_root = if let Some(runtime) = &selected_runtime {
-        if !explicit_runtime_request && let Some(query) = &game_profile.wine {
-            let actual = nucleon_core::runtime_selection::named(query)?;
-            if actual.root != runtime.root {
-                bail!(
-                    "ARM64/FEX Steam tool pins {}. Remove the conflicting wine field from {} or register the intended native runtime",
-                    runtime.root.display(),
-                    profile_source
-                );
-            }
-        }
         Some(runtime.root.clone())
     } else {
         let root = if game_profile.emulator.is_some() {
@@ -776,40 +630,23 @@ fn run_with_args_inner(args: &[String], session: &mut RunSession) -> Result<RunO
         }
         root
     };
-    // A legacy ordinary profile may select a native runtime. Its graphics settings
-    // come from the native namespace, exactly as with an explicit CLI selection.
-    if is_fex && !loaded_native_profile && explicit_profile.is_none() {
-        profile_path = compat_appid
-            .as_ref()
-            .map(|id| paths::game_profiles_dir(true).join(format!("{id}.json")));
-        profile_source = profile_path
-            .as_ref()
-            .map(|p| p.display().to_string())
-            .unwrap_or_else(|| "game profile".into());
-        game_profile = profile_path
-            .as_deref()
-            .map(load_launch_settings)
-            .transpose()?
-            .flatten()
-            .unwrap_or_default();
+    // Load graphics settings from the selected runtime namespace.
+    if is_fex && !loaded_native_profile {
+        profile_path = paths::game_profiles_dir(true).join(format!("{appid}.json"));
+        profile_source = profile_path.display().to_string();
+        game_profile = GameProfile::load(&profile_path)?.unwrap_or_default();
     }
     if is_fex {
-        game_profile = game_profile.with_defaults(LaunchOverride::fex_default(
-            compat_appid.as_deref().unwrap_or(""),
-        ));
+        game_profile = game_profile.with_defaults(GameProfile::fex_default(&appid));
     }
-    let engine_env = if launch_override
-        .as_ref()
-        .and_then(|o| o.engine.as_ref())
-        .is_none()
-    {
+    let engine_env = if request_settings.engine.is_none() {
         config::environment("NUCLEON_ENGINE")?
     } else {
         None
     };
     let requested_engine = requested_engine(
-        launch_override.as_ref(),
-        &override_source,
+        Some(request_settings),
+        override_source,
         engine_env.as_deref(),
         &game_profile,
         &profile_source,
@@ -835,11 +672,7 @@ fn run_with_args_inner(args: &[String], session: &mut RunSession) -> Result<RunO
         selected_runtime.as_ref(),
         requested_engine,
     )?;
-    let enable_hud = match launch_override
-        .as_ref()
-        .and_then(|o| o.hud)
-        .or(game_profile.hud)
-    {
+    let enable_hud = match request_settings.hud.or(game_profile.hud) {
         Some(value) => value,
         None => environment_boolean("MTL_HUD_ENABLED")?.unwrap_or(false),
     };
@@ -850,7 +683,7 @@ fn run_with_args_inner(args: &[String], session: &mut RunSession) -> Result<RunO
             .or(game_profile.overlay)
             .unwrap_or(false)
     };
-    let user_shim_override = match launch_override.as_ref().and_then(|o| o.use_steam_shim) {
+    let user_shim_override = match request_settings.use_steam_shim {
         Some(value) => Some(value),
         None => environment_boolean("NUCLEON_STEAM_SHIM")?.or(game_profile.use_steam_shim),
     };
@@ -860,11 +693,8 @@ fn run_with_args_inner(args: &[String], session: &mut RunSession) -> Result<RunO
     let detection = nucleon_core::detector::detect_target_engine(&target_exe);
     let mut effective_profile = game_profile.clone();
     effective_profile.upscaler = requested_upscaler(
-        launch_override.as_ref(),
-        if launch_override
-            .as_ref()
-            .is_some_and(|p| p.upscaler.is_some())
-        {
+        Some(request_settings),
+        if request_settings.upscaler.is_some() {
             None
         } else {
             config::environment("NUCLEON_UPSCALER")?
@@ -872,13 +702,9 @@ fn run_with_args_inner(args: &[String], session: &mut RunSession) -> Result<RunO
         .as_deref(),
         &game_profile,
     )?;
-    effective_profile.graphics_api = launch_override
-        .as_ref()
-        .and_then(|p| p.graphics_api)
-        .or(game_profile.graphics_api);
-    effective_profile.steam_protocol = launch_override
-        .as_ref()
-        .and_then(|p| p.steam_protocol)
+    effective_profile.graphics_api = request_settings.graphics_api.or(game_profile.graphics_api);
+    effective_profile.steam_protocol = request_settings
+        .steam_protocol
         .or(game_profile.steam_protocol);
     let graphics_api = effective_profile.graphics_api(&target_exe, &detection.api)?;
     let (engine, api_desc) = match requested_engine {
@@ -965,7 +791,7 @@ fn run_with_args_inner(args: &[String], session: &mut RunSession) -> Result<RunO
             "ARM64/FEX cannot use the Intel GPTK engine. Choose auto, dxmt, vkd3d, dxvk or wine in its profile"
         );
     }
-    log_runner(&format!(
+    trace_runner(&format!(
         "Engine Router: target '{}' [{}] -> engine {:?}",
         target_exe.display(),
         api_desc,
@@ -992,7 +818,7 @@ fn run_with_args_inner(args: &[String], session: &mut RunSession) -> Result<RunO
     };
     nucleon_core::runtime_selection::check_host(&runtime)?;
     effective_profile.apply_protocol(&mut runtime)?;
-    let pfx_dir = paths::game_prefix(&compat_data_path, &runtime);
+    let pfx_dir = paths::game_prefix(&data_path, &runtime);
     let graphics = match resolved_graphics {
         Some(components) => components,
         None => GraphicsComponents::discover(
@@ -1001,7 +827,7 @@ fn run_with_args_inner(args: &[String], session: &mut RunSession) -> Result<RunO
             game_profile.dxvk_path.as_deref(),
         )?,
     };
-    let plan = LaunchPlan::new(
+    let mut plan = LaunchPlan::new(
         runtime,
         pfx_dir.clone(),
         active_engine,
@@ -1010,23 +836,80 @@ fn run_with_args_inner(args: &[String], session: &mut RunSession) -> Result<RunO
         user_shim_override,
         &graphics_api,
     )?;
-    execute_launch(
-        PreparedLaunch {
-            plan,
-            data_path: compat_data_path,
-            appid: compat_appid,
-            arguments: game_args,
-            cwd: None,
-            hud: enable_hud,
-            overlay: enable_overlay,
-            wait: verb == "waitforexitandrun",
-            consume_override: override_path.filter(|_| launch_override.is_some()),
-            upscaler: effective_profile.upscaler,
-            environment: Default::default(),
-        }
-        .resolve()?,
-        session,
-    )
+    if env::var_os("NUCLEON_STEAM_BRIDGE").is_none()
+        && let Some(bridge) = request_settings
+            .steam_bridge
+            .as_ref()
+            .or(game_profile.steam_bridge.as_ref())
+    {
+        anyhow::ensure!(
+            bridge.is_dir(),
+            "Configured Steamworks bridge is missing: {}",
+            bridge.display()
+        );
+        plan.bridge = bridge.canonicalize()?;
+    }
+    PreparedLaunch {
+        plan,
+        data_path,
+        appid: Some(appid),
+        arguments: game_args,
+        cwd: request.cwd.clone(),
+        hud: enable_hud,
+        overlay: enable_overlay,
+        upscaler: effective_profile.upscaler,
+        environment: Default::default(),
+    }
+    .resolve()
+}
+
+/// Steam-aware launch owned by Nucleon; never patches or asks Steam to launch a game.
+pub struct SteamRequest {
+    pub appid: u32,
+    pub executable: PathBuf,
+    pub arguments: Vec<String>,
+    pub cwd: Option<PathBuf>,
+    pub data_path: PathBuf,
+    pub overrides: GameProfile,
+}
+
+pub fn launch_steam(request: SteamRequest, dry_run: bool) -> Result<()> {
+    let mut args = vec![
+        "nucleon".into(),
+        "launch".into(),
+        request.appid.to_string(),
+        "--exe".into(),
+        request
+            .executable
+            .to_str()
+            .context("Game path must be UTF-8")?
+            .into(),
+    ];
+    args.extend(request.arguments.clone());
+    let id = request.appid.to_string();
+    let resolved = resolve_steam_launch(&request)?;
+    if dry_run {
+        let prepared = &resolved.prepared;
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "appid": request.appid, "executable": request.executable, "arguments": request.arguments,
+                "cwd": request.cwd, "prefix": prepared.plan.prefix,
+                "runtime": prepared.plan.runtime.root, "engine": prepared.plan.engine.display_name(),
+                "steamworks": prepared.plan.steam_integration, "steam_client_modified": false,
+            }))?
+        );
+        return Ok(());
+    }
+    anyhow::ensure!(
+        nucleon_core::steam::is_steam_running(),
+        "Start Steam and sign in before launching this Steam game"
+    );
+    let mut session = RunSession::steam(&args, &id)?;
+    let result = session
+        .configure()
+        .and_then(|()| execute_launch(resolved, &mut session));
+    finish_run(&mut session, result)
 }
 
 struct PreparedLaunch {
@@ -1039,8 +922,6 @@ struct PreparedLaunch {
     cwd: Option<PathBuf>,
     hud: bool,
     overlay: bool,
-    wait: bool,
-    consume_override: Option<PathBuf>,
 }
 
 /// Side-effect-free decisions shared by preview and execution. Installation state is
@@ -1099,8 +980,6 @@ fn execute_launch(resolved: ResolvedLaunch, session: &mut RunSession) -> Result<
         cwd,
         hud: enable_hud,
         overlay: enable_overlay,
-        wait,
-        consume_override,
         environment,
     } = prepared;
     let target_exe = PathBuf::from(&game_args[0]);
@@ -1139,11 +1018,6 @@ fn execute_launch(resolved: ResolvedLaunch, session: &mut RunSession) -> Result<
         plan.runtime.unix_dir.display()
     ));
 
-    if let Some(path) = consume_override {
-        fs::remove_file(&path)
-            .with_context(|| format!("Cannot consume launch override {}", path.display()))?;
-    }
-
     let term_flag = termination_flag()?;
     let _runtime_lease = nucleon_core::managed_runtime::lease(&plan.runtime.root)?;
     let _prefix_session = if !plan.steam_integration
@@ -1153,16 +1027,9 @@ fn execute_launch(resolved: ResolvedLaunch, session: &mut RunSession) -> Result<
             term_flag.load(Ordering::SeqCst)
         })?
     } else {
-        PrefixSession::acquire(
-            &compat_data_path,
-            &plan.runtime,
-            if wait {
-                Duration::from_secs(5)
-            } else {
-                Duration::ZERO
-            },
-            || term_flag.load(Ordering::SeqCst),
-        )?
+        PrefixSession::acquire(&compat_data_path, &plan.runtime, Duration::ZERO, || {
+            term_flag.load(Ordering::SeqCst)
+        })?
     };
     let mut prefix_cleanup = PrefixCleanup {
         runtime: plan.runtime.clone(),
@@ -1176,11 +1043,6 @@ fn execute_launch(resolved: ResolvedLaunch, session: &mut RunSession) -> Result<
         plan.runtime.prefix.family,
         plan.runtime.prefix.abi
     ));
-    // Wait for previous instance if requested
-    if wait {
-        wait_wineserver(&plan.runtime, &pfx_dir, 5000);
-    }
-
     let mut observed_binding = None;
     let mut exec_env = plan.execution_env(enable_hud, enable_overlay);
     plan.configure_launch_environment(&mut exec_env)?;
@@ -1287,9 +1149,6 @@ fn execute_launch(resolved: ResolvedLaunch, session: &mut RunSession) -> Result<
     ));
 
     for key in [
-        "STEAM_COMPAT_APP_ID",
-        "STEAM_COMPAT_DATA_PATH",
-        "STEAM_COMPAT_INSTALL_PATH",
         "STEAM_COMPAT_CLIENT_INSTALL_PATH",
         "SteamAppId",
         "SteamGameId",
@@ -1491,11 +1350,11 @@ mod tests {
     #[test]
     fn upscaler_precedence_preserves_explicit_game_and_reports_invalid_values() {
         use nucleon_core::upscaler::{Backend, Settings};
-        let profile = LaunchOverride {
+        let profile = GameProfile {
             upscaler: Some(Settings::selected(Backend::Fsr2)),
             ..Default::default()
         };
-        let temporary = LaunchOverride {
+        let temporary = GameProfile {
             upscaler: Some(Settings::selected(Backend::Game)),
             ..Default::default()
         };
@@ -1649,11 +1508,11 @@ mod tests {
     #[test]
     fn engine_precedence_preserves_explicit_auto_and_rejects_invalid_winners() {
         use nucleon_core::detector::TargetEngine;
-        let profile = LaunchOverride {
+        let profile = GameProfile {
             engine: Some("gptk".into()),
             ..Default::default()
         };
-        let temporary = LaunchOverride {
+        let temporary = GameProfile {
             engine: Some("auto".into()),
             ..Default::default()
         };
@@ -1689,7 +1548,7 @@ mod tests {
         .unwrap_err()
         .to_string();
         assert!(error.contains("NUCLEON_ENGINE") && error.contains("dxmtt"));
-        let bad = LaunchOverride {
+        let bad = GameProfile {
             engine: Some("typo".into()),
             ..Default::default()
         };
@@ -1698,30 +1557,6 @@ mod tests {
                 .unwrap_err()
                 .to_string()
                 .contains("profile.json: engine")
-        );
-    }
-
-    #[test]
-    fn malformed_launch_settings_are_reported_and_preserved() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("launch_override_123.json");
-        for data in ["{", r#"{"hud":"yes"}"#, r#"{"engnie":"gptk"}"#] {
-            fs::write(&path, data).unwrap();
-            let error = format!("{:#}", load_launch_settings(&path).unwrap_err());
-            assert!(
-                error.contains("launch_override_123.json") && error.contains("Correct its JSON")
-            );
-            assert_eq!(fs::read_to_string(&path).unwrap(), data);
-        }
-        fs::write(&path, r#"{"hud":true,"engine":"auto"}"#).unwrap();
-        assert_eq!(
-            load_launch_settings(&path).unwrap().unwrap().hud,
-            Some(true)
-        );
-        assert!(
-            load_launch_settings(&dir.path().join("missing.json"))
-                .unwrap()
-                .is_none()
         );
     }
 
@@ -1777,7 +1612,7 @@ mod tests {
     #[test]
     fn test_is_wine_game_process_line_ignores_self_and_nucleon() {
         let my_pid = 85020;
-        let line_self = "85020 ~/Library/Application Support/Steam/compatibilitytools.d/nucleon-wine/nucleon-runner waitforexitandrun ~/Library/Application Support/Steam/steamapps/common/DiRT Rally 2.0/dirtrally2.exe -novr";
+        let line_self = "85020 /tools/nucleon launch 690790 --exe ~/Library/Application Support/Steam/steamapps/common/DiRT Rally 2.0/dirtrally2.exe -novr";
         assert!(!is_wine_game_process_line(
             line_self,
             my_pid,
@@ -1785,8 +1620,8 @@ mod tests {
             "dirtrally2.exe"
         ));
 
-        // Even with a different PID, nucleon-runner itself must be ignored
-        let line_other_runner = "16271 ~/Library/Application Support/Steam/compatibilitytools.d/nucleon/nucleon-runner waitforexitandrun ~/Library/Application Support/Steam/steamapps/common/DiRT Rally 2.0/dirtrally2.exe -novr";
+        // Even with a different PID, the Nucleon CLI must be ignored
+        let line_other_runner = "16271 /tools/nucleon launch 690790 --exe ~/Library/Application Support/Steam/steamapps/common/DiRT Rally 2.0/dirtrally2.exe -novr";
         assert!(!is_wine_game_process_line(
             line_other_runner,
             my_pid,
@@ -1857,85 +1692,6 @@ mod tests {
             "/opt/wine",
             ""
         ));
-    }
-
-    #[test]
-    fn test_regression_dirt2_64bit_steamworks_launches_directly() {
-        // DiRT links Steamworks, but its validated 64-bit launch protocol is direct execution.
-        let game_args = vec![
-            "Z:\\games\\DiRT Rally 2.0\\dirtrally2.exe".to_string(),
-            "-novr".to_string(),
-        ];
-        for engine in [
-            nucleon_core::detector::TargetEngine::Gptk,
-            nucleon_core::detector::TargetEngine::KosmicKrisp,
-            nucleon_core::detector::TargetEngine::Dxmt,
-        ] {
-            let _ = engine; // the wrapper decision no longer reads the engine at all
-            let wine_args = determine_wine_args(&game_args, false, true, None);
-            assert_eq!(wine_args, game_args);
-            assert!(!wine_args[0].contains("steam.exe"));
-        }
-    }
-
-    #[test]
-    fn test_regression_gonner_wine_combination_invokes_steam_shim() {
-        // GoNNER scenario: 32-bit Unity title linked against Steamworks, steam.exe present in prefix
-        let game_args = vec!["Z:\\games\\GoNNER\\GONNER.exe".to_string()];
-        let wine_args = determine_wine_args(&game_args, true, true, None);
-
-        // Must wrap through steam.exe so SteamAPI_Init handshake succeeds
-        assert_eq!(wine_args.len(), 2);
-        assert!(wine_args[0].contains("steam.exe"));
-        assert_eq!(wine_args[1], "Z:\\games\\GoNNER\\GONNER.exe");
-
-        // If steam_shim does NOT exist in prefix, falls back cleanly to direct execution
-        let fallback_args = determine_wine_args(&game_args, true, false, None);
-        assert_eq!(fallback_args, game_args);
-    }
-
-    #[test]
-    fn test_dmc5_explicit_wrapper_override_is_engine_independent() {
-        // DMC5 bridge experiments may explicitly request the wrapper without changing other games.
-        let game_args = vec!["Z:\\games\\Devil May Cry 5\\DevilMayCry5.exe".to_string()];
-
-        for engine in [
-            nucleon_core::detector::TargetEngine::Gptk,
-            nucleon_core::detector::TargetEngine::KosmicKrisp,
-            nucleon_core::detector::TargetEngine::Dxvk,
-            nucleon_core::detector::TargetEngine::Vkd3d,
-        ] {
-            let _ = engine;
-            let wine_args = determine_wine_args(&game_args, false, true, Some(true));
-            assert_eq!(
-                wine_args.len(),
-                2,
-                "engine must not change the wrapper decision"
-            );
-            assert!(
-                wine_args[0].contains("steam.exe"),
-                "an explicit wrapper request must be honored on every engine"
-            );
-            assert_eq!(wine_args[1], game_args[0]);
-        }
-    }
-
-    #[test]
-    fn test_regression_user_override_precedence() {
-        let game_args = vec!["Z:\\games\\test.exe".to_string()];
-
-        // Explicit user override false forces direct execution even for a wrapped title
-        let direct = determine_wine_args(&game_args, true, true, Some(false));
-        assert_eq!(direct, game_args);
-
-        // Explicit user override true forces the shim whenever the prefix has one
-        let shimmed = determine_wine_args(&game_args, false, true, Some(true));
-        assert_eq!(shimmed.len(), 2);
-        assert!(shimmed[0].contains("steam.exe"));
-
-        // An override cannot invent a shim the prefix does not have
-        let no_shim = determine_wine_args(&game_args, true, false, Some(true));
-        assert_eq!(no_shim, game_args);
     }
 
     #[test]

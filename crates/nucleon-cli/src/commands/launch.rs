@@ -1,39 +1,31 @@
 use anyhow::{Result, ensure};
-use nucleon_core::{guard, paths, steam, validator};
-use std::process::Command;
+use nucleon_core::{paths, steam, validator};
 
-pub fn run_launch(
-    appid: u32,
-    hud: bool,
-    engine: Option<String>,
-    wine: Option<String>,
-    emulator: Option<nucleon_core::runtime_selection::Emulator>,
-    upscaler: Option<nucleon_core::upscaler::Backend>,
-) -> Result<()> {
-    let mut request = prepare_request(hud, engine.as_deref(), wine.as_deref(), emulator)?;
-    request.upscaler = upscaler.map(nucleon_core::upscaler::Settings::selected);
-    if let Some(path) = &request.wine {
-        println!("  Wine: {path}");
-    }
-    println!("==> Launching game AppID {}...", appid);
-
-    // Repair integration without changing Steam's depot/update state.
-    let _ = guard::run_guard_once(super::find_hook_dylib().as_deref());
-    let _ = steam::fix_steam_permissions();
-    let _ = steam::patch_steamui_chunks();
-    let _ = steam::migrate_compat_mappings();
-
-    // Persist launch overrides so nucleon-runner reads them even with running Steam
-    let override_file = paths::support_dir().join(format!("launch_override_{appid}.json"));
-    paths::ensure_dirs()?;
-    nucleon_core::fs_util::atomic_write_file(&override_file, serde_json::to_vec(&request)?)?;
-
-    let mut cmd = Command::new("open");
-    cmd.arg(format!("steam://run/{}", appid));
-    ensure!(cmd.status()?.success(), "Steam launch request failed");
-    println!("  ✓ Sent launch command to Steam");
-
-    Ok(())
+pub fn run_launch(args: super::steam::PlayArgs) -> Result<()> {
+    let installed = steam::library::installed(args.appid)?;
+    let mut target =
+        steam::library::target(&installed, args.exe.as_deref(), args.launch_id.as_deref())?;
+    target.arguments.extend(args.arguments);
+    let mut overrides = prepare_request(
+        args.hud,
+        args.engine.as_deref(),
+        args.wine.as_deref(),
+        args.emulator,
+    )?;
+    overrides.upscaler = args
+        .upscaler
+        .map(nucleon_core::upscaler::Settings::selected);
+    nucleon_runner::launch_steam(
+        nucleon_runner::SteamRequest {
+            appid: args.appid,
+            executable: target.executable,
+            arguments: target.arguments,
+            cwd: Some(target.cwd),
+            data_path: installed.data_path,
+            overrides,
+        },
+        args.dry_run,
+    )
 }
 
 fn prepare_request(
@@ -69,7 +61,7 @@ pub fn run_validate(appid: u32) -> Result<()> {
         "==> Validating window presentation for AppID {} (zero screen capture)...",
         appid
     );
-    let compat_data = paths::steam_compat_data_dir().join(appid.to_string());
+    let compat_data = steam::library::installed(appid)?.data_path;
     let pids = paths::game_prefixes(&compat_data)
         .into_iter()
         .flat_map(|prefix| nucleon_runner::wine_process_pids(&prefix))

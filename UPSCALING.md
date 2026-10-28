@@ -6,9 +6,10 @@ path. Providers and runtime combinations are **experimental**; preparation and
 a loaded library do not establish successful in-game reconstruction.
 
 Choices are `game` (default), `fsr2` (2.2.1), `fsr3.1`, `xess`, `metalfx`,
-`fsr4-native-lite` and `fsr4-native`. Native FSR4 currently means **4.1.1**, with
-`lossy` for Lite and `exact-fast` for full quality. AMD FSR 4.1.2 and the native
-project's optional Lite 2 weights are not installed by this integration.
+`fsr4-native-lite`, `fsr4-native` and `fsr4.1.2`. The existing native choices
+retain **4.1.1**, with `lossy` for Lite and `exact-fast` for full quality.
+`fsr4.1.2` selects the separate **4.1.2 INT8 Lite** model (`int8-lite`).
+The native project's optional Lite 2 weights are not installed by this integration.
 
 ## Prepare dependencies without launching a game
 
@@ -29,8 +30,30 @@ nucleon upscaler install bridge --wine /path/to/complete/gptk/wine
 nucleon upscaler install native --wine /path/to/complete/gptk/wine
 ```
 
-The native command builds and validates owned synthetic Metal frames, including
-both Lite and full quality. It never executes Wine or the game. It requires
+For FSR 4.1.2, install `native412` instead of `native`. For example:
+
+```sh
+nucleon upscaler install native412 --wine /path/to/complete/gptk/wine
+nucleon upscaler prepare /games/Game/Game.exe --backend fsr4.1.2 --input dlss \
+  --wine /path/to/complete/gptk/wine --engine wine --graphics-api dx12 --dry-run
+```
+
+After quitting the game, repeat preparation without `--dry-run`, then launch:
+
+```sh
+nucleon run /games/Game/Game.exe --wine /path/to/complete/gptk/wine \
+  --engine wine --graphics-api dx12 --upscaler fsr4.1.2
+```
+
+Enable DLSS in the game. This example requires an eligible x64 DX12 game with
+DLSS input and a complete matching Intel GPTK runtime; it does not apply to an
+arbitrary game. The 4.1.2 provider verifies its source and the upstream v2.2 ZIP,
+then imports only the model payload from that ZIP. No separate AMD driver DLL
+is required. `--archive /path/fsr4-mac-v2.2-crossover.zip` reuses the exact pinned
+ZIP. Its provider generation is separate from 4.1.1, so both can remain installed.
+
+The native commands build and validate owned synthetic Metal frames: Lite and
+full quality for 4.1.1, and INT8 Lite for 4.1.2. They never execute Wine or the game. They require
 Python 3.11+, Rosetta, Xcode with its Metal Toolchain, and `dxc`, `spirv-cross`
 and `spirv-val` on PATH. The selected Intel GPTK bundle must contain its matched
 `lib/external/D3DMetal.framework` and Windows MetalFX bridge. Original framework
@@ -54,7 +77,7 @@ All game-local files participate in the same ownership and rollback transaction.
 Release archives and source revisions are pinned in
 [dependencies.toml](assets/upscalers/dependencies.toml). Use `--archive /file.7z`
 with stock/metalfx to reuse a matching archive, or `--source /verified/fsr/tree`
-with native to reuse source carrying the setup tool's Git-blob manifest.
+with native/native412 to reuse source matching the embedded Git-blob source lock.
 An unexpected checksum is rejected. Installation retains dependency notices;
 GPTK components are copied locally from the selected runtime, not downloaded or
 redistributed by Nucleon.

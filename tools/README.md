@@ -3,12 +3,12 @@
 Wine/FEX builds, runtime assembly, CPU/GPU probes and source-inclusive publishing
 have moved to the standalone sibling [isotope repository](../../isotope/README.md).
 Its `isotope` executable has no Cargo dependency on Nucleon. Production
-Nucleon consumes release archives through [wine install](../RUNTIME-RELEASES.md).
+Nucleon consumes release archives through [wine install](../SETUP.md#install-an-isotopefex-runtime).
 
 The remaining Rust `nucleon-devtools` crate contains Nucleon-specific diagnostics:
 
 ```sh
-cargo build --release -p nucleon-devtools -p nucleon-cli -p nucleon-runner
+cargo build --release -p nucleon-devtools -p nucleon-cli
 
 target/release/nucleon-devtools launch dirt --runtime /path/to/runtime --timeout 120
 target/release/nucleon-devtools launch dmc5 --runtime /path/to/runtime --api dx12 --timeout 120
@@ -18,9 +18,11 @@ target/release/nucleon-devtools probe-steam --runtime /path/to/runtime \
 ```
 
 Game diagnostics require native Steam already running, the installed game and
-local bridge. They use the normal runner with private profiles and isolated
-compatdata; without `--runtime` they use the registered FEX default. `--game-dir`,
-`--bridge`, `--runner`, `--work` and `--debug` override diagnostic inputs. DMC5
+local bridge. Game directories come from Nucleon's installation records;
+`--game-dir` explicitly selects a different directory. They use the normal runner
+with private profiles and isolated compatdata; without `--runtime` they use the
+selected FEX default. `--game-dir`,
+`--bridge`, `--cli`, `--work` and `--debug` override diagnostic inputs. DMC5
 settings are locked, backed up and restored byte-for-byte even on failure or
 interruption. Saves remain the real user's saves. These commands do not build or
 implicitly assemble runtimes.
@@ -48,5 +50,5 @@ target/release/nucleon run /tmp/nucleon-d3d11-present.exe \
 ```
 
 Success requires the `NUCLEON_D3D11_OK` marker and exit 0. See
-[the DiRT runtime repair](../DIRT2-NO-GPTK-TEST.md) for the tested Wine 11.18
-driver patch and its limits. A successful probe does not establish gameplay.
+[Wine setup](../SETUP.md#download-and-patch-the-recommended-build) for the
+reviewed Wine 11.18 patches and their limits. A successful probe does not establish gameplay.

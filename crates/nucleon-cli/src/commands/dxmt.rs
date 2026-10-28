@@ -81,9 +81,7 @@ To install or configure DXMT (https://github.com/3Shain/dxmt):
                 "Detected {} translation DLL(s)",
                 bundle.dll_count()
             ));
-            println!(
-                "\nGames running under 'Nucleon (Wine + DXMT (DX11) + Apple Metal)' will now translate Direct3D 11 directly to Apple Metal."
-            );
+            println!("\nSelect DXMT with nucleon launch <appid> --engine dxmt.");
         }
         DxmtAction::SetPath { path } => {
             ui::header(format!("Registering custom DXMT path: {}", path.display()));

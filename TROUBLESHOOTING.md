@@ -10,8 +10,7 @@ nucleon wine list
 nucleon backends status
 nucleon detect /path/to/game.exe
 nucleon validate <AppID>
-nucleon logs --runner -n 100
-nucleon logs --hook -n 100
+nucleon logs -n 100
 ```
 
 `validate` inspects windows owned by processes in the game's prefix. A window
@@ -23,10 +22,10 @@ support directory has its own logs. Review local/private details before sharing.
 
 ## Running without progress
 
-Set the game's Steam launch options:
+Enable Wine diagnostics when launching through Nucleon:
 
 ```sh
-NUCLEON_WINEDEBUG=+timestamp,+loaddll,+msgbox,+dialog %command%
+NUCLEON_WINEDEBUG=+timestamp,+loaddll,+msgbox,+dialog nucleon launch <appid>
 ```
 
 Check `wine.log` for DLL initialization errors, message-box text, Steam pipe
@@ -55,21 +54,22 @@ uses pinned DXVK-macOS 1.10.3/MoltenVK. DMC5's baseline uses DX11. Neither prove
 that newer DXVK or DX12 works. ARM-only KosmicKrisp cannot load into x86_64 Wine;
 check architecture and feature requirements before shader/device debugging.
 
-## Steam update or overlay changes
+## Steamworks connection
 
-```sh
-nucleon guard status
-nucleon guard run
-nucleon logs --hook -n 100
-```
+The Steamworks bridge still requires a compatible, signed-in client. Diagnose
+ownership/session or ABI failures separately from graphics. A game that redirects
+itself to Steam may require a game-specific launch recipe. Do not add
+`steam_appid.txt` as a general workaround.
 
-Restart Steam after repair. A repaired UI does not prove private ABI offsets
-or hook publication safety. See [remaining risks](ARCHITECTURE.md#safety-boundaries).
+## Downloads and launch entries
 
-The copied overlay shim is absent from new builds. Opt-in uses Valve's native
-renderer only. HDR/Metal 4 corrections, microphone suppression, and the old
-experimental Wine bridge are absent. GoNNER and GPTK paths need another check;
-older installed binaries may still contain the shim until deliberately updated.
+Use `nucleon steam install <appid> --username <account>`, then `steam update` to
+resume or validate managed downloads. Install DepotDownloader or supply its path
+with `--downloader`. Native Steam's Downloads screen does not manage these files.
+
+Use `nucleon steam show <appid>` for cached launch choices and choose
+`--launch-id <id>` if several entries exist. `--exe` works without cached metadata.
+Preview with `nucleon launch <appid> --dry-run` before changing a runtime recipe.
 
 ## Avoid regressions with LLM-assisted changes
 
@@ -77,31 +77,22 @@ older installed binaries may still contain the shim until deliberately updated.
 2. Isolate experimental prefixes/support files. Do not overwrite a working
    installation or kill unrelated Wine processes.
 3. Change one component and capture startup/device errors.
-4. Confirm visual output, input, ownership, and Steam Stop for affected games.
+4. Confirm visual output, input, ownership and Nucleon shutdown for affected games.
 5. Promote only after those checks; retain a rollback configuration.
 
 Compilation and a live process do not establish a game's correctness or the
 safety of a private Steam ABI. Ask for a diff and evidence.
 
-## Records
-
-- [Runtime recovery](docs/game-runtime-recovery.md)
-- [DMC5 investigation](docs/dmc5-native-steam-investigation.md)
-- [Direct ntdll binding](docs/ntdll-compat-rust-investigation.md)
-- [Unsafe audit](docs/unsafe-audit-2026-10-13.md)
-- [Provenance audit](docs/notproton-provenance-and-overlay-audit.md)
-
 ## Invalid configuration
 
-Launch errors name the environment variable or configuration file, the invalid
-value, and a correction. Steam launches also record the full error in
-`~/Library/Application Support/nucleon/nucleon-runner.log` (`nucleon logs --runner`).
-A malformed launch override is retained so you can correct or remove it.
+Configuration errors appear in the CLI with the relevant setting or file and a
+correction. Once a launch session starts, failures are also recorded in its
+per-launch log directory (`nucleon logs`).
 
 Engine names must be recognized (`auto`, `gptk`, `dxmt`, `dxvk`, `vkd3d`,
 `kosmickrisp`, or `wine`). An explicit `auto` overrides a saved per-game engine.
 Boolean environment settings accept `1`/`0` or `true`/`false`. Remove a bad variable
-from Steam Launch Options to restore the default.
+from the launch environment to restore the default.
 
 `backend.toml` must contain a valid TOML string such as `backend = "auto"`.
 Status output shows invalid backend settings; Automatic launches reject them.

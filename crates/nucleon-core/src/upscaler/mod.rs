@@ -33,24 +33,42 @@ pub enum Backend {
     Metalfx,
     Fsr4NativeLite,
     Fsr4Native,
+    #[serde(rename = "fsr4.1.2")]
+    Fsr412,
     Xess,
 }
 impl FromStr for Backend {
     type Err = anyhow::Error;
     fn from_str(value: &str) -> Result<Self> {
         serde_json::from_value(serde_json::Value::String(value.into())).with_context(||
-            "Choose game, fsr2, fsr3.1, metalfx, fsr4-native-lite, fsr4-native or xess for upscaler")
+            "Choose game, fsr2, fsr3.1, metalfx, fsr4-native-lite, fsr4-native, fsr4.1.2 or xess for upscaler")
     }
 }
 impl Backend {
     pub fn provider(self) -> &'static str {
         match self {
-            Self::Metalfx | Self::Fsr4Native | Self::Fsr4NativeLite => "metalfx",
+            Self::Metalfx | Self::Fsr4Native | Self::Fsr4NativeLite | Self::Fsr412 => "metalfx",
             _ => "stock",
         }
     }
     pub fn native(self) -> bool {
-        matches!(self, Self::Fsr4Native | Self::Fsr4NativeLite)
+        self.native_model().is_some()
+    }
+    fn native_model(self) -> Option<native::Model> {
+        match self {
+            Self::Fsr4Native | Self::Fsr4NativeLite => Some(native::Model::Fsr411),
+            Self::Fsr412 => Some(native::Model::Fsr412),
+            _ => None,
+        }
+    }
+    fn native_profile(self) -> Option<&'static str> {
+        self.native_model().map(|model| {
+            if self == Self::Fsr4Native {
+                "exact-fast"
+            } else {
+                model.profile()
+            }
+        })
     }
 }
 
@@ -204,14 +222,16 @@ pub fn resolve(
             return Ok(resolved);
         }
         if settings.backend.native() {
+            let model = settings.backend.native_model().unwrap();
             let digest = crate::staging::digest(&framework.join("D3DMetal"))?;
             let manifest = root
-                .join("providers/native")
-                .join(assets::native_key(&digest)?)
+                .join("providers")
+                .join(model.provider())
+                .join(assets::native_model_key(&digest, model)?)
                 .join("provider.json");
             let provider = assets::read_provider(&manifest)?;
             ensure!(
-                provider.provider == "native" && provider.version == "4.1.1",
+                provider.provider == model.provider() && provider.version == model.version(),
                 "Native provider identity/version differs from the selected model"
             );
             ensure!(

@@ -99,15 +99,6 @@ pub(crate) fn cached_library(
     Ok(output)
 }
 
-/// Relink private prefix copies only. Sources in the bridge and Wine trees are untouched.
-#[cfg(target_os = "macos")]
-pub fn bind_prefix(prefix_dir: &Path, runner_dir: &Path) -> Result<()> {
-    bind_prefix_for_runtime(
-        prefix_dir,
-        &crate::runtime::ResolvedRuntime::inspect(runner_dir)?,
-    )
-}
-
 #[cfg(target_os = "macos")]
 pub fn bind_prefix_for_runtime(
     prefix_dir: &Path,

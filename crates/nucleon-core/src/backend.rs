@@ -136,7 +136,7 @@ pub fn resolve_active_backend_with_origin() -> Result<(GraphicsBackend, String)>
     for name in ["NUCLEON_BACKEND", "NUCLEON_GRAPHICS_BACKEND"] {
         if let Some(value) = crate::configuration::environment(name)? {
             let backend = GraphicsBackend::from_str(&value).with_context(|| format!(
-                "Invalid {name}={value:?}. Correct it or remove {name} from Steam Launch Options"))?;
+                "Invalid {name}={value:?}. Correct it or remove {name} from the launch environment"))?;
             return Ok((backend, format!("from environment variable {name}")));
         }
     }
@@ -173,11 +173,6 @@ pub fn get_active_backend_with_origin() -> (GraphicsBackend, String) {
             format!("CONFIGURATION ERROR (Automatic launch blocked): {error:#}"),
         )
     })
-}
-
-/// Returns the currently active graphics backend.
-pub fn get_active_backend() -> GraphicsBackend {
-    get_active_backend_with_origin().0
 }
 
 /// Persists the active graphics backend into `backend.toml`.

@@ -10,7 +10,7 @@ pub fn environment(name: &str) -> Result<Option<String>> {
         Ok(value) => Ok(Some(value)),
         Err(std::env::VarError::NotPresent) => Ok(None),
         Err(std::env::VarError::NotUnicode(_)) => bail!(
-            "Invalid {name}: value is not valid UTF-8. Replace it with a valid value or remove {name} from Steam Launch Options."
+            "Invalid {name}: value is not valid UTF-8. Replace it with a valid value or remove {name} from the launch environment."
         ),
     }
 }
@@ -194,7 +194,7 @@ pub fn component_path(
                     &value,
                     description,
                     &format!(
-                        "Point {name} to a valid installation or remove it from Steam Launch Options."
+                        "Point {name} to a valid installation or remove it from the launch environment."
                     ),
                 ));
             }

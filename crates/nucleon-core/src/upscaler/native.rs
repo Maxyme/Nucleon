@@ -8,7 +8,7 @@ use sha1::{Digest, Sha1};
 use std::{
     collections::BTreeMap,
     fs,
-    io::Read,
+    io::{Read, Seek},
     path::{Component, Path, PathBuf},
     process::{Command, Stdio},
     time::{Duration, Instant},
@@ -27,15 +27,61 @@ struct Source {
     files: BTreeMap<PathBuf, String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Model {
+    Fsr411,
+    Fsr412,
+}
+impl Model {
+    pub(super) fn version(self) -> &'static str {
+        match self {
+            Self::Fsr411 => "4.1.1",
+            Self::Fsr412 => assets::catalog().fsr_412.version,
+        }
+    }
+    pub(super) fn profile(self) -> &'static str {
+        match self {
+            Self::Fsr411 => "lossy",
+            Self::Fsr412 => assets::catalog().fsr_412.profile,
+        }
+    }
+    pub(super) fn provider(self) -> &'static str {
+        match self {
+            Self::Fsr411 => "native",
+            Self::Fsr412 => "native412",
+        }
+    }
+    pub(super) fn commit(self) -> &'static str {
+        match self {
+            Self::Fsr411 => assets::catalog().fsr_4.commit,
+            Self::Fsr412 => assets::catalog().fsr_412.commit,
+        }
+    }
+}
+
+#[cfg(test)]
 fn pinned() -> Result<Source> {
-    let source: Source = serde_json::from_slice(
-        ASSETS
-            .get_file("upscalers/fsr4-source.json")
-            .context("Missing embedded FSR4 source lock")?
-            .contents(),
-    )?;
+    pinned_model(Model::Fsr411)
+}
+fn pinned_model(model: Model) -> Result<Source> {
+    let source: Source = if model == Model::Fsr412 {
+        toml::from_str(
+            ASSETS
+                .get_file("upscalers/fsr412-source.toml")
+                .context("Missing embedded FSR 4.1.2 source lock")?
+                .contents_utf8()
+                .context("Invalid FSR 4.1.2 source lock encoding")?,
+        )?
+    } else {
+        serde_json::from_slice(
+            ASSETS
+                .get_file("upscalers/fsr4-source.json")
+                .context("Missing embedded FSR4 source lock")?
+                .contents(),
+        )?
+    };
     ensure!(
-        source.commit == assets::catalog().fsr_4.commit && !source.files.is_empty(),
+        source.commit == model.commit() && !source.files.is_empty(),
         "Native FSR source lock differs from the dependency catalog"
     );
     for (path, sha) in &source.files {
@@ -110,9 +156,13 @@ fn source_bytes(root: &Path, relative: &Path, expected: &str) -> Result<Vec<u8>>
     Ok(bytes)
 }
 
-fn fetch(cache: &Path, source: &Source) -> Result<PathBuf> {
+fn fetch(cache: &Path, source: &Source, model: Model) -> Result<PathBuf> {
     let catalog = assets::catalog();
-    let repository = catalog.fsr_4.repository;
+    let repository = if model == Model::Fsr412 {
+        catalog.fsr_412.repository
+    } else {
+        catalog.fsr_4.repository
+    };
     cached_source(cache, source, &|relative| {
         let url = format!(
             "https://raw.githubusercontent.com/{repository}/{}/{}",
@@ -352,7 +402,7 @@ fn run(command: &mut Command, timeout: Duration) -> Result<()> {
     }
 }
 
-fn environment(command: &mut Command, source: &Path, wine: &Path, profile: &str) {
+fn environment(command: &mut Command, source: &Path, wine: &Path, model: Model, profile: &str) {
     command
         .env(
             "NUCLEON_FSR4_FRAMEWORK",
@@ -360,7 +410,7 @@ fn environment(command: &mut Command, source: &Path, wine: &Path, profile: &str)
         )
         .env("FSR4_ROOT", source)
         .env("FSR4_REPLACE", "1")
-        .env("FSR4_VERSION", "4.1.1")
+        .env("FSR4_VERSION", model.version())
         .env("FSR4_PROFILE", profile)
         .env("FSR4_MODEL", "auto")
         .env("FSR4_SHARPNESS", "0")
@@ -375,19 +425,73 @@ struct Validation {
     model: &'static str,
     profile: &'static str,
     synthetic_reference_and_live_hook: &'static str,
-    profiles_validated: [&'static str; 2],
+    profiles_validated: Vec<&'static str>,
     game_tested: bool,
     original_framework_sha256: String,
     compilers: BTreeMap<String, Compiler>,
 }
 
-pub(super) fn build(root: &Path, output: &Path, wine: &Path, source: Option<&Path>) -> Result<()> {
-    let pins = pinned()?;
+/// Only model data is consumed from the checksum-pinned release. Executable build
+/// inputs always come from the independently locked source tree.
+fn import_model(output: &Path, archive: Option<&Path>) -> Result<()> {
+    let spec = &assets::catalog().fsr_412;
+    let mut archive = match archive {
+        Some(path) => fs::File::open(path)?,
+        None => artifacts::download(spec.url, 128 * 1024 * 1024)?,
+    };
+    ensure!(
+        archive.metadata()?.len() <= 128 * 1024 * 1024,
+        "FSR 4.1.2 archive exceeds size limit"
+    );
+    use sha2::Sha256;
+    let mut hash = Sha256::new();
+    std::io::copy(&mut archive, &mut hash)?;
+    ensure!(
+        format!("{:x}", hash.finalize()) == spec.sha_256,
+        "FSR 4.1.2 model archive checksum mismatch"
+    );
+    archive.rewind()?;
+    let extracted = tempfile::tempdir()?;
+    crate::downloads::extract_with_limit(
+        archive,
+        crate::downloads::ArchiveFormat::Zip,
+        extracted.path(),
+        256 * 1024 * 1024,
+    )?;
+    let model = extracted.path().join(spec.model_path);
+    for (name, expected) in [
+        ("initializers-lite.bin", spec.initializer_sha_256),
+        (
+            "initializers-lite-ultraperformance.bin",
+            spec.ultraperformance_sha_256,
+        ),
+    ] {
+        ensure!(
+            artifacts::digest(&model.join(name))? == expected,
+            "FSR 4.1.2 initializer checksum mismatch: {name}"
+        );
+    }
+    fs::create_dir_all(output.join("build"))?;
+    artifacts::copy_tree(&model, &output.join("build/fsr412_model"))
+}
+
+pub(super) fn build(
+    root: &Path,
+    output: &Path,
+    wine: &Path,
+    source: Option<&Path>,
+    model: Model,
+    archive: Option<&Path>,
+) -> Result<()> {
+    let pins = pinned_model(model)?;
     let input = match source {
         Some(path) => path.canonicalize()?,
-        None => fetch(&directories(root, Path::new("cache"))?, &pins)?,
+        None => fetch(&directories(root, Path::new("cache"))?, &pins, model)?,
     };
     copy_source(&input, output, &pins)?;
+    if model == Model::Fsr412 {
+        import_model(output, archive)?;
+    }
     let tools = compilers(output)?;
     let builder = overlays(output)?;
     let test = output.join("nucleon/test-depth-compat");
@@ -410,25 +514,27 @@ pub(super) fn build(root: &Path, output: &Path, wine: &Path, source: Option<&Pat
         "install",
         "--no-bottle",
         "--profile",
-        "lossy",
+        model.profile(),
         "--fsr-version",
-        "4.1.1",
+        model.version(),
         "--panel",
     ]);
-    environment(&mut install, output, wine, "lossy");
+    environment(&mut install, output, wine, model, model.profile());
     run(&mut install, BUILD_TIMEOUT)?;
-    let mut reference = command("python3");
-    reference.arg("-c").arg(REFERENCE).arg(&builder);
-    environment(&mut reference, output, wine, "exact-fast");
-    run(&mut reference, BUILD_TIMEOUT)?;
     let dist = output.join("dist/crossover");
-    let mut live = command("/usr/bin/arch");
-    live.arg("-x86_64")
-        .arg(dist.join("live_test"))
-        .arg(output.join("testcases/testcase_quality_720to1080"))
-        .arg(dist.join("reference-4.1.1-exact-fast-auto/f00_out.bin"));
-    environment(&mut live, output, wine, "exact-fast");
-    run(&mut live, BUILD_TIMEOUT)?;
+    if model == Model::Fsr411 {
+        let mut reference = command("python3");
+        reference.arg("-c").arg(REFERENCE).arg(&builder);
+        environment(&mut reference, output, wine, model, "exact-fast");
+        run(&mut reference, BUILD_TIMEOUT)?;
+        let mut live = command("/usr/bin/arch");
+        live.arg("-x86_64")
+            .arg(dist.join("live_test"))
+            .arg(output.join("testcases/testcase_quality_720to1080"))
+            .arg(dist.join("reference-4.1.1-exact-fast-auto/f00_out.bin"));
+        environment(&mut live, output, wine, model, "exact-fast");
+        run(&mut live, BUILD_TIMEOUT)?;
+    }
     ensure!(
         artifacts::digest(&original)? == original_framework_sha256,
         "Original GPTK framework changed during build"
@@ -441,10 +547,18 @@ pub(super) fn build(root: &Path, output: &Path, wine: &Path, source: Option<&Pat
     }
     let report = Validation {
         schema: 1,
-        model: "FSR 4.1.1 Lite",
-        profile: "lossy",
+        model: if model == Model::Fsr412 {
+            "FSR 4.1.2 INT8 Lite"
+        } else {
+            "FSR 4.1.1 Lite"
+        },
+        profile: model.profile(),
         synthetic_reference_and_live_hook: "passed",
-        profiles_validated: ["lossy", "exact-fast"],
+        profiles_validated: if model == Model::Fsr412 {
+            vec![model.profile()]
+        } else {
+            vec!["lossy", "exact-fast"]
+        },
         game_tested: false,
         original_framework_sha256,
         compilers: tools,
@@ -609,6 +723,7 @@ mod tests {
             &mut cmd,
             Path::new("/private/source"),
             Path::new("/private/wine"),
+            Model::Fsr411,
             "exact-fast",
         );
         let env = cmd
@@ -671,6 +786,98 @@ mod tests {
                 .process(pid)
                 .is_none_or(|p| p.status() == sysinfo::ProcessStatus::Zombie)
         );
+    }
+
+    #[test]
+    fn fsr412_has_independent_pinned_inputs_and_rejects_a_wrong_model_archive() {
+        let pins = pinned_model(Model::Fsr412).unwrap();
+        assert!(pins.files.keys().all(|p| !p.starts_with("tools/bin")));
+        for required in [
+            "src/fsr412_live.mm",
+            "tools/fsr412/compile_fsr412.py",
+            "tools/fsr412/shader_catalog.json",
+            "third_party/fsr411/LICENSE",
+        ] {
+            assert!(pins.files.contains_key(Path::new(required)), "{required}");
+        }
+        assert_ne!(
+            assets::native_key("framework-fixture").unwrap(),
+            assets::native_model_key("framework-fixture", Model::Fsr412).unwrap()
+        );
+        let temp = tempfile::tempdir().unwrap();
+        let archive = temp.path().join("wrong.zip");
+        fs::write(&archive, b"not the pinned model").unwrap();
+        let output = temp.path().join("output");
+        assert!(
+            import_model(&output, Some(&archive))
+                .unwrap_err()
+                .to_string()
+                .contains("checksum")
+        );
+        assert!(!output.exists());
+        let mut cmd = command("python3");
+        environment(
+            &mut cmd,
+            Path::new("/source"),
+            Path::new("/wine"),
+            Model::Fsr412,
+            Model::Fsr412.profile(),
+        );
+        for (key, value) in [("FSR4_VERSION", "4.1.2"), ("FSR4_PROFILE", "int8-lite")] {
+            assert!(
+                cmd.get_envs()
+                    .any(|(k, v)| k == key && v == Some(std::ffi::OsStr::new(value)))
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "requires NUCLEON_TEST_FSR412_SOURCE, NUCLEON_TEST_FSR412_ARCHIVE and NUCLEON_TEST_FSR412_WINE; runs Metal GPU validation"]
+    fn real_fsr412_provider_builds_validates_and_relocates() {
+        let input = PathBuf::from(std::env::var_os("NUCLEON_TEST_FSR412_SOURCE").unwrap());
+        let archive = PathBuf::from(std::env::var_os("NUCLEON_TEST_FSR412_ARCHIVE").unwrap());
+        let wine = PathBuf::from(std::env::var_os("NUCLEON_TEST_FSR412_WINE").unwrap());
+        let temp = tempfile::tempdir().unwrap();
+        super::super::install(
+            temp.path(),
+            "native412",
+            Some(&archive),
+            Some(&wine),
+            Some(&input),
+        )
+        .unwrap();
+        let digest =
+            artifacts::digest(&wine.join("lib/external/D3DMetal.framework/D3DMetal")).unwrap();
+        let generation = temp
+            .path()
+            .join("providers/native412")
+            .join(assets::native_model_key(&digest, Model::Fsr412).unwrap());
+        let provider = assets::read_provider(&generation.join("provider.json")).unwrap();
+        assert_eq!(provider.version, "4.1.2");
+        assert!(
+            provider
+                .files
+                .contains_key(Path::new("fsr4/build/fsr412_model/initializers-lite.bin"))
+        );
+        let report =
+            fs::read(generation.join("fsr4/dist/crossover/nucleon-validation.json")).unwrap();
+        let report: serde_json::Value = serde_json::from_slice(&report).unwrap();
+        assert_eq!(report["profile"], "int8-lite");
+        assert_eq!(report["game_tested"], false);
+        let relocated = generation.join("fsr4");
+        let mut live = command("/usr/bin/arch");
+        live.arg("-x86_64")
+            .arg(relocated.join("dist/crossover/live_test"))
+            .arg(relocated.join("testcases/testcase_quality_720to1080"))
+            .arg(relocated.join("dist/crossover/reference-4.1.2-int8-lite-auto/f00_out.bin"));
+        environment(
+            &mut live,
+            &relocated,
+            &wine,
+            Model::Fsr412,
+            Model::Fsr412.profile(),
+        );
+        run(&mut live, BUILD_TIMEOUT).unwrap();
     }
 
     proptest! {

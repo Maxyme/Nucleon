@@ -15,8 +15,7 @@ fn cli(support: &Path) -> Command {
         .env("PATH", "/usr/bin:/bin")
         // A Steam/store parent must not change a saved application preview.
         .env("NUCLEON_ENGINE", "invalid-parent")
-        .env("NUCLEON_WINE", "/missing/parent-runtime")
-        .env("STEAM_COMPAT_DATA_PATH", "/missing/parent-prefix");
+        .env("NUCLEON_WINE", "/missing/parent-runtime");
     command
 }
 fn output(command: &mut Command) -> Value {
@@ -244,4 +243,45 @@ fn dispatch_uses_the_frozen_profile_even_if_saved_profile_and_global_default_cha
         f.runtime.canonicalize().unwrap().to_str().unwrap()
     );
     f.unchanged();
+}
+
+#[test]
+fn steam_direct_preview_preserves_the_existing_prefix_and_has_no_client_side_effects() {
+    let f = Fixture::new();
+    let appid = 7654321;
+    let directory = f.exe.parent().unwrap();
+    let records = f.support.join("games/steam").join(appid.to_string());
+    fs::create_dir_all(&records).unwrap();
+    fs::write(
+        records.join("installation.json"),
+        serde_json::to_vec(&json!({
+            "schema":1,"appid":appid,"directory":directory,"data_path":f.prefix,
+            "branch":"public","language":"english"
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let data = f.support.join("game_profiles");
+    fs::create_dir_all(&data).unwrap();
+    fs::write(
+        data.join(format!("{appid}.json")),
+        serde_json::to_vec(&json!({"use_steam_shim":false})).unwrap(),
+    )
+    .unwrap();
+    let result = output(
+        cli(&f.support)
+            .args(["launch", &appid.to_string(), "--exe"])
+            .arg(&f.exe)
+            .arg("--wine")
+            .arg(&f.runtime)
+            .args(["--engine", "wine", "--dry-run", "--", "a b", ""]),
+    );
+    assert_eq!(result["appid"], appid);
+    assert_eq!(result["prefix"], f.prefix.join("pfx").to_str().unwrap());
+    assert_eq!(result["arguments"], json!(["a b", ""]));
+    assert_eq!(result["steamworks"], true);
+    assert_eq!(result["steam_client_modified"], false);
+    assert!(!f.support.join("logs").exists());
+    assert!(!f.prefix.join("pfx").exists());
+    assert_eq!(fs::read(f.prefix.join("save")).unwrap(), b"keep");
 }

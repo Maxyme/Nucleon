@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use nucleon_core::paths;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Seek, SeekFrom};
@@ -7,22 +7,14 @@ use std::thread;
 use std::time::Duration;
 
 fn current_runner_path() -> Result<PathBuf> {
-    Ok(paths::latest_run_dir()?
+    paths::latest_run_dir()?
         .map(|p| p.join("runner.log"))
-        .unwrap_or_else(|| paths::support_dir().join("nucleon-runner.log")))
+        .context("No launch logs found; launch an application first")
 }
 
-pub fn run(lines: usize, show_hook: bool, show_runner: bool, follow: bool) -> Result<()> {
-    let hook_path = paths::support_dir().join("nucleon-hook.log");
+pub fn run(lines: usize, follow: bool) -> Result<()> {
     let runner_path = current_runner_path()?;
-
-    let targets: Vec<(&str, &PathBuf)> = if show_hook && !show_runner {
-        vec![("Hook Log", &hook_path)]
-    } else if show_runner && !show_hook {
-        vec![("Runner Log", &runner_path)]
-    } else {
-        vec![("Hook Log", &hook_path), ("Runner Log", &runner_path)]
-    };
+    let targets = [("Runner Log", &runner_path)];
 
     for (title, path) in &targets {
         println!("==> {} ({})", title, path.display());
@@ -46,7 +38,7 @@ pub fn run(lines: usize, show_hook: bool, show_runner: bool, follow: bool) -> Re
 
     if follow {
         println!("==> Following logs (press Ctrl+C to exit)...");
-        let mut active_path = if show_runner { runner_path } else { hook_path };
+        let mut active_path = runner_path;
         let mut file = if active_path.is_file() {
             Some(File::open(&active_path)?)
         } else {
@@ -59,7 +51,7 @@ pub fn run(lines: usize, show_hook: bool, show_runner: bool, follow: bool) -> Re
 
         loop {
             thread::sleep(Duration::from_millis(500));
-            if show_runner {
+            {
                 let latest = current_runner_path()?;
                 if latest != active_path {
                     println!("==> Runner Log ({})", latest.display());

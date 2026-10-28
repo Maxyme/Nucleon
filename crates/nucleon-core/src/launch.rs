@@ -1003,8 +1003,6 @@ pub fn clean_standalone_command(command: &mut Command) {
         "SteamGameId",
         "NUCLEON_STEAMCLIENT_REDIRECT",
         "NUCLEON_STEAM_SHIM",
-        "NUCLEON_FEX_SELECTION",
-        "NUCLEON_GAME_PROFILE",
         "NUCLEON_OVERLAY",
         "MTL_HUD_ENABLED",
     ] {

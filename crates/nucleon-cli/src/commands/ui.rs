@@ -10,11 +10,6 @@ pub fn kv(label: impl Display, val: impl Display) {
     println!("  {:<26} {}", label, val);
 }
 
-/// Prints a sub-level key-value status pair: `    ● {label:<24} {val}`
-pub fn sub_kv(label: impl Display, val: impl Display) {
-    println!("    ● {:<24} {}", label, val);
-}
-
 /// Prints a nested tree item: `      {prefix} {label:<22} {val}`
 pub fn tree_kv(prefix: &str, label: impl Display, val: impl Display) {
     println!("      {} {:<22} {}", prefix, label, val);

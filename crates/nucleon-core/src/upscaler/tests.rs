@@ -100,8 +100,11 @@ impl Fixture {
 fn configuration_is_strict_and_explicit_game_overrides_inheritance() {
     let old: crate::profile::GameProfile = serde_json::from_str("{}").unwrap();
     assert!(old.upscaler.is_none());
+    let fsr412: crate::profile::GameProfile =
+        serde_json::from_str(r#"{"upscaler":{"backend":"fsr4.1.2","input":"dlss"}}"#).unwrap();
+    assert_eq!(fsr412.upscaler.unwrap().backend, Backend::Fsr412);
     for json in [
-        r#"{"upscaler":{"backend":"fsr4.1.2"}}"#,
+        r#"{"upscaler":{"backend":"fsr4.1.3"}}"#,
         r#"{"upscaler":{"backed":"fsr2"}}"#,
         r#"{"upscaler":{"backend":"fsr2","input":"wrong"}}"#,
     ] {
@@ -124,6 +127,119 @@ fn configuration_is_strict_and_explicit_game_overrides_inheritance() {
         ..Default::default()
     };
     assert_eq!(app.profile().upscaler.unwrap().backend, Backend::Fsr31);
+}
+
+#[test]
+fn native_models_resolve_stage_and_switch_with_their_own_version_and_profile() {
+    let mut f = Fixture::new();
+    let (_runtime_dir, runtime) = runtime::fixture(ExecutionMode::Intel);
+    let external = runtime.root.join("lib/external");
+    fs::create_dir_all(external.join("D3DMetal.framework")).unwrap();
+    let framework = external.join("D3DMetal.framework/D3DMetal");
+    fs::write(
+        &framework,
+        crate::runtime_checks::test_image("framework", 1),
+    )
+    .unwrap();
+    fs::write(
+        external.join("libd3dshared.dylib"),
+        crate::runtime_checks::test_image("shared", 1),
+    )
+    .unwrap();
+    let windows = runtime.root.join("lib/wine/x86_64-windows");
+    fs::create_dir_all(&windows).unwrap();
+    for name in ["d3d11.dll", "d3d12.dll", "dxgi.dll", "nvngx-on-metalfx.dll"] {
+        fs::write(windows.join(name), test_pe_image(0x8664)).unwrap();
+    }
+    f.plan.runtime = runtime;
+    f.plan.engine = TargetEngine::WineStaging;
+    f.provider("metalfx");
+    let bridge = windows.join("nvngx-on-metalfx.dll");
+    let bridge_dir = f
+        .root
+        .join("providers/bridge")
+        .join(assets::bridge_key(&crate::staging::digest(&bridge).unwrap()).unwrap());
+    fs::create_dir_all(&bridge_dir).unwrap();
+    fs::write(
+        bridge_dir.join("nvngx.dll"),
+        FIXTURES
+            .get_file("upscaler/ngx-forward.bin")
+            .unwrap()
+            .contents(),
+    )
+    .unwrap();
+    save(
+        &bridge_dir.join("provider.json"),
+        &Provider {
+            schema: 1,
+            provider: "bridge".into(),
+            version: "fixture".into(),
+            files: [(
+                PathBuf::from("nvngx.dll"),
+                crate::staging::digest(&bridge_dir.join("nvngx.dll")).unwrap(),
+            )]
+            .into(),
+            framework_sha256: None,
+        },
+    )
+    .unwrap();
+    let digest = crate::staging::digest(&framework).unwrap();
+    for model in [native::Model::Fsr411, native::Model::Fsr412] {
+        let dir = f
+            .root
+            .join("providers")
+            .join(model.provider())
+            .join(assets::native_model_key(&digest, model).unwrap());
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("model.bin"), model.version()).unwrap();
+        save(
+            &dir.join("provider.json"),
+            &Provider {
+                schema: 1,
+                provider: model.provider().into(),
+                version: model.version().into(),
+                files: [(
+                    PathBuf::from("model.bin"),
+                    crate::staging::digest(&dir.join("model.bin")).unwrap(),
+                )]
+                .into(),
+                framework_sha256: Some(digest.clone()),
+            },
+        )
+        .unwrap();
+    }
+    for (backend, version, profile) in [
+        (Backend::Fsr4NativeLite, "4.1.1", "lossy"),
+        (Backend::Fsr412, "4.1.2", "int8-lite"),
+        (Backend::Fsr4Native, "4.1.1", "exact-fast"),
+    ] {
+        let binding = f.prepare(backend).unwrap();
+        assert_eq!(binding.environment["FSR4_VERSION"], version);
+        assert_eq!(binding.environment["FSR4_PROFILE"], profile);
+        assert!(
+            binding.environment["FSR4_ROOT"].contains(backend.native_model().unwrap().provider())
+        );
+        let installation = Installation::existing(&f.root, &f.exe).unwrap().unwrap();
+        assert!(
+            fs::read_to_string(installation.state.join("panel.conf"))
+                .unwrap()
+                .contains(&format!("profile={profile}\n"))
+        );
+    }
+    let manifest = f.resolve(Backend::Fsr412).unwrap().native_provider.unwrap();
+    let mut provider: Provider = read(&manifest).unwrap();
+    provider.version = "4.1.1".into();
+    save(&manifest, &provider).unwrap();
+    assert!(
+        f.resolve(Backend::Fsr412)
+            .unwrap_err()
+            .to_string()
+            .contains("version")
+    );
+    assert!(f.resolve(Backend::Fsr4Native).is_ok());
+    f.prepare(Backend::Game).unwrap();
+    let installation = Installation::existing(&f.root, &f.exe).unwrap().unwrap();
+    assert!(!installation.directory.join("nvngx.dll").exists());
 }
 
 #[test]

@@ -16,7 +16,7 @@ fn u32_at(data: &[u8], offset: usize) -> Result<u32> {
 }
 
 /// Missing apps or platform fields are unknown, not evidence of Windows-only support.
-pub(super) fn macos_support(data: &[u8], appid: u32) -> Result<Option<bool>> {
+pub(super) fn read_app(data: &[u8], appid: u32) -> Result<Option<steam_vdf_parser::Vdf<'static>>> {
     let magic = u32_at(data, 0)?;
     let (header_size, apps_end, table) = match magic {
         V40 => (8, data.len(), None),
@@ -98,18 +98,24 @@ pub(super) fn macos_support(data: &[u8], appid: u32) -> Result<Option<bool>> {
     }
     input.extend_from_slice(&[0; ENTRY_HEADER]);
     let vdf = steam_vdf_parser::parse_appinfo(&input).context("Invalid appinfo KeyValues")?;
+    Ok(Some(vdf.into_owned()))
+}
+
+#[cfg(test)]
+fn macos_support(data: &[u8], appid: u32) -> Result<Option<bool>> {
+    let Some(vdf) = read_app(data, appid)? else {
+        return Ok(None);
+    };
     let id = appid.to_string();
     let Some(oslist) = vdf.get_str(&[&id, "appinfo", "common", "oslist"]) else {
         return Ok(None);
     };
     let platforms = oslist.split(',').map(str::trim).collect::<Vec<_>>();
-    if platforms.is_empty() || platforms.iter().any(|platform| platform.is_empty()) {
+    if platforms.is_empty() || platforms.iter().any(|p| p.is_empty()) {
         return Ok(None);
     }
     Ok(Some(
-        platforms
-            .iter()
-            .any(|platform| platform.eq_ignore_ascii_case("macos")),
+        platforms.iter().any(|p| p.eq_ignore_ascii_case("macos")),
     ))
 }
 
@@ -189,7 +195,7 @@ mod tests {
         }
         // Unrelated macos text must never be used as platform evidence.
         key(&mut body, 1, "description", indexed);
-        body.extend_from_slice(b"macos legacy description\0");
+        body.extend_from_slice(b"macos descriptive text\0");
         body.extend_from_slice(&[8, 8, 8]);
         body
     }

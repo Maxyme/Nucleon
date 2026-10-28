@@ -59,7 +59,7 @@ To install or configure D7VK without committing binaries:
                 bundle.x86_ddraw.display()
             ));
             println!(
-                "\nGames running under 'Nucleon (Wine + Mesa KosmicKrisp Vulkan)' will now translate DirectDraw / Direct3D 1-7 -> Vulkan 1.4."
+                "\nAutomatic launches can use this D7VK build with a compatible Vulkan driver."
             );
         }
         D7vkAction::SetPath { path } => {

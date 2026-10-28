@@ -5,6 +5,17 @@ repository = "UzenUPoZiTiV4ik/fsr4-native-macos"
 commit = "329d1d7367b6b948a53486505198a5d254f02809"
 tree = "329d1d7367b6b948a53486505198a5d254f02809"
 
+[fsr412]
+repository = "UzenUPoZiTiV4ik/fsr4-native-macos"
+commit = "41a666e18ea17dffdc9966d0d12b095b03e7b3aa"
+version = "4.1.2"
+profile = "int8-lite"
+url = "https://github.com/UzenUPoZiTiV4ik/fsr4-native-macos/releases/download/crossover-v2.2/fsr4-mac-v2.2-crossover.zip"
+sha256 = "2401f3232e04097ddfc10d0b37e745078c7c693ff98cc769acb33e355e47166e"
+model_path = "fsr4-mac-v2.2-crossover/build/fsr412_model"
+initializer_sha256 = "4b9898da719dc2dca5dc45fd71dec5f80bdb9886a580fe3038af59efe637d55e"
+ultraperformance_sha256 = "4c57292d9963e82dec86134060eef0c2b66214cd1a31a9e9bc73739b5fe2d1d7"
+
 [optiscaler]
 version = "v0.9.4-witcher3-metalfx-308613e"
 repository = "vm99cs8fnw/OptiScaler-witcher3-skipspoof"

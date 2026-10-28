@@ -56,11 +56,12 @@ fn manifest(stage: &Path, provider: &str, version: &str, framework: Option<Strin
             "tools",
             "nucleon",
             "dist/crossover",
+            "build/fsr412_model",
         ]
         .iter()
         .any(|p| relative.starts_with(Path::new("fsr4").join(p)));
         if entry.path().is_file()
-            && (provider != "native"
+            && (!matches!(provider, "native" | "native412")
                 || (native_input
                     && !relative
                         .components()
@@ -253,20 +254,27 @@ fn bridge(root: &Path, wine: &Path) -> Result<()> {
     })
 }
 
-fn native(root: &Path, wine: &Path, source: Option<&Path>) -> Result<()> {
+fn native(
+    root: &Path,
+    wine: &Path,
+    source: Option<&Path>,
+    model: super::native::Model,
+    archive: Option<&Path>,
+) -> Result<()> {
     let wine = wine.canonicalize()?;
     let digest = crate::staging::digest(&wine.join("lib/external/D3DMetal.framework/D3DMetal"))?;
     let target = root
-        .join("providers/native")
-        .join(assets::native_key(&digest)?);
-    generation(&target, "native", |stage| {
-        super::native::build(root, &stage.join("fsr4"), &wine, source)?;
+        .join("providers")
+        .join(model.provider())
+        .join(assets::native_model_key(&digest, model)?);
+    generation(&target, model.provider(), |stage| {
+        super::native::build(root, &stage.join("fsr4"), &wine, source, model, archive)?;
         ensure!(
             crate::staging::digest(&wine.join("lib/external/D3DMetal.framework/D3DMetal"))?
                 == digest,
             "Original GPTK framework changed during build"
         );
-        manifest(stage, "native", "4.1.1", Some(digest))
+        manifest(stage, model.provider(), model.version(), Some(digest))
     })
 }
 
@@ -278,15 +286,28 @@ pub fn install(
     source: Option<&Path>,
 ) -> Result<()> {
     ensure!(
-        matches!(provider, "stock" | "metalfx" | "native" | "bridge"),
-        "Choose stock, metalfx, native, bridge or patcher"
+        matches!(
+            provider,
+            "stock" | "metalfx" | "native" | "native412" | "bridge"
+        ),
+        "Choose stock, metalfx, native, native412, bridge or patcher"
     );
     fs::create_dir_all(root)?;
     let _lock = transaction::lock(&root.join(".provider.lock"))?;
     match provider {
         "stock" | "metalfx" => stock(root, provider, archive),
         "bridge" => bridge(root, wine.context("Bridge provider requires Wine")?),
-        "native" => native(root, wine.context("Native provider requires Wine")?, source),
+        "native" | "native412" => native(
+            root,
+            wine.context("Native provider requires Wine")?,
+            source,
+            if provider == "native412" {
+                super::native::Model::Fsr412
+            } else {
+                super::native::Model::Fsr411
+            },
+            archive,
+        ),
         _ => unreachable!(),
     }
 }

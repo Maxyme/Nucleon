@@ -1,8 +1,8 @@
 # Standalone Windows programs and bottles
 
 Build the CLI with `cargo build --release -p nucleon-cli`, then use
-`target/release/nucleon` (or put that binary on your PATH). No Steam installation,
-Steam patching or bridge files are required for the commands on this page.
+`target/release/nucleon` (or put that binary on your PATH). Standalone launches
+need a Wine runtime; Steam is optional.
 
 ## Run an EXE
 
@@ -23,8 +23,7 @@ graphics frontends can still be used by ordinary x64 applications.
 
 Choose a complete Wine installation using `--wine <exact-id-or-path>`, or use
 `--emulator fex|rosetta` to select its configured default. Combining the options
-requires that Wine to use the requested emulator. To select FEX without creating
-a Steam compatibility tool:
+requires that Wine to use the requested emulator. To select FEX:
 
 ```sh
 nucleon wine fex select /path/to/installed/isotope-runtime
@@ -32,8 +31,7 @@ nucleon run /path/Game.exe --emulator fex
 ```
 
 With no runtime option, standalone launches use the selected FEX default if one
-exists, otherwise the configured Intel/Rosetta Wine. Existing FEX Steam tool
-selections remain usable as a fallback until an independent selection is saved.
+exists, otherwise the configured Intel/Rosetta Wine.
 A broken saved selection reports an error instead of switching runtimes.
 
 Graphics options are `--engine auto|gptk|dxmt|dxvk|vkd3d|kosmickrisp|wine` and
@@ -236,7 +234,7 @@ stops only the owned prefix/process groups.
 
 ## Logs and validation
 
-`nucleon logs --runner` shows the latest launch. Standalone logs are retained
+`nucleon logs` shows the latest launch. Standalone logs are retained
 under `<support>/logs/standalone/<application-or-bottle-id>/<run-id>/`, including
 `setup.log`, `wine.log` and `receipt.json`. Receipts identify standalone origin,
 application/bottle identity, resolved Wine, engine, prefix and launch timing.

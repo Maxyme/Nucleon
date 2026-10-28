@@ -778,15 +778,19 @@ pub fn prepare(root: &Path, installation: &Installation, resolved: &Resolved) ->
             ),
             ("FSR4_ROOT", source.display().to_string()),
             ("FSR4_REPLACE", "1".into()),
-            ("FSR4_VERSION", "4.1.1".into()),
+            (
+                "FSR4_VERSION",
+                resolved
+                    .settings
+                    .backend
+                    .native_model()
+                    .unwrap()
+                    .version()
+                    .into(),
+            ),
             (
                 "FSR4_PROFILE",
-                if resolved.settings.backend == Backend::Fsr4NativeLite {
-                    "lossy"
-                } else {
-                    "exact-fast"
-                }
-                .into(),
+                resolved.settings.backend.native_profile().unwrap().into(),
             ),
             (
                 "FSR4_SETTINGS",

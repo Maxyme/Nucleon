@@ -43,6 +43,20 @@ provider, also run:
 nucleon upscaler install native --wine /path/to/complete/gptk/wine
 ```
 
+For the [upstream FSR 4.1.2 INT8 Lite model](https://github.com/UzenUPoZiTiV4ik/fsr4-native-macos),
+use the separate provider and selection:
+
+```sh
+nucleon upscaler install native412 --wine /path/to/complete/gptk/wine
+nucleon upscaler prepare /games/Game/Game.exe --backend fsr4.1.2 --input dlss \
+  --wine /path/to/complete/gptk/wine --engine wine --graphics-api dx12 --dry-run
+```
+
+Quit the game and repeat without `--dry-run`, then launch with the same choices
+and `--upscaler fsr4.1.2`. Enable DLSS in the game. The installer imports model
+data from the checksum-pinned upstream v2.2 ZIP; `--archive /path/to/zip` reuses
+that exact release. The existing `native` provider and its 4.1.1 choices stay available.
+
 Native requirements are Python 3.11+ for upstream FSR4's build and shader tools,
 Rosetta, Xcode with its Metal Toolchain, and `dxc`, `spirv-cross` and `spirv-val`
 on PATH. `xcrun metal --version` must succeed. `--source /path/to/source` reuses a
@@ -63,6 +77,6 @@ repair incomplete installations. Existing provider identities remain compatible.
 Pinned inputs and notices:
 
 - [Provider releases and upstream revision](../../assets/upscalers/dependencies.toml)
-- [Reviewed native source-file hashes](../../assets/upscalers/fsr4-source.json)
+- Reviewed source-file hashes: [4.1.1](../../assets/upscalers/fsr4-source.json), [4.1.2](../../assets/upscalers/fsr412-source.toml)
 - [Third-party notices](../../NOTICE.md)
 - [Complete upscaler guide](../../UPSCALING.md)

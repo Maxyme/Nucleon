@@ -15,7 +15,6 @@ anyhow = { workspace = true }
 clap = { workspace = true }
 env_logger = { workspace = true }
 serde_json = { workspace = true }
-ctrlc = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

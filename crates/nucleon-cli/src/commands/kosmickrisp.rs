@@ -62,7 +62,7 @@ pub fn run(action: KosmickrispAction) -> Result<()> {
                 info.library_path.display()
             ));
             println!(
-                "\nGames running under 'Nucleon (Wine + Mesa KosmicKrisp Vulkan)' will now use this driver."
+                "\nNucleon Vulkan launches can use this driver when its architecture and capabilities match the selected Wine runtime."
             );
         }
         KosmickrispAction::ClearPath => {

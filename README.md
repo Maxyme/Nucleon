@@ -1,14 +1,37 @@
 # Nucleon
 
-Nucleon runs Windows games and programs on Apple Silicon macOS, directly or from
-the native Steam client, using Wine (including Isotope/FEX), GPTK and different
-graphics backends.
+Nucleon runs Windows games and programs on Apple Silicon macOS using Wine
+(including Isotope/FEX), GPTK and other graphics backends. It launches Steam games
+itself while the ordinary Steam client supplies ownership and Steamworks services.
 
-The goal is to launch Steam games with minimal configuration, automatic 32/64-bit
-handling, and reproducible per-game runtimes. 
-Compatibility depends on the game, Wine build, backend, and driver; support is experimental.
+Steam stays unmodified. Nucleon uses explicit installation records and per-game
+runtimes.
+Game compatibility remains experimental and depends on the runtime and graphics
+backend. CrossOver is optional.
 
-Note: **CrossOver** is optional but can be used like other wine runtimes.
+## Steam games
+
+Install [DepotDownloader](https://github.com/SteamRE/DepotDownloader), then use:
+
+```sh
+nucleon steam install 1622910 --username <account>
+nucleon steam show 1622910
+nucleon launch 1622910
+nucleon steam update 1622910 --username <account>
+```
+
+The downloader requests your password or Steam Guard approval interactively;
+Nucleon does not accept or store a Steam password. Downloads explicitly select
+Windows files and live under Nucleon's support directory. Updates are requested
+through Nucleon, rather than desktop Steam's Downloads screen. Set `--downloader`
+when the provider is outside PATH; an installation under
+`<support>/tools/depotdownloader/DepotDownloader` is discovered automatically.
+
+Keep Steam running and signed in when playing. Use `steam show` and
+`--launch-id <id>` for games with several launch choices, or `--exe <path>` to
+select an executable inside the Nucleon installation. Game arguments follow `--`.
+`launch --dry-run` previews the selected runtime and prefix without starting a
+game. Per-game runtime profiles configure Wine, graphics and Steamworks settings.
 
 ## Standalone EXEs and named environments
 
@@ -38,7 +61,7 @@ runtime selection.
 ## Upscaling games
 
 Nucleon can use OptiScaler to replace a game's existing temporal upscaler with
-FSR2, FSR 3.1, experimental XeSS, MetalFX or native FSR 4.1.1/Lite. It works
+FSR2, FSR 3.1, experimental XeSS, MetalFX or native FSR 4.1.1/Lite and 4.1.2 INT8 Lite. It works
 with direct EXEs, saved applications, bottles and Steam.
 
 Eligible games are **x64 DX11/DX12 games with compatible DLSS, FSR2/3/3.1 or
@@ -70,69 +93,46 @@ files. See the [quick setup guide](tools/upscalers/README.md) for GPTK/native FS
 and [upscaler reference](UPSCALING.md) for compatibility, saved preferences and
 activation checks. Preparation alone does not establish in-game activation.
 
-## Running locally
+## Build and setup
 
-From the checkout, build and use the local CLI:
+Use a current Rust toolchain supporting edition 2024 and Xcode Command Line Tools.
+Build from source:
 
 ```sh
-just build
+cargo build --release -p nucleon-cli
 ./target/release/nucleon setup
 ./target/release/nucleon status
 ```
 
-Quit Steam before setup, restart it afterward, and launch the game through its
-Nucleon compatibility tool. See [SETUP.md](SETUP.md) for prerequisites, Wine and
-backend configuration, and bridge staging.
-
-## Build and setup
-
-For Steam integration, you need Apple Silicon macOS, native Steam, a current Rust toolchain supporting
-edition 2024, Xcode Command Line Tools, and `just`. Runtime requirements vary;
-obtain Wine, graphics backends, and bridge components under their own licenses.
-
-Previous releases have been withdrawn. Build from source:
-
-```sh
-git clone https://github.com/Maxyme/Nucleon.git
-cd Nucleon
-rustup target add aarch64-apple-darwin x86_64-apple-darwin
-brew install just
-just build
-./target/release/nucleon wine list
-./target/release/nucleon setup
-```
-
-Read setup's results: missing bridge files or failed assembly need attention.
-Quit Steam before applying integration changes and restart afterward.
-The [setup guide](SETUP.md) covers Wine, GPTK, backends, bridge staging, and removal.
-
-In Steam, open a game's **Properties → Compatibility**, enable the tool override,
-and select a Nucleon tool. Existing native macOS games should keep their native
-configuration. Use **Play** normally after configuration.
+`setup fix` prepares Nucleon's directories, runtime and supplied Steamworks bridge.
+It does not modify Steam or install a service. Steam games need matching client
+libraries and a bridge for the selected Wine architecture. Standalone applications
+do not require those files. Read the [setup guide](SETUP.md) for details.
 
 Prebuilt ARM64 Wine/FEX core runtime prereleases are built in the separate
-`isotope` repository. See [runtime releases](RUNTIME-RELEASES.md) for publisher automation,
-source/license contents, installation commands and the current graphics limits.
+`isotope` repository. See [Isotope setup](SETUP.md#install-an-isotopefex-runtime)
+for installation and selection, and the [consumer validation workflow](.github/workflows/isotope-runtime.yml)
+for release verification.
 
 Install an exact Wine/FEX version or a local runtime:
 
 ```sh
-nucleon wine install isotope --version 0.1.0-rc.1 --register
-nucleon wine install /path/to/runtime-or-archive --register
+nucleon wine install isotope --version 0.1.0-rc.1
+nucleon wine install /path/to/runtime-or-archive
 ```
 
 The named command requires that release to be published; local paths work before
 publication. Select a complete installed Wine runtime per launch:
 
 ```sh
-nucleon launch 690790 --wine fex-preview --engine dxmt
+nucleon launch 690790 --wine /path/to/fex-runtime --engine dxmt
 nucleon launch 690790 --emulator fex --engine dxmt
 nucleon launch 690790 --emulator rosetta --engine dxvk
 ```
 
 `--wine` accepts an exact installed ID or runtime path. `--emulator rosetta`
 uses the ordinary configured Intel Wine; `--emulator fex` uses the runtime
-registered with `nucleon wine install ... --register` or `wine fex register`.
+selected with `nucleon wine fex select <runtime>`.
 Combining them constrains the selected runtime's mode. These options select
 complete compatible Wine builds, and do not change either default for one launch.
 Run `nucleon wine list` to see available IDs. The FEX core preview omits the developer graphics stack. Its 32-bit execution

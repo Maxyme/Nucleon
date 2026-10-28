@@ -201,25 +201,11 @@ pub fn stage_valve_bridge(custom_path: Option<&Path>) -> Result<()> {
     bail!(
         "Valve client bridge libraries are not staged in {}.\n\
          To stage them, download and extract Valve's client packages, then run:\n\n  \
-         nucleon setup --bridge-path <PATH_TO_EXTRACTED_DIR>\n\n\
+         nucleon setup fix --bridge-path <PATH_TO_EXTRACTED_DIR>\n\n\
          (or export NUCLEON_BRIDGE_PATH=<PATH_TO_EXTRACTED_DIR>)\n\n\
          See README.md for instructions.",
         bridge_dir.display()
     );
-}
-
-/// Backward-compatible alias for `stage_valve_bridge`.
-pub fn fetch_and_stage_valve_packages(custom_path: Option<&Path>) -> Result<()> {
-    // Re-align on every run even when the bridge looks staged: presence proves nothing, and a
-    // substituted client build quietly breaks the Steamworks handshake for every title.
-    let staged_bridge = paths::bridge_dir();
-    if staged_bridge.is_dir() {
-        let legacy = client_legacy_dir();
-        if legacy.is_dir() {
-            align_bridge_with_client(&staged_bridge, &legacy)?;
-        }
-    }
-    stage_valve_bridge(custom_path)
 }
 
 #[cfg(test)]
