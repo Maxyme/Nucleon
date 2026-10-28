@@ -27,6 +27,7 @@ pub struct DiagnosticArgs {
     work: PathBuf,
     #[arg(long)]
     runtime: Option<PathBuf>,
+    /// Override the game directory recorded by Nucleon
     #[arg(long)]
     game_dir: Option<PathBuf>,
     #[arg(long)]

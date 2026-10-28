@@ -18,8 +18,10 @@ target/release/nucleon-devtools probe-steam --runtime /path/to/runtime \
 ```
 
 Game diagnostics require native Steam already running, the installed game and
-local bridge. They use the normal runner with private profiles and isolated
-compatdata; without `--runtime` they use the registered FEX default. `--game-dir`,
+local bridge. Game directories come from Nucleon's installation records;
+`--game-dir` explicitly selects a different directory. They use the normal runner
+with private profiles and isolated compatdata; without `--runtime` they use the
+selected FEX default. `--game-dir`,
 `--bridge`, `--cli`, `--work` and `--debug` override diagnostic inputs. DMC5
 settings are locked, backed up and restored byte-for-byte even on failure or
 interruption. Saves remain the real user's saves. These commands do not build or

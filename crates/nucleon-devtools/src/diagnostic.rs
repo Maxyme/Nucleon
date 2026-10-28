@@ -190,15 +190,10 @@ pub fn game(args: &crate::DiagnosticArgs) -> Result<()> {
     let is_dirt = args.game == "dirt";
     ensure!(is_dirt || args.game == "dmc5", "Choose dirt or dmc5");
     let appid = if is_dirt { 690790 } else { 601150 };
-    let game = args.game_dir.clone().unwrap_or_else(|| {
-        nucleon_core::paths::home_dir()
-            .join("Library/Application Support/Steam/steamapps/common")
-            .join(if is_dirt {
-                "DiRT Rally 2.0"
-            } else {
-                "Devil May Cry 5"
-            })
-    });
+    let game = match &args.game_dir {
+        Some(directory) => directory.clone(),
+        None => nucleon_core::steam::library::installed(appid)?.directory,
+    };
     let exe = game
         .join(if is_dirt {
             "dirtrally2.exe"
@@ -206,7 +201,7 @@ pub fn game(args: &crate::DiagnosticArgs) -> Result<()> {
             "DevilMayCry5.exe"
         })
         .canonicalize()
-        .context("Game is not installed in --game-dir")?;
+        .with_context(|| format!("Game executable is missing in {}", game.display()))?;
     let runtime = match &args.runtime {
         Some(path) => path.clone(),
         None => nucleon_core::runtime_selection::fex_default()?.root,
