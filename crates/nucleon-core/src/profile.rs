@@ -106,9 +106,8 @@ impl GameProfile {
     pub fn apply_protocol(&self, runtime: &mut ResolvedRuntime) -> Result<()> {
         if let Some(protocol) = self.steam_protocol {
             ensure!(
-                protocol != SteamProtocol::ValveRedirect
-                    || runtime.steam_protocol == SteamProtocol::ValveRedirect,
-                "Selected runtime does not advertise the Valve Steam redirect; choose bridge or a redirect-capable runtime"
+                runtime.steam_protocols.contains(&protocol),
+                "Selected runtime does not advertise the requested Steam protocol; choose a supported protocol or runtime"
             );
             runtime.steam_protocol = protocol;
         }

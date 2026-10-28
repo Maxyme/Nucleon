@@ -82,9 +82,11 @@ struct Descriptor {
     #[serde(default)]
     environment: BTreeMap<String, String>,
     #[serde(default)]
-    steam_protocol: SteamProtocol,
+    steam_protocol: Option<SteamProtocol>,
     #[serde(default)]
-    steam_helper: bool,
+    steam_helper: Option<bool>,
+    #[serde(default)]
+    steam_protocols: Vec<SteamProtocol>,
     #[serde(default)]
     graphics: GraphicsPaths,
 }
@@ -102,7 +104,7 @@ pub struct ResolvedRuntime {
     pub backends: Vec<GraphicsBackend>,
     pub environment: BTreeMap<String, String>,
     pub steam_protocol: SteamProtocol,
-    pub steam_helper: bool,
+    pub steam_protocols: Vec<SteamProtocol>,
     pub graphics: GraphicsPaths,
 }
 
@@ -163,10 +165,33 @@ impl ResolvedRuntime {
     fn from_descriptor(root: &Path, text: &str) -> Result<Self> {
         let d: Descriptor = crate::configuration::toml(text, &root.join(DESCRIPTOR))?;
         ensure!(
-            d.schema == 1,
+            matches!(d.schema, 1 | 2),
             "Unsupported runtime descriptor schema {}",
             d.schema
         );
+        let (steam_protocols, steam_protocol) = if d.schema == 1 {
+            // Read published schema-1 runtimes without rewriting immutable generations.
+            let selected = d.steam_protocol.unwrap_or_default();
+            let mut protocols = vec![SteamProtocol::Bridge];
+            if selected != SteamProtocol::Bridge {
+                protocols.push(selected);
+            }
+            (protocols, selected)
+        } else {
+            ensure!(
+                d.steam_protocol.is_none() && d.steam_helper.is_none(),
+                "Schema 2 declares Steam capabilities; game launch preferences belong in profiles"
+            );
+            ensure!(
+                d.steam_protocols.contains(&SteamProtocol::Bridge)
+                    && d.steam_protocols
+                        .iter()
+                        .enumerate()
+                        .all(|(i, p)| !d.steam_protocols[..i].contains(p)),
+                "Steam capabilities must include bridge and contain no duplicate protocols"
+            );
+            (d.steam_protocols, SteamProtocol::Bridge)
+        };
         let prefix = match d.prefix {
             Some(prefix) => prefix,
             None if d.mode == ExecutionMode::Intel => PrefixCompatibility {
@@ -378,8 +403,8 @@ impl ResolvedRuntime {
             windows_dirs,
             backends: d.backends,
             environment,
-            steam_protocol: d.steam_protocol,
-            steam_helper: d.steam_helper,
+            steam_protocol,
+            steam_protocols,
             graphics,
         };
         crate::frontend::validate_declared(&runtime)?;
@@ -445,7 +470,7 @@ impl ResolvedRuntime {
             backends: GraphicsBackend::all().to_vec(),
             environment: BTreeMap::new(),
             steam_protocol: SteamProtocol::Bridge,
-            steam_helper: false,
+            steam_protocols: vec![SteamProtocol::Bridge],
             graphics: GraphicsPaths::default(),
         })
     }
@@ -541,6 +566,56 @@ pub(crate) fn fixture(mode: ExecutionMode) -> (tempfile::TempDir, ResolvedRuntim
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn steam_capabilities_do_not_select_game_launch_policy() {
+        let (_temp, original) = fixture(ExecutionMode::Arm64Fex);
+        let old = fs::read_to_string(original.root.join(DESCRIPTOR)).unwrap();
+        let descriptor = old.replace(
+            "schema=1",
+            "schema=2\nsteam_protocols=['bridge','valve-redirect']",
+        );
+        let mut runtime = ResolvedRuntime::from_descriptor(&original.root, &descriptor).unwrap();
+        assert_eq!(runtime.prefix, original.prefix);
+        assert_eq!(runtime.steam_protocol, SteamProtocol::Bridge);
+        let profile = crate::profile::GameProfile {
+            steam_protocol: Some(SteamProtocol::ValveRedirect),
+            ..Default::default()
+        };
+        profile.apply_protocol(&mut runtime).unwrap();
+        assert_eq!(runtime.steam_protocol, SteamProtocol::ValveRedirect);
+        let plan = crate::launch::LaunchPlan::new(
+            runtime,
+            original.root.join("prefix"),
+            crate::detector::TargetEngine::WineStaging,
+            Default::default(),
+            true,
+            None,
+            &crate::detector::GraphicsApi::Unknown,
+        )
+        .unwrap();
+        assert!(!plan.use_steam_helper);
+        let mut unsupported = ResolvedRuntime::from_descriptor(
+            &original.root,
+            &descriptor.replace("['bridge','valve-redirect']", "['bridge']"),
+        )
+        .unwrap();
+        assert!(profile.apply_protocol(&mut unsupported).is_err());
+        assert!(
+            ResolvedRuntime::from_descriptor(
+                &original.root,
+                &descriptor.replace("['bridge','valve-redirect']", "['bridge','bridge']")
+            )
+            .is_err()
+        );
+        assert!(
+            ResolvedRuntime::from_descriptor(
+                &original.root,
+                &descriptor.replace("schema=2", "schema=2\nsteam_helper=true")
+            )
+            .is_err()
+        );
+    }
 
     #[test]
     fn bundled_vulkan_resolution_preserves_relative_path_and_containment_policy() {

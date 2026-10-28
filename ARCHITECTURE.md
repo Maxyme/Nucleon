@@ -50,6 +50,12 @@ receives the AppID, paths, profile overrides and arguments explicitly from the C
 
 ## Runtime selection
 
+Schema-2 runtime descriptors advertise `steam_protocols` as capabilities. The
+per-game profile selects a supported protocol and whether to use the Windows
+helper; graphics backends do not select Steam launch policy. Schema-1 published
+runtimes remain readable without rewriting their immutable generations. Prefix
+family and ABI retain their saved-state meaning.
+
 The runner reads `<support_dir>/game_profiles/<AppID>.json` and explicit launch
 overrides. Fields include `engine`, `wine`, `dxvk_path`, `vulkan_icd`,
 `use_steam_shim`, `hud`, and `overlay`. The default support directory is

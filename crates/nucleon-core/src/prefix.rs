@@ -581,7 +581,6 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         let (temp, mut runtime) = runtime::fixture(ExecutionMode::Arm64Fex);
         runtime.steam_protocol = SteamProtocol::ValveRedirect;
-        runtime.steam_helper = true;
         let script = r#"#!/bin/sh
 case "$1" in
 wineboot)
