@@ -1076,7 +1076,6 @@ dependencies = [
  "anyhow",
  "chrono",
  "ctrlc",
- "env_logger",
  "log",
  "nucleon-core",
  "rustix",

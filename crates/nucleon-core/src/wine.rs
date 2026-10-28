@@ -832,7 +832,7 @@ pub fn get_active_wine_runtime() -> Option<WineRuntime> {
 }
 
 /// Sets the active Wine runtime by ID, name, or path, persists the selection,
-/// without changing Steam or registering compatibility tools.
+/// without changing Steam.
 pub fn set_active_wine(identifier_or_path: &str) -> Result<WineRuntime> {
     let runtime = resolve_wine_runtime_by_query(identifier_or_path)
         .context(format!("Could not find a valid Wine runtime matching '{}'. Run 'nucleon wine list' to view available options.", identifier_or_path))?;

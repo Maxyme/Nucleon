@@ -12,7 +12,6 @@ build: build-bins
 # Build CLI release binary (single binary embedding runner)
 build-bins:
 	cargo build --release -p nucleon-cli
-	ln -sf nucleon {{target_dir}}/nucleon-runner
 
 # Run automated Nucleon setup
 setup: build
@@ -20,12 +19,7 @@ setup: build
 
 # Stage Valve bridge from an extracted directory: just stage-bridge /path/to/extracted
 stage-bridge path: build
-    ./{{target_dir}}/nucleon setup --bridge-path {{path}}
-
-# Remove Nucleon from Steam UI, compatibility tools, and game mappings
-unregister: build
-    ./{{target_dir}}/nucleon unregister
-
+    ./{{target_dir}}/nucleon setup fix --bridge-path {{path}}
 
 # Inspect Nucleon runtime status
 status:
@@ -63,7 +57,6 @@ package:
 	rm -rf target/nucleon-macos-arm64 target/nucleon-macos-arm64.tar.gz
 	mkdir -p target/nucleon-macos-arm64/assets
 	cp target/aarch64-apple-darwin/release/nucleon target/nucleon-macos-arm64/
-	ln -sf nucleon target/nucleon-macos-arm64/nucleon-runner
 	cp assets/bridge-manifest.json target/nucleon-macos-arm64/assets/
 	cp README.md ARCHITECTURE.md SETUP.md TROUBLESHOOTING.md ROADMAP.md LICENSE NOTICE.md target/nucleon-macos-arm64/
 	git archive --format=tar.gz --prefix=nucleon-source/ HEAD -o target/nucleon-source.tar.gz

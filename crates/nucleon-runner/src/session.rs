@@ -102,7 +102,6 @@ struct Receipt {
 }
 pub struct RunSession {
     pub directory: PathBuf,
-    pub appid: Option<String>,
     pub wine_log: PathBuf,
     pub debug: bool,
     pub clock: Clock,
@@ -123,27 +122,6 @@ impl RunSession {
     pub fn steam(args: &[String], appid: &str) -> Result<Self> {
         Self::create_with_identity(&paths::support_dir(), args, Some(appid.into()), appid, None)
     }
-    pub fn create(args: &[String]) -> Result<Self> {
-        Self::create_at(&paths::support_dir(), args)
-    }
-    fn create_at(support: &Path, args: &[String]) -> Result<Self> {
-        let appid = std::env::var("STEAM_COMPAT_APP_ID")
-            .ok()
-            .or_else(|| std::env::var("SteamAppId").ok())
-            .or_else(|| {
-                std::env::var_os("STEAM_COMPAT_DATA_PATH").and_then(|p| {
-                    PathBuf::from(p)
-                        .file_name()
-                        .map(|n| n.to_string_lossy().into_owned())
-                })
-            })
-            .filter(|id| {
-                !id.is_empty() && id.len() <= 20 && id.bytes().all(|b| b.is_ascii_digit())
-            });
-        let group = appid.as_deref().unwrap_or("manual").to_string();
-        Self::create_with_identity(support, args, appid, &group, None)
-    }
-
     fn create_with_identity(
         support: &Path,
         args: &[String],
@@ -206,7 +184,6 @@ impl RunSession {
         let previous = ACTIVE.with(|active| active.replace(Some((file, false))));
         let session = Self {
             directory,
-            appid,
             wine_log,
             debug: false,
             clock,
@@ -347,10 +324,14 @@ mod tests {
     #[test]
     fn concurrent_run_files_are_distinct_and_cleanup_is_separate_from_runtime() {
         let temp = tempfile::tempdir().unwrap();
-        let args = vec!["runner".into(), "run".into(), "game.exe".into()];
-        let mut a = RunSession::create_at(temp.path(), &args).unwrap();
+        let args = vec!["nucleon".into(), "launch".into(), "123".into()];
+        let mut a =
+            RunSession::create_with_identity(temp.path(), &args, Some("123".into()), "123", None)
+                .unwrap();
         log("first run");
-        let b = RunSession::create_at(temp.path(), &args).unwrap();
+        let b =
+            RunSession::create_with_identity(temp.path(), &args, Some("123".into()), "123", None)
+                .unwrap();
         log("second run");
         assert_ne!(a.directory, b.directory);
         drop(b);

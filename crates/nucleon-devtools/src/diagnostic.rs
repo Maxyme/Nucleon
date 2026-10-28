@@ -90,11 +90,11 @@ pub fn launch(
     log: &Path,
     timeout: Option<u64>,
     debug: bool,
-    runner: &Path,
+    cli: &Path,
 ) -> Result<Value> {
     let runtime = ResolvedRuntime::inspect(runtime)?;
     launch_resolved(
-        runtime, bridge, appid, exe, compat, profile, log, timeout, debug, runner,
+        runtime, bridge, appid, exe, compat, profile, log, timeout, debug, cli,
     )
 }
 #[allow(clippy::too_many_arguments)]
@@ -108,33 +108,45 @@ fn launch_resolved(
     log: &Path,
     timeout: Option<u64>,
     debug: bool,
-    runner: &Path,
+    cli: &Path,
 ) -> Result<Value> {
     let temporary = tempfile::tempdir()?;
-    let selection = temporary.path().join("runtime.json");
+    let support = temporary.path().join("support");
+    let profile_file = support
+        .join(
+            if runtime.mode == nucleon_core::runtime::ExecutionMode::Arm64Fex {
+                "game_profiles/arm64-fex"
+            } else {
+                "game_profiles"
+            },
+        )
+        .join(format!("{appid}.json"));
+    let mut profile = profile.clone();
+    profile.steam_bridge = Some(std::path::absolute(bridge)?);
+    write_json(&profile_file, &profile)?;
+    let record = support
+        .join("games/steam")
+        .join(appid.to_string())
+        .join("installation.json");
     write_json(
-        &selection,
-        &json!({"schema":1,"root":runtime.root,"prefix":runtime.prefix}),
+        &record,
+        &nucleon_core::steam::library::Installation {
+            schema: 1,
+            appid,
+            directory: exe.parent().context("EXE has no parent")?.canonicalize()?,
+            data_path: std::path::absolute(compat)?,
+            branch: "public".into(),
+            language: "english".into(),
+        },
     )?;
-    let profile_file = temporary.path().join("profile.json");
-    write_json(&profile_file, profile)?;
     let receipt = log.with_extension("runner.json");
     let wine_log = log.with_extension("wine.log");
     let mut env = clean_environment();
-    if let Some(value) = std::env::var_os("NUCLEON_SUPPORT_DIR") {
-        set(&mut env, "NUCLEON_SUPPORT_DIR", value);
-    }
+    set(&mut env, "NUCLEON_SUPPORT_DIR", &support);
     for (name, value) in [
-        ("NUCLEON_FEX_SELECTION", p(&selection)),
-        ("NUCLEON_GAME_PROFILE", p(&profile_file)),
-        ("NUCLEON_STEAM_BRIDGE", p(std::path::absolute(bridge)?)),
         ("NUCLEON_WINE_LOG", p(&wine_log)),
         ("NUCLEON_RUN_RECEIPT", p(&receipt)),
         ("NUCLEON_DEBUG", if debug { "1" } else { "0" }.into()),
-        ("STEAM_COMPAT_APP_ID", appid.to_string()),
-        ("STEAM_COMPAT_DATA_PATH", p(std::path::absolute(compat)?)),
-        ("SteamAppId", appid.to_string()),
-        ("SteamGameId", appid.to_string()),
     ] {
         set(&mut env, name, value);
     }
@@ -142,7 +154,19 @@ fn launch_resolved(
         ensure!(seconds > 0, "--timeout must be positive");
         set(&mut env, "NUCLEON_RUN_SECONDS", seconds.to_string());
     }
-    let mut cmd = command(runner, &["run".into(), p(exe)], Some(&env), exe.parent());
+    let mut cmd = command(
+        cli,
+        &[
+            "launch".into(),
+            appid.to_string(),
+            "--exe".into(),
+            p(exe),
+            "--wine".into(),
+            p(&runtime.root),
+        ],
+        Some(&env),
+        exe.parent(),
+    );
     execute(
         &mut cmd,
         Some(log),
@@ -191,15 +215,12 @@ pub fn game(args: &crate::DiagnosticArgs) -> Result<()> {
         .bridge
         .clone()
         .unwrap_or_else(nucleon_core::paths::bridge_dir);
-    let runner = args
-        .runner
+    let cli = args
+        .cli
         .clone()
-        .or_else(|| std::env::var_os("NUCLEON_RUNNER").map(PathBuf::from))
-        .unwrap_or_else(|| repo().join("target/debug/nucleon-runner"));
-    ensure!(
-        runner.is_file(),
-        "Build nucleon-runner first or provide --runner"
-    );
+        .or_else(|| std::env::var_os("NUCLEON_CLI").map(PathBuf::from))
+        .unwrap_or_else(|| repo().join("target/debug/nucleon"));
+    ensure!(cli.is_file(), "Build nucleon-cli first or provide --cli");
     let logs = args.work.join("dx12/logs");
     fs::create_dir_all(&logs)?;
     let stamp = chrono::Utc::now().format("%Y%m%d-%H%M%S-%f").to_string();
@@ -234,7 +255,7 @@ pub fn game(args: &crate::DiagnosticArgs) -> Result<()> {
             &log,
             args.timeout.map(|n| n.get()),
             args.debug,
-            &runner,
+            &cli,
         )
     })();
     let restore = if let Some(settings) = &mut settings {
@@ -264,7 +285,7 @@ pub fn game(args: &crate::DiagnosticArgs) -> Result<()> {
 mod tests {
     use super::*;
     #[test]
-    fn diagnostic_runner_receives_private_selection_profile_and_runtime_bound() {
+    fn diagnostic_cli_receives_isolated_installation_profile_and_runtime_bound() {
         use nucleon_core::{
             backend::GraphicsBackend,
             runtime::{ExecutionMode, GraphicsPaths, GuestAbi, PrefixCompatibility, SteamProtocol},
@@ -291,17 +312,20 @@ mod tests {
             steam_helper: false,
             graphics: GraphicsPaths::default(),
         };
-        let runner = dir.path().join("runner");
-        fs::write(&runner,r##"#!/bin/sh
+        let cli = dir.path().join("nucleon");
+        fs::write(&cli,r##"#!/bin/sh
 test -z "${WINEPREFIX+x}" || exit 20
 test -z "${NUCLEON_ENGINE+x}" || exit 21
 test -z "${VK_DRIVER_FILES+x}" || exit 22
-/bin/cp "$NUCLEON_GAME_PROFILE" "$NUCLEON_RUN_RECEIPT.profile"
-/bin/cp "$NUCLEON_FEX_SELECTION" "$NUCLEON_RUN_RECEIPT.selection"
+test "$1" = "launch" || exit 23
+test "$2" = "601150" || exit 24
+/bin/cp "$NUCLEON_SUPPORT_DIR/game_profiles/arm64-fex/601150.json" "$NUCLEON_RUN_RECEIPT.profile"
+/bin/cp "$NUCLEON_SUPPORT_DIR/games/steam/601150/installation.json" "$NUCLEON_RUN_RECEIPT.installation"
+printf '%s' "$6" > "$NUCLEON_RUN_RECEIPT.runtime"
 printf '%s' "$NUCLEON_RUN_SECONDS" > "$NUCLEON_RUN_RECEIPT.timeout"
 printf '{"status":"bounded","timings":{"preparation_ms":25,"runtime_ms":7000,"cleanup_ms":50}}' > "$NUCLEON_RUN_RECEIPT"
 "##).unwrap();
-        fs::set_permissions(&runner, fs::Permissions::from_mode(0o755)).unwrap();
+        fs::set_permissions(&cli, fs::Permissions::from_mode(0o755)).unwrap();
         let exe = dir.path().join("game.exe");
         fs::write(&exe, []).unwrap();
         let log = dir.path().join("launch.log");
@@ -317,7 +341,7 @@ printf '{"status":"bounded","timings":{"preparation_ms":25,"runtime_ms":7000,"cl
             &log,
             Some(7),
             false,
-            &runner,
+            &cli,
         )
         .unwrap();
         assert_eq!(result["status"], "BOUNDED_RUN_FINISHED");
@@ -330,10 +354,14 @@ printf '{"status":"bounded","timings":{"preparation_ms":25,"runtime_ms":7000,"cl
         );
         assert_eq!(
             json(&dir.path().join("launch.runner.json.profile")).unwrap(),
-            serde_json::to_value(profile).unwrap()
+            {
+                let mut expected = profile.clone();
+                expected.steam_bridge = Some(dir.path().join("bridge"));
+                serde_json::to_value(expected).unwrap()
+            }
         );
         assert_eq!(
-            json(&dir.path().join("launch.runner.json.selection")).unwrap()["root"],
+            fs::read_to_string(dir.path().join("launch.runner.json.runtime")).unwrap(),
             p(&root)
         );
         assert_eq!(

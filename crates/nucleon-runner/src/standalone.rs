@@ -85,8 +85,6 @@ pub fn resolve_standalone(request: StandaloneRequest) -> Result<ResolvedStandalo
         cwd: application.cwd,
         hud: settings.hud.unwrap_or(false),
         overlay: false,
-        wait: false,
-        consume_override: None,
         upscaler: settings.upscaler,
         environment: Default::default(),
     }
@@ -151,7 +149,7 @@ pub(super) fn is_application_process_line(
         return false;
     }
     let command = fields.next().unwrap_or("").trim().to_lowercase();
-    if command.is_empty() || command.contains("nucleon-runner") || command.contains("/nucleon ") {
+    if command.is_empty() || command.contains("/nucleon ") {
         return false;
     }
     if !target.is_empty() && command.contains(target) {

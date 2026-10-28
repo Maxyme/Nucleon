@@ -1,12 +1,8 @@
-//! Read-only Steam discovery and one-time removal of legacy client modifications.
+//! Steam metadata and Nucleon-managed game installations.
 mod appinfo;
 pub mod library;
-pub mod migration;
-pub mod native_detect;
-mod vdf_mapping;
 use crate::paths;
 use anyhow::{Context, Result, bail, ensure};
-pub use native_detect::*;
 use std::{path::PathBuf, process::Command};
 
 pub fn check_steam_installed() -> Result<PathBuf> {

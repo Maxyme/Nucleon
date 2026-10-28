@@ -137,12 +137,12 @@ pub fn check_prerequisites(gptk_override: Option<&Path>) -> Vec<PrerequisiteChec
             .to_string(),
     });
 
-    // 5. Runner & Steam Compatibility Tools
+    // Assembled runtime
     let runner_ok = paths::current_runner().exists();
     let runner_details = if paths::current_runner().exists() {
         paths::current_runner().display().to_string()
     } else {
-        "Not assembled / not registered".to_string()
+        "Not assembled".to_string()
     };
     checks.push(PrerequisiteCheck {
         name: "Runtime",
@@ -274,7 +274,7 @@ pub fn run_fix(args: &SetupArgs) -> Result<()> {
     }
 
     // 4. Stage Valve bridge packages
-    match manifest::fetch_and_stage_valve_packages(args.bridge_path.as_deref()) {
+    match manifest::stage_valve_bridge(args.bridge_path.as_deref()) {
         Ok(()) => ui::success("Valve client bridge libraries staged"),
         Err(e) => ui::warn(format!("Failed to stage bridge packages: {e}")),
     }

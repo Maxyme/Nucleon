@@ -15,8 +15,7 @@ fn cli(support: &Path) -> Command {
         .env("PATH", "/usr/bin:/bin")
         // A Steam/store parent must not change a saved application preview.
         .env("NUCLEON_ENGINE", "invalid-parent")
-        .env("NUCLEON_WINE", "/missing/parent-runtime")
-        .env("STEAM_COMPAT_DATA_PATH", "/missing/parent-prefix");
+        .env("NUCLEON_WINE", "/missing/parent-runtime");
     command
 }
 fn output(command: &mut Command) -> Value {
@@ -285,9 +284,4 @@ fn steam_direct_preview_preserves_the_existing_prefix_and_has_no_client_side_eff
     assert!(!f.support.join("logs").exists());
     assert!(!f.prefix.join("pfx").exists());
     assert_eq!(fs::read(f.prefix.join("save")).unwrap(), b"keep");
-    assert!(
-        !f.support
-            .join(format!("launch_override_{appid}.json"))
-            .exists()
-    );
 }

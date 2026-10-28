@@ -8,15 +8,10 @@ license.workspace = true
 name = "nucleon_runner"
 path = "src/lib.rs"
 
-[[bin]]
-name = "nucleon-runner"
-path = "src/main.rs"
-
 [dependencies]
 nucleon-core = { path = "../nucleon-core" }
 anyhow = { workspace = true }
 log = { workspace = true }
-env_logger = { workspace = true }
 chrono = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

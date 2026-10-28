@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use nucleon_core::paths;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Seek, SeekFrom};
@@ -7,9 +7,9 @@ use std::thread;
 use std::time::Duration;
 
 fn current_runner_path() -> Result<PathBuf> {
-    Ok(paths::latest_run_dir()?
+    paths::latest_run_dir()?
         .map(|p| p.join("runner.log"))
-        .unwrap_or_else(|| paths::support_dir().join("nucleon-runner.log")))
+        .context("No launch logs found; launch an application first")
 }
 
 pub fn run(lines: usize, follow: bool) -> Result<()> {

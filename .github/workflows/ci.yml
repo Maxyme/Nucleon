@@ -108,9 +108,8 @@ jobs:
           BUNDLE_DIR="nucleon-macos-arm64"
           mkdir -p "${BUNDLE_DIR}/assets"
 
-          # Distribute the CLI and backwards-compatible runner symlink
+          # Distribute the CLI
           cp target/aarch64-apple-darwin/release/nucleon "${BUNDLE_DIR}/"
-          ln -sf nucleon "${BUNDLE_DIR}/nucleon-runner"
 
           # Distribute bridge manifest
           cp assets/bridge-manifest.json "${BUNDLE_DIR}/assets/"

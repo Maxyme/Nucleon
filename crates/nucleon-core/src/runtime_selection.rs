@@ -52,13 +52,7 @@ impl FromStr for Emulator {
 }
 
 pub fn fex_default() -> Result<ResolvedRuntime> {
-    let saved = fex_default_file();
-    let path = if saved.try_exists()? {
-        saved
-    } else {
-        paths::steam_fex_compat_tools_dir().join("fex-runtime.json")
-    };
-    load_fex_selection(&path)
+    load_fex_selection(&fex_default_file())
         .context("No usable FEX default. Run 'nucleon wine fex select <runtime>'")
 }
 
@@ -81,11 +75,7 @@ pub fn set_fex_default(runtime: &ResolvedRuntime) -> Result<()> {
 
 /// Prefer the deliberately selected native default; a broken selection is an error.
 pub fn standalone_default() -> Result<ResolvedRuntime> {
-    if fex_default_file().try_exists()?
-        || paths::steam_fex_compat_tools_dir()
-            .join("fex-runtime.json")
-            .try_exists()?
-    {
+    if fex_default_file().try_exists()? {
         fex_default()
     } else {
         rosetta_default()
@@ -98,9 +88,6 @@ pub fn named(query: &str) -> Result<ResolvedRuntime> {
         !query.trim().is_empty(),
         "Wine runtime cannot be empty; run 'nucleon wine list'"
     );
-    if query == "fex-preview" {
-        return fex_default();
-    }
     let path = Path::new(query);
     if path.exists() {
         let root = wine::resolve_wine_runtime_root(path)
@@ -177,20 +164,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn native_default_is_independent_of_steam_and_invalid_selection_is_not_ignored() {
+    fn default_selection_pins_runtime_and_rejects_invalid_configuration() {
         if crate::test_support::run_in_isolated_support(
-            "runtime_selection::tests::native_default_is_independent_of_steam_and_invalid_selection_is_not_ignored",
+            "runtime_selection::tests::default_selection_pins_runtime_and_rejects_invalid_configuration",
         ) {
             return;
         }
         let (_temp, runtime) = crate::runtime::fixture(ExecutionMode::Arm64Fex);
         set_fex_default(&runtime).unwrap();
         assert_eq!(standalone_default().unwrap().root, runtime.root);
-        assert!(
-            !paths::steam_fex_compat_tools_dir()
-                .join("fex-runtime.json")
-                .exists()
-        );
         std::fs::write(fex_default_file(), b"broken").unwrap();
         assert!(standalone_default().is_err());
     }
@@ -231,7 +213,7 @@ struct Selection {
     prefix: crate::runtime::PrefixCompatibility,
 }
 
-pub fn load_fex_selection(path: &Path) -> Result<ResolvedRuntime> {
+fn load_fex_selection(path: &Path) -> Result<ResolvedRuntime> {
     let selection: Selection = serde_json::from_slice(
         &std::fs::read(path)
             .with_context(|| format!("Read experimental runtime selection {}", path.display()))?,

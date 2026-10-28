@@ -216,15 +216,8 @@ mod tests {
                 "isotope",
                 "--version",
                 "0.1.0-rc.1",
-                "--register",
             ],
-            vec![
-                "nucleon",
-                "wine",
-                "install",
-                "/tmp/runtime.tar.gz",
-                "--register",
-            ],
+            vec!["nucleon", "wine", "install", "/tmp/runtime.tar.gz"],
             vec![
                 "nucleon",
                 "wine",
@@ -407,16 +400,11 @@ enum Commands {
         #[command(subcommand)]
         action: SteamAction,
     },
-    /// Remove Nucleon from Steam UI, compatibility tools, and game mappings
-    Unregister,
     /// View per-launch Nucleon logs
     Logs {
         /// Number of lines to display (default: 50)
         #[arg(short = 'n', long, default_value_t = 50)]
         lines: usize,
-        /// Show only runner logs
-        #[arg(long)]
-        runner: bool,
         /// Follow log output continuously
         #[arg(short, long)]
         follow: bool,
@@ -426,24 +414,6 @@ enum Commands {
 fn main() -> Result<()> {
     env_logger::init();
 
-    // Multi-call binary support: if invoked as 'nucleon-runner', dispatch directly to runner
-    let raw_args: Vec<String> = std::env::args().collect();
-    if let Some(arg0) = raw_args.first() {
-        let exe_name = std::path::Path::new(arg0)
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("");
-        if exe_name == "nucleon-runner" {
-            return nucleon_runner::run_with_args(&raw_args);
-        }
-    }
-
-    // Direct invocation via 'nucleon runner <verb> [args...]'
-    if raw_args.len() >= 2 && raw_args[1] == "runner" {
-        let mut runner_args = vec![raw_args[0].clone()];
-        runner_args.extend_from_slice(&raw_args[2..]);
-        return nucleon_runner::run_with_args(&runner_args);
-    }
     let cli = Cli::parse();
 
     match cli.command {
@@ -503,14 +473,6 @@ fn main() -> Result<()> {
         Commands::Launch(args) => commands::launch::run_launch(args),
         Commands::Validate { appid } => commands::launch::run_validate(appid),
         Commands::Steam { action } => commands::steam::run(action),
-        Commands::Unregister => commands::steam::run_unregister(),
-        Commands::Logs {
-            lines,
-            runner,
-            follow,
-        } => {
-            let _ = runner;
-            commands::logs::run(lines, follow)
-        }
+        Commands::Logs { lines, follow } => commands::logs::run(lines, follow),
     }
 }

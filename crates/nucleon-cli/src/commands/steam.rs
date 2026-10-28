@@ -61,9 +61,6 @@ pub enum SteamAction {
     Play(PlayArgs),
     /// Show cached Windows launch entries and the installation directory
     Show { appid: u32 },
-    /// Back up and remove the retired injected Steam integration (quit Steam first)
-    #[command(alias = "unregister")]
-    Detach,
 }
 
 pub fn run(action: SteamAction) -> Result<()> {
@@ -82,21 +79,7 @@ pub fn run(action: SteamAction) -> Result<()> {
             );
             Ok(())
         }
-        SteamAction::Detach => run_unregister(),
     }
-}
-
-pub fn run_unregister() -> Result<()> {
-    let Some(backup) = steam::migration::detach()? else {
-        ui::info("No legacy Steam integration found; Steam was left unchanged.");
-        return Ok(());
-    };
-    ui::success("Removed the legacy Steam integration; no automatic repair will run");
-    ui::kv("Backup:", backup.display());
-    ui::info(
-        "Reinstall the official Steam app to restore Valve's signature. Keep the existing Steam library and user data.",
-    );
-    Ok(())
 }
 
 fn downloader_path(explicit: Option<PathBuf>) -> Result<PathBuf> {
@@ -132,10 +115,8 @@ fn download(args: DownloadArgs, updating: bool) -> Result<()> {
     );
     let directory = previous
         .as_ref()
-        .filter(|p| p.original_directory.as_ref() != Some(&p.directory))
         .map(|p| p.directory.clone())
         .unwrap_or_else(|| steam::library::game_directory(args.appid).join("files"));
-    let original_directory = previous.as_ref().and_then(|p| p.original_directory.clone());
     let data_path = previous
         .as_ref()
         .map(|p| p.data_path.clone())
@@ -173,17 +154,7 @@ fn download(args: DownloadArgs, updating: bool) -> Result<()> {
         return Ok(());
     }
     std::fs::create_dir_all(&directory)?;
-    if let Some(original) = &original_directory {
-        ensure!(
-            !directory
-                .canonicalize()?
-                .starts_with(original.canonicalize()?),
-            "Download destination overlaps retained Steam game files; choose an independent Nucleon support directory"
-        );
-        ui::info(
-            "Original Steam game files will be retained. This download uses a separate Nucleon directory.",
-        );
-    }
+
     ui::info(
         "Downloading Windows files. Complete Steam authentication in the downloader; Nucleon does not store your password.",
     );
@@ -203,7 +174,6 @@ fn download(args: DownloadArgs, updating: bool) -> Result<()> {
         schema: 1,
         appid: args.appid,
         directory: directory.clone(),
-        original_directory,
         data_path,
         branch,
         language,

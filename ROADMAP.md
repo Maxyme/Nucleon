@@ -16,10 +16,8 @@ support claims.
 
 ## Reliability and safety
 
-- [x] Remove client injection, instruction contracts, UI patches and repair guard.
 - [x] Launch Steam games directly through Nucleon with explicit game identity.
 - [x] Delegate Windows downloads to an independent authenticated downloader.
-- [x] Preserve existing prefixes and back up retired integration state.
 - [ ] Maintain a game/runtime/backend matrix covering visual presentation, input,
   ownership, shutdown, DRM relaunches and client updates.
 - [ ] Validate Cloud, controller and overlay behavior outside Steam's launcher.

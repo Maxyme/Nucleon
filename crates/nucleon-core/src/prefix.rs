@@ -300,54 +300,6 @@ pub fn isolate_user_shell_folders(prefix_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Isolates user shell folders across all existing game prefixes in the Steam library.
-pub fn isolate_all_steam_game_prefixes() -> Result<usize> {
-    let compatdata = paths::steam_compat_data_dir();
-    let mut count = 0;
-    if compatdata.is_dir()
-        && let Ok(entries) = fs::read_dir(&compatdata)
-    {
-        for entry in entries.flatten() {
-            let p = entry.path();
-            if p.is_dir() {
-                let pfx = p.join("pfx");
-                if pfx.is_dir() && isolate_user_shell_folders(&pfx).is_ok() {
-                    count += 1;
-                }
-            }
-        }
-    }
-    Ok(count)
-}
-
-pub fn configure_prefix_registry(prefix_dir: &Path, runner_dir: &Path) -> Result<()> {
-    let runtime = crate::runtime::ResolvedRuntime::inspect(runner_dir)?;
-    let plan = crate::launch::LaunchPlan::new(
-        runtime,
-        prefix_dir.to_path_buf(),
-        crate::detector::TargetEngine::WineStaging,
-        Default::default(),
-        true,
-        Some(false),
-        &crate::detector::GraphicsApi::Unknown,
-    )?;
-    let marker = prefix_dir.join(".nucleon-configured-v3");
-    if !marker.is_file() {
-        let reg = prefix_dir.join("nucleon_tweaks.reg");
-        crate::fs_util::atomic_write_file(&reg, format!("{PREFIX_REGISTRY}\n{STEAM_REGISTRY}"))?;
-        run_prefix_command(
-            plan.runtime
-                .command(&plan.runtime.loader)
-                .arg("regedit")
-                .arg(&reg),
-            &plan.bootstrap_env(),
-            std::time::Duration::from_secs(30),
-        )?;
-        finish_registry_import(&reg, &marker)?;
-    }
-    Ok(())
-}
-
 /// Call only after a successful import: temporary-file cleanup is not readiness.
 fn finish_registry_import(reg: &Path, configured: &Path) -> Result<()> {
     if let Err(error) = fs::remove_file(reg)
@@ -868,17 +820,6 @@ esac
             assert!(!plan.prefix.join(".nucleon-bootstrapped-v1").exists());
             assert!(!plan.prefix.join(".nucleon-configured-v3").exists());
         }
-    }
-
-    #[test]
-    fn failed_registry_import_never_marks_prefix_configured() {
-        let (temp, _) = crate::runtime::fixture(crate::runtime::ExecutionMode::Intel);
-        let prefix = temp.path().join("prefix");
-        fs::create_dir(&prefix).unwrap();
-        // The fixture's non-executable loader guarantees a setup error without Wine.
-        assert!(configure_prefix_registry(&prefix, temp.path()).is_err());
-        assert!(!prefix.join(".nucleon-configured-v3").exists());
-        assert!(prefix.join("nucleon_tweaks.reg").is_file());
     }
 
     #[test]

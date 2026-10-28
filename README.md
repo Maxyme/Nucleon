@@ -4,8 +4,8 @@ Nucleon runs Windows games and programs on Apple Silicon macOS using Wine
 (including Isotope/FEX), GPTK and other graphics backends. It launches Steam games
 itself while the ordinary Steam client supplies ownership and Steamworks services.
 
-Steam's executable and UI are not patched. No injected hook, per-build instruction
-contract, compatibility-tool registration or background repair guard is required.
+Steam stays unmodified. Nucleon uses explicit installation records and per-game
+runtimes.
 Game compatibility remains experimental and depends on the runtime and graphics
 backend. CrossOver is optional.
 
@@ -27,21 +27,11 @@ through Nucleon, rather than desktop Steam's Downloads screen. Set `--downloader
 when the provider is outside PATH; an installation under
 `<support>/tools/depotdownloader/DepotDownloader` is discovered automatically.
 
-Existing Steam library installations are discovered without changing Steam.
 Keep Steam running and signed in when playing. Use `steam show` and
 `--launch-id <id>` for games with several launch choices, or `--exe <path>` to
-select an executable. Game arguments follow `--`. `launch --dry-run` previews the
-selected runtime and prefix without starting a game. Existing per-game runtime
-profiles and Wine environments are reused.
-
-To retire an older Nucleon installation, quit Steam and run `nucleon steam detach`.
-It backs up the old integration, preserves backend preferences and existing
-prefixes, and adopts mapped Windows installations into Nucleon's records. Their
-Steam app manifests are moved to the backup so Steam cannot replace the Windows
-files with another platform's files. Native Mac installations remain in Steam.
-Custom launch scripts must be translated into explicit Nucleon profiles before
-retirement. Reinstall the official Steam app afterward to restore Valve's original
-signature; keep the existing Steam library and user data. See [setup](SETUP.md).
+select an executable inside the Nucleon installation. Game arguments follow `--`.
+`launch --dry-run` previews the selected runtime and prefix without starting a
+game. Per-game runtime profiles configure Wine, graphics and Steamworks settings.
 
 ## Standalone EXEs and named environments
 
@@ -126,22 +116,22 @@ source/license contents, installation commands and the current graphics limits.
 Install an exact Wine/FEX version or a local runtime:
 
 ```sh
-nucleon wine install isotope --version 0.1.0-rc.1 --register
-nucleon wine install /path/to/runtime-or-archive --register
+nucleon wine install isotope --version 0.1.0-rc.1
+nucleon wine install /path/to/runtime-or-archive
 ```
 
 The named command requires that release to be published; local paths work before
 publication. Select a complete installed Wine runtime per launch:
 
 ```sh
-nucleon launch 690790 --wine fex-preview --engine dxmt
+nucleon launch 690790 --wine /path/to/fex-runtime --engine dxmt
 nucleon launch 690790 --emulator fex --engine dxmt
 nucleon launch 690790 --emulator rosetta --engine dxvk
 ```
 
 `--wine` accepts an exact installed ID or runtime path. `--emulator rosetta`
 uses the ordinary configured Intel Wine; `--emulator fex` uses the runtime
-registered with `nucleon wine install ... --register` or `wine fex select`.
+selected with `nucleon wine fex select <runtime>`.
 Combining them constrains the selected runtime's mode. These options select
 complete compatible Wine builds, and do not change either default for one launch.
 Run `nucleon wine list` to see available IDs. The FEX core preview omits the developer graphics stack. Its 32-bit execution
@@ -180,9 +170,3 @@ These are projects that share a similar goal, and were used as inspiration for t
 [GPL-3.0-only](LICENSE). Third-party runtimes retain their own licenses and
 redistribution requirements. [NOTICE.md](NOTICE.md) records third-party
 attribution and component notices.
-
-Retained Windows files from a Steam library are read-only inputs for Nucleon's
-download routing. Updating an adopted game downloads into a separate Nucleon
-folder and switches the installation record only after success. The original
-Steam game directory and existing Wine prefix are retained. This first update
-can require a complete download and additional disk space.

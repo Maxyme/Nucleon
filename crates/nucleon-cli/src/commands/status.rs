@@ -4,17 +4,9 @@ use nucleon_core::{paths, runner, steam, wine};
 
 pub fn run() -> Result<()> {
     ui::header("Nucleon Status Report");
-    ui::kv(
-        "Steam launch mode:",
-        "Direct through Nucleon; no client patches or update guard",
-    );
+    ui::kv("Steam launch mode:", "Direct through Nucleon");
     ui::status_bool("Steam installed:", steam::check_steam_installed().is_ok());
     ui::status_bool("Steam running:", steam::is_steam_running());
-    if steam::migration::present() {
-        ui::warn(
-            "Legacy Steam integration is still installed. Quit Steam and run 'nucleon steam detach'.",
-        );
-    }
     if let Some(runtime) = wine::get_active_wine_runtime() {
         ui::kv("Intel Wine:", runtime.root.display());
     }

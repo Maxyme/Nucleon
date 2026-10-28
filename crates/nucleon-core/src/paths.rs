@@ -59,14 +59,6 @@ pub fn steam_app() -> PathBuf {
     PathBuf::from("/Applications/Steam.app")
 }
 
-pub fn steam_executable() -> PathBuf {
-    steam_app().join("Contents/MacOS/steam_osx")
-}
-
-pub fn steam_info_plist() -> PathBuf {
-    steam_app().join("Contents/Info.plist")
-}
-
 pub fn steam_data_dir() -> PathBuf {
     home_dir().join("Library/Application Support/Steam")
 }
@@ -86,10 +78,6 @@ pub fn steam_client_manifest_candidates() -> Vec<PathBuf> {
         .iter()
         .map(|rel| data_dir.join(rel))
         .collect()
-}
-
-pub fn steam_fex_compat_tools_dir() -> PathBuf {
-    steam_data_dir().join("compatibilitytools.d/nucleon-fex")
 }
 
 pub fn game_profiles_dir(fex_tool: bool) -> PathBuf {
@@ -129,10 +117,6 @@ pub fn game_prefixes(compat_data: &std::path::Path) -> Vec<PathBuf> {
     prefixes
 }
 
-pub fn steam_compat_data_dir() -> PathBuf {
-    home_dir().join("Library/Application Support/Steam/steamapps/compatdata")
-}
-
 pub fn kosmickrisp_dir() -> PathBuf {
     support_dir().join("drivers/kosmickrisp")
 }
@@ -155,14 +139,6 @@ pub fn dxvk_dir() -> PathBuf {
 
 pub fn dxmt_dir() -> PathBuf {
     support_dir().join("dxmt")
-}
-
-pub fn launch_agents_dir() -> PathBuf {
-    home_dir().join("Library/LaunchAgents")
-}
-
-pub fn steam_guard_plist() -> PathBuf {
-    launch_agents_dir().join("com.nucleon.steam-guard.plist")
 }
 
 pub fn ensure_dirs() -> Result<()> {

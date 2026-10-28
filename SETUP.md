@@ -16,7 +16,7 @@ just build
 ```
 
 Use `./target/release/nucleon` below, or install it on your PATH and use `nucleon`.
-`just build` builds the CLI; no Steam hook or second architecture build is needed.
+`just build` builds the CLI.
 Earlier release bundles were withdrawn; build from source.
 
 ## Register Wine
@@ -152,9 +152,8 @@ nucleon status
 ```
 
 Multiple Windows launch entries require `--launch-id <id>` from `steam show`, or
-`--exe <path>`. Nucleon reads existing Steam library manifests and reuses their
-per-game prefixes. A native Mac installation has no usable Windows executable;
-install its Windows version into Nucleon if you intend to run it through Wine.
+`--exe <path>`. Nucleon stores each installation and its Wine environment under
+its support directory. Install the Windows version through Nucleon before launching.
 
 ## Profiles and launch options
 
@@ -182,28 +181,3 @@ Launch overrides belong on Nucleon's command line:
 nucleon launch <appid> --wine /path/to/wine --engine dxvk
 nucleon launch <appid> --exe Game.exe -- --fullscreen
 ```
-
-## Retiring the previous integration
-
-Quit Steam, preserve custom launcher recipes as explicit game profiles, and run:
-
-```sh
-nucleon steam detach
-```
-
-Detachment stops and removes the old guard, backs up configuration and registered
-tools, removes injection and backs up the cached Steam program bundle. Existing runtime profiles,
-Windows game files and prefixes are retained. Mapped Windows installations get
-Nucleon records; their Steam manifests are backed up to prevent platform changes.
-Native Mac installations remain under Steam's control.
-
-The backup path is printed. Restoration failures are errors, not success notices.
-The command does not sign or patch Steam. Reinstall Valve's official Steam app to
-restore its original signature. Preserve `~/Library/Application Support/Steam`
-and its game libraries when replacing the app.
-
-Retained Windows files from a Steam library are read-only inputs for Nucleon's
-download routing. Updating an adopted game downloads into a separate Nucleon
-folder and switches the installation record only after success. The original
-Steam game directory and existing Wine prefix are retained. This first update
-can require a complete download and additional disk space.

@@ -32,7 +32,7 @@ pub struct DiagnosticArgs {
     #[arg(long)]
     bridge: Option<PathBuf>,
     #[arg(long)]
-    runner: Option<PathBuf>,
+    cli: Option<PathBuf>,
     #[arg(long,default_value="dx12",value_parser=["dx11","dx12"])]
     api: String,
     #[arg(long)]

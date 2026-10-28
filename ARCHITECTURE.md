@@ -24,10 +24,6 @@ flowchart TD
 | `nucleon-runner` | Launch resolution, Wine execution, logging and process shutdown |
 | `nucleon-devtools` | Explicit development probes |
 
-The injected hook crate, client instruction contracts and automatic repair guard
-have been removed. Build and release packaging do not ship a Steam injection
-library. Runtime selection never installs compatibility tools.
-
 ## Download and launch ownership
 
 The download provider runs as a child process with explicit Windows selection,
@@ -39,32 +35,18 @@ leave partial files when interrupted; use update to resume and validate them.
 
 `nucleon launch` and `nucleon steam play` resolve an explicit AppID, EXE, working
 directory, arguments, per-game profile and prefix. They call the shared runner
-directly, without `steam://run`, configuration writes or repair side effects.
+directly.
 Resolution previews do not create prefixes or start authentication or Wine.
 
-Existing library folders and app manifests are read-only inputs. Bounded appinfo
-framing rejects malformed or unknown metadata; `--exe` provides a fallback when
-metadata is unavailable. Ambiguous Windows launch entries require an explicit
-selection. Game-relative metadata paths cannot escape the installation through
-traversal, absolute paths or symlinks. Arguments are parsed using Windows quoting
-rules and passed directly to the process, without shell evaluation.
+Bounded appinfo framing reads cached launch metadata and rejects malformed or
+unknown formats. `--exe` supplies an explicit executable when metadata is
+unavailable. Ambiguous Windows launch entries require an explicit selection.
+Game-relative metadata paths cannot escape the installation through traversal,
+absolute paths or symlinks. Arguments follow Windows quoting rules and pass
+directly to the process without shell evaluation.
 
-## One-time migration
-
-`steam detach` requires Steam to be stopped. It stops the old guard and backs up
-its plist, Steam config, compatibility tools, cached Steam program bundle and launch plist.
-Tool backend choices become ordinary per-game preferences when no explicit
-profile engine exists. FEX runtime selection is retained independently of Steam.
-
-Mapped Windows game installations are adopted without moving game files or
-prefixes. Their app manifests move into the migration backup so desktop Steam
-cannot replace their content with Mac depots. Native Mac installations are
-excluded. Custom shell launchers are not interpreted; their recipes must first be
-made explicit in profiles and installation records. Migration is the only code
-that rewrites old integration state. It never installs hooks or signs Steam.
-
-Replace the modified app with Valve's official installer after migration to
-restore vendor signing. Historical migration backups are retained for recovery.
+Installation records, game files and prefix data belong to Nucleon. The runner
+receives the AppID, paths, profile overrides and arguments explicitly from the CLI.
 
 ## Runtime selection
 
@@ -109,7 +91,6 @@ Prefix staging keeps `i386-windows/lsteamclient.dll` and
 builtin lookup follows the original module name, so a flat x64 bridge can shadow
 its 32-bit alias and fail relocation. The `x86_64-unix` lookup links to the same
 prefix-private Unix libraries and ntdll binding used by the flat aliases.
-Braid's Steam initialization and menu were verified with this layout.
 
 Matching game-bundled D3DX and D3DCompiler DLLs receive native-first overrides.
 This lets older effects use the shipped implementation when Wine's builtin
@@ -119,24 +100,17 @@ The runner logs which bundled helpers it selects.
 The Rust binder checks x86_64 bridge architecture and required ntdll exports,
 rewrites the dependency to `@loader_path/ntdll.so`, and stages a symlink to the
 selected Wine. Matching symbols are a prerequisite, not proof of future ABI
-compatibility. The old ntdll adapter is no longer staged. DMC5's confirmed
-recipe also needs its private Wine loader redirect patch; it is not a global
-default for other games.
+compatibility. A game can select a runtime advertising the Valve loader redirect when its
+Steamworks protocol requires it.
 
 ## Remaining compatibility boundaries
 
 The Steamworks bridge still depends on Steam's interfaces and the selected Wine
-ABI. Removing client injection reduces update-sensitive code; it does not promise
-that all Steam updates, DRM, anti-cheat or third-party launchers will work.
+ABI. Compatibility with Steam updates, DRM, anti-cheat and third-party launchers
+needs validation per game.
 
 Independent startup must be validated for ownership and relaunch behavior per
 game. Cloud synchronization, playtime, overlay, controller configuration and
 Steam's Stop button are not established by a running process. Nucleon owns process
 shutdown and per-prefix cancellation. Preserve known game recipes and distinguish
 startup/device evidence from visual gameplay and input confirmation.
-
-Retained Windows files from a Steam library are read-only inputs for Nucleon's
-download routing. Updating an adopted game downloads into a separate Nucleon
-folder and switches the installation record only after success. The original
-Steam game directory and existing Wine prefix are retained. This first update
-can require a complete download and additional disk space.

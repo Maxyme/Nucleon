@@ -12,11 +12,7 @@ fn cli(support: &Path) -> Command {
     cmd.env_clear()
         .env("PATH", std::env::var_os("PATH").unwrap_or_default())
         .env("NUCLEON_SUPPORT_DIR", support)
-        .env("STEAM_COMPAT_APP_ID", "999")
         .env("SteamAppId", "999")
-        .env("STEAM_COMPAT_DATA_PATH", support.join("foreign-prefix"))
-        .env("NUCLEON_GAME_PROFILE", "/missing/foreign-profile")
-        .env("NUCLEON_FEX_SELECTION", "/missing/foreign-selection")
         .env("NUCLEON_STEAMCLIENT_REDIRECT", "1")
         .env("NUCLEON_WINE", "/missing/foreign-wine")
         .env("NUCLEON_ENGINE", "foreign-engine");
@@ -130,7 +126,6 @@ fn native_exe_arguments_bottles_handoff_lock_and_cancellation() {
     let programs = temp.path().join("programs with spaces");
     fs::create_dir(&programs).unwrap();
     fs::create_dir(&support).unwrap();
-    fs::write(support.join("launch_override_999.json"), b"do not consume").unwrap();
     let executable = programs.join("probe.exe");
     success(
         Command::new("x86_64-w64-mingw32-gcc")
@@ -290,11 +285,6 @@ fn native_exe_arguments_bottles_handoff_lock_and_cancellation() {
     assert!(unrelated.0.try_wait().unwrap().is_none());
     unrelated.0.kill().unwrap();
     unrelated.0.wait().unwrap();
-    assert_eq!(
-        fs::read(support.join("launch_override_999.json")).unwrap(),
-        b"do not consume"
-    );
-    assert!(!support.join("foreign-prefix").exists());
     assert!(
         !Path::new(installed["prefix"].as_str().unwrap())
             .join("drive_c/Program Files (x86)/Steam")

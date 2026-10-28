@@ -13,9 +13,6 @@ pub struct Installation {
     pub schema: u32,
     pub appid: u32,
     pub directory: PathBuf,
-    /// Retained Steam files are a read-only source, never a download destination.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub original_directory: Option<PathBuf>,
     pub data_path: PathBuf,
     pub branch: String,
     pub language: String,
@@ -46,7 +43,7 @@ impl Installation {
         let Some(text) = crate::configuration::optional_file(&path)? else {
             return Ok(None);
         };
-        let mut installed: Self = serde_json::from_str(&text)
+        let installed: Self = serde_json::from_str(&text)
             .with_context(|| format!("Invalid installation record {}", path.display()))?;
         ensure!(
             installed.schema == 1 && installed.appid == appid,
@@ -56,14 +53,6 @@ impl Installation {
             installed.directory.is_absolute() && installed.data_path.is_absolute(),
             "Installation paths must be absolute"
         );
-        // Upgrade records created before original-file preservation was explicit.
-        if installed.original_directory.is_none()
-            && super::find_steamapps_dirs()
-                .iter()
-                .any(|library| installed.directory.starts_with(library.join("common")))
-        {
-            installed.original_directory = Some(installed.directory.clone());
-        }
         Ok(Some(installed))
     }
 
@@ -82,35 +71,6 @@ pub fn installed(appid: u32) -> Result<Installation> {
             installation.directory.display()
         );
         return Ok(installation);
-    }
-    for library in super::find_steamapps_dirs() {
-        let manifest = library.join(format!("appmanifest_{appid}.acf"));
-        let Some(text) = crate::configuration::optional_file(&manifest)? else {
-            continue;
-        };
-        let vdf = steam_vdf_parser::parse_text(&text).context("Invalid Steam app manifest")?;
-        ensure!(
-            vdf.get_str(&["appid"]) == Some(&appid.to_string()),
-            "Steam manifest AppID does not match"
-        );
-        let name = vdf
-            .get_str(&["installdir"])
-            .context("Steam manifest has no installation directory")?;
-        let directory = within(&library.join("common"), name)?;
-        ensure!(
-            directory.is_dir(),
-            "Game directory does not exist: {}",
-            directory.display()
-        );
-        return Ok(Installation {
-            schema: 1,
-            appid,
-            original_directory: Some(directory.clone()),
-            directory,
-            data_path: library.join("compatdata").join(appid.to_string()),
-            branch: "public".into(),
-            language: "english".into(),
-        });
     }
     bail!("Game {appid} is not installed. Run 'nucleon steam install {appid} --username <account>'")
 }

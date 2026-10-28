@@ -195,7 +195,7 @@ mod tests {
         }
         // Unrelated macos text must never be used as platform evidence.
         key(&mut body, 1, "description", indexed);
-        body.extend_from_slice(b"macos legacy description\0");
+        body.extend_from_slice(b"macos descriptive text\0");
         body.extend_from_slice(&[8, 8, 8]);
         body
     }
