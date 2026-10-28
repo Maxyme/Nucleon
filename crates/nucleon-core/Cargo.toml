@@ -25,7 +25,6 @@ object = { workspace = true }
 memchr = { workspace = true }
 aho-corasick = "1.1"
 plist = { workspace = true }
-keyvalues-parser = { workspace = true }
 steam-vdf-parser = "0.1"
 ureq = { workspace = true }
 zip = { workspace = true }

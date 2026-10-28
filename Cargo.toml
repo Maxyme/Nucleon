@@ -28,7 +28,6 @@ tempfile = "3.10"
 core-graphics = "0.23"
 core-foundation = "0.9"
 plist = "1.7"
-keyvalues-parser = "0.2"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 ureq = { version = "2.10", default-features = false, features = ["tls"] }
 zip = { version = "2.2", default-features = false, features = ["deflate"] }
