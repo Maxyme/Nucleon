@@ -79,6 +79,10 @@ nucleon wine add my-wine /path/to/wine --use-now
 nucleon wine use my-wine
 ```
 
+Runtime selection accepts an exact installed ID/name or a runtime path. Custom
+registrations live in `custom_wines.json` under Nucleon's support directory;
+`wine set-path` and `wine clear-path` manage the entry named `custom` there.
+
 Discovery is not validation. Confirmed recipes use Wine 11.18 with specific
 patches, not an arbitrary newer version. Preserve a working build and profile.
 CrossOver can be registered, but is not required.

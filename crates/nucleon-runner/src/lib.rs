@@ -36,24 +36,10 @@ fn resolve_wine_override(
     // A stale saved global selection must not silently select a different runtime.
     let saved = nucleon_core::wine::active_wine_selection_file();
     if let Some(value) = config::optional_file(&saved)? {
-        let value = value.trim();
-        if value.is_empty() || nucleon_core::wine::resolve_wine_runtime_by_query(value).is_none() {
-            return Err(config::invalid(
-                &saved.display().to_string(),
-                value,
-                "saved Wine runtime was not found",
-                "Run 'nucleon wine list', then 'nucleon wine use <name>', or 'nucleon wine reset'.",
-            ));
-        }
-        return Ok(nucleon_core::wine::resolve_wine_runtime_by_query(value).map(|r| r.root));
+        let runtime = nucleon_core::runtime_selection::named(value.trim())
+            .with_context(|| format!("Invalid saved Wine selection {}; run 'nucleon wine use <runtime>' or 'nucleon wine reset'", saved.display()))?;
+        return Ok(Some(runtime.root));
     }
-    config::component_path(
-        &[],
-        &nucleon_core::wine::custom_wine_path_file(),
-        "Wine installation was not found",
-        "nucleon wine clear-path",
-        |path| nucleon_core::wine::inspect_wine_dir(path, None, None).is_some(),
-    )?;
     Ok(None)
 }
 

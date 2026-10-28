@@ -65,7 +65,7 @@ pub enum WineAction {
     List,
     /// Select the Intel default, or register a FEX default without changing Intel Wine
     Use {
-        /// Wine identifier, name keyword, or custom path
+        /// Exact installed Wine ID/name or runtime path
         version: String,
     },
     /// Show installed runtimes and the active Wine selection
@@ -431,13 +431,7 @@ pub fn run(action: WineAction) -> Result<()> {
         }
         WineAction::Use { version } => {
             ui::header(format!("Setting active Wine runtime to '{}'...", version));
-            let requested = if version == "fex-preview" {
-                nucleon_core::runtime_selection::named(&version)?
-            } else {
-                wine::resolve_wine_runtime_by_query(&version)
-                    .context("Wine runtime was not found; run 'nucleon wine list'")?
-                    .capabilities()?
-            };
+            let requested = nucleon_core::runtime_selection::named(&version)?;
             if requested.mode == nucleon_core::runtime::ExecutionMode::Arm64Fex {
                 nucleon_core::runtime_selection::set_fex_default(&requested)?;
                 ui::success("FEX default updated. The Intel/Rosetta default is unchanged.");

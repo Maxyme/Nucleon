@@ -274,10 +274,6 @@ pub fn inspect_wine_dir(
     })
 }
 
-pub fn custom_wine_path_file() -> PathBuf {
-    paths::support_dir().join("custom_wine_path.txt")
-}
-
 pub fn custom_wines_file() -> PathBuf {
     paths::support_dir().join("custom_wines.json")
 }
@@ -321,19 +317,6 @@ pub fn discover_wine_runtimes() -> Vec<WineRuntime> {
     // 2. Custom runtimes persisted via `custom_wines.json`
     for record in load_custom_wines() {
         if let Some(rt) = inspect_wine_dir(&record.path, Some(&record.id), Some(&record.name))
-            && seen_roots.insert(rt.root.clone())
-        {
-            runtimes.push(rt);
-        }
-    }
-
-    // 2b. Legacy custom path persisted via `custom_wine_path.txt`
-    let custom_file = custom_wine_path_file();
-    if custom_file.is_file()
-        && let Ok(content) = fs::read_to_string(&custom_file)
-    {
-        let p = PathBuf::from(content.trim());
-        if let Some(rt) = inspect_wine_dir(&p, Some("custom"), Some("Custom Wine"))
             && seen_roots.insert(rt.root.clone())
         {
             runtimes.push(rt);
@@ -687,11 +670,6 @@ pub fn remove_custom_wine(name_or_id: &str) -> Result<bool> {
 
         Ok(true)
     } else {
-        let legacy_file = custom_wine_path_file();
-        if trimmed == "custom" && legacy_file.is_file() {
-            let _ = fs::remove_file(legacy_file);
-            return Ok(true);
-        }
         Ok(false)
     }
 }
@@ -711,71 +689,55 @@ pub fn set_custom_wine_path(path: &Path) -> Result<WineRuntime> {
             "Keep the Intel/Rosetta default separate; select native Wine with 'nucleon wine fex select <runtime>'"
         );
     }
-    let runtime = add_custom_wine("custom", &canonical)?;
-
-    paths::ensure_dirs()?;
-    let _ = fs::write(
-        custom_wine_path_file(),
-        canonical.to_string_lossy().as_bytes(),
-    );
-
-    Ok(runtime)
+    add_custom_wine("custom", &canonical)
 }
 
 pub fn active_wine_selection_file() -> PathBuf {
     paths::support_dir().join("active_wine.txt")
 }
 
-/// Resolves a WineRuntime given an identifier (e.g. "staging", "crossover", "dxmt"),
-/// partial name, or direct directory path.
-pub fn resolve_wine_runtime_by_query(query: &str) -> Option<WineRuntime> {
-    let q = query.trim();
-    if q.is_empty() {
-        return None;
+/// Resolve an exact installed ID/name or an explicit runtime path.
+/// Path-like requests never fall back to discovery or partial-name matches.
+pub fn resolve_wine_runtime_by_query(query: &str) -> Result<WineRuntime> {
+    let query = query.trim();
+    anyhow::ensure!(
+        !query.is_empty(),
+        "Wine runtime cannot be empty; run 'nucleon wine list'"
+    );
+    let path = Path::new(query);
+    if path.exists() {
+        return inspect_wine_dir(path, None, None)
+            .with_context(|| format!("Wine loader/server were not found at {}", path.display()));
     }
-    if let Some(record) = load_custom_wines()
+    anyhow::ensure!(
+        !query.contains('/') && !query.contains('\\'),
+        "Wine runtime path does not exist: {query}"
+    );
+    let records: Vec<_> = load_custom_wines()
         .into_iter()
-        .find(|record| record.id.eq_ignore_ascii_case(q) || record.name.eq_ignore_ascii_case(q))
-    {
-        return inspect_wine_dir(&record.path, Some(&record.id), Some(&record.name));
+        .filter(|record| {
+            record.id.eq_ignore_ascii_case(query) || record.name.eq_ignore_ascii_case(query)
+        })
+        .collect();
+    anyhow::ensure!(
+        records.len() <= 1,
+        "Wine runtime {query:?} is ambiguous; use an exact ID or path"
+    );
+    if let Some(record) = records.first() {
+        return inspect_wine_dir(&record.path, Some(&record.id), Some(&record.name))
+            .with_context(|| format!("Registered Wine runtime {query:?} is missing or invalid"));
     }
-
-    // 1. Direct path check (e.g. /Applications/CrossOver.app, /opt/wine, /path/to/bin/wine)
-    let p = PathBuf::from(q);
-    if p.exists() {
-        if let Some(rt) = inspect_wine_dir(&p, None, None) {
-            return Some(rt);
-        }
-        if let Some(rt) = inspect_wine_dir(&p, Some("custom"), Some("Custom Wine")) {
-            return Some(rt);
-        }
-    }
-
-    let runtimes = discover_wine_runtimes();
-    let q_lower = q.to_lowercase();
-
-    // 2. Exact ID match (e.g. "staging", "crossover", "staging-dxmt", "brew-staging")
-    if let Some(rt) = runtimes.iter().find(|r| r.id.to_lowercase() == q_lower) {
-        return Some(rt.clone());
-    }
-
-    // 3. Normalized ID match without prefixes/suffixes (e.g. "dxmt" matches "staging-dxmt")
-    if let Some(rt) = runtimes
-        .iter()
-        .find(|r| r.id.to_lowercase().contains(&q_lower))
-    {
-        return Some(rt.clone());
-    }
-
-    // 4. Substring match on name (e.g. "Heroic Wine-CrossOver", "CrossOver Wine", "Wine-Staging")
-    if let Some(rt) = runtimes
-        .iter()
-        .find(|r| r.name.to_lowercase().contains(&q_lower))
-    {
-        return Some(rt.clone());
-    }
-
-    None
+    let matches: Vec<_> = discover_wine_runtimes()
+        .into_iter()
+        .filter(|runtime| {
+            runtime.id.eq_ignore_ascii_case(query) || runtime.name.eq_ignore_ascii_case(query)
+        })
+        .collect();
+    anyhow::ensure!(
+        matches.len() == 1,
+        "Wine runtime {query:?} was not found or is ambiguous; run 'nucleon wine list' and use an exact ID or path"
+    );
+    Ok(matches.into_iter().next().unwrap())
 }
 
 /// Returns the currently active/desired Wine runtime.
@@ -787,7 +749,7 @@ pub fn resolve_wine_runtime_by_query(query: &str) -> Option<WineRuntime> {
 pub fn get_active_wine_runtime() -> Option<WineRuntime> {
     // 1. Environment variable: NUCLEON_WINE
     if let Ok(query) = std::env::var("NUCLEON_WINE")
-        && let Some(rt) = resolve_wine_runtime_by_query(&query)
+        && let Ok(rt) = resolve_wine_runtime_by_query(&query)
     {
         return Some(rt);
     }
@@ -812,7 +774,7 @@ pub fn get_active_wine_runtime() -> Option<WineRuntime> {
     {
         let q = content.trim();
         if !q.is_empty()
-            && let Some(rt) = resolve_wine_runtime_by_query(q)
+            && let Ok(rt) = resolve_wine_runtime_by_query(q)
         {
             return Some(rt);
         }
@@ -850,7 +812,7 @@ pub fn set_active_wine(identifier_or_path: &str) -> Result<WineRuntime> {
                 name: runtime.name.clone(),
                 path: runtime.root.clone(),
             });
-            let _ = save_custom_wines(&records);
+            save_custom_wines(&records)?;
         }
     }
 
@@ -877,17 +839,65 @@ pub fn clear_active_wine() -> Result<()> {
 
 /// Clears any configured custom Wine path.
 pub fn clear_custom_wine_path() -> Result<()> {
-    let _ = remove_custom_wine("custom");
-    let custom_file = custom_wine_path_file();
-    if custom_file.is_file() {
-        let _ = fs::remove_file(&custom_file);
-    }
+    remove_custom_wine("custom")?;
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn runtime_selection_uses_exact_names_and_one_custom_registry() {
+        if crate::test_support::run_in_isolated_support(
+            "wine::tests::runtime_selection_uses_exact_names_and_one_custom_registry",
+        ) {
+            return;
+        }
+        let (_intel_files, intel) = crate::runtime::fixture(crate::runtime::ExecutionMode::Intel);
+        let (_fex_files, fex) = crate::runtime::fixture(crate::runtime::ExecutionMode::Arm64Fex);
+        add_custom_wine("Reviewed Intel", &intel.root).unwrap();
+        add_custom_wine("Reviewed Isotope", &fex.root).unwrap();
+        for query in ["reviewed-intel", "REVIEWED INTEL"] {
+            assert_eq!(
+                resolve_wine_runtime_by_query(query).unwrap().root,
+                intel.root
+            );
+            assert_eq!(
+                crate::runtime_selection::named(query).unwrap().root,
+                intel.root
+            );
+        }
+        set_active_wine("reviewed-intel").unwrap();
+        assert!(set_active_wine("Reviewed").is_err());
+        assert_eq!(
+            crate::runtime_selection::rosetta_default().unwrap().root,
+            intel.root
+        );
+        assert!(resolve_wine_runtime_by_query("/missing/reviewed-intel").is_err());
+        let isotope = crate::runtime_selection::named("reviewed-isotope").unwrap();
+        crate::runtime_selection::set_fex_default(&isotope).unwrap();
+        assert_eq!(
+            crate::runtime_selection::fex_default().unwrap().root,
+            fex.root
+        );
+        set_custom_wine_path(&intel.root).unwrap();
+        assert!(
+            load_custom_wines()
+                .iter()
+                .any(|record| record.id == "custom")
+        );
+        clear_custom_wine_path().unwrap();
+        assert!(
+            !load_custom_wines()
+                .iter()
+                .any(|record| record.id == "custom")
+        );
+        assert_eq!(
+            crate::runtime_selection::rosetta_default().unwrap().root,
+            intel.root
+        );
+    }
+
     #[test]
     fn bundle_versions_use_plist_library_for_binary_and_xml_documents() {
         let dir = tempdir().unwrap();
@@ -951,7 +961,7 @@ mod tests {
 
         let path_str = dir.path().to_str().unwrap();
         let rt = resolve_wine_runtime_by_query(path_str);
-        assert!(rt.is_some());
+        assert!(rt.is_ok());
         assert_eq!(rt.unwrap().root, dir.path());
     }
 
@@ -1038,7 +1048,7 @@ mod tests {
         assert_eq!(rt.root, expected_root);
 
         let resolved = resolve_wine_runtime_by_query("crossover-test");
-        assert!(resolved.is_some());
+        assert!(resolved.is_ok());
         assert_eq!(resolved.unwrap().root, rt.root);
 
         assert!(remove_custom_wine("crossover-test").unwrap());

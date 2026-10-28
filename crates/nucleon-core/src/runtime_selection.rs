@@ -84,31 +84,7 @@ pub fn standalone_default() -> Result<ResolvedRuntime> {
 
 /// Exact names and paths only: a version substring must not change execution mode.
 pub fn named(query: &str) -> Result<ResolvedRuntime> {
-    ensure!(
-        !query.trim().is_empty(),
-        "Wine runtime cannot be empty; run 'nucleon wine list'"
-    );
-    let path = Path::new(query);
-    if path.exists() {
-        let root = wine::resolve_wine_runtime_root(path)
-            .context("Wine loader/server were not found at the requested path")?;
-        return ResolvedRuntime::inspect(&root);
-    }
-    // Path-like requests never fall through to name discovery or execute other Wines.
-    ensure!(
-        !query.contains('/') && !query.contains('\\'),
-        "Wine runtime path does not exist: {query}"
-    );
-    let candidates = wine::discover_wine_runtimes();
-    let matches: Vec<_> = candidates
-        .iter()
-        .filter(|r| r.id.eq_ignore_ascii_case(query) || r.name.eq_ignore_ascii_case(query))
-        .collect();
-    ensure!(
-        matches.len() == 1,
-        "Wine runtime {query:?} was not found or is ambiguous; run 'nucleon wine list' and use an exact ID or path"
-    );
-    matches[0].capabilities()
+    wine::resolve_wine_runtime_by_query(query)?.capabilities()
 }
 
 pub fn rosetta_default() -> Result<ResolvedRuntime> {
@@ -116,8 +92,6 @@ pub fn rosetta_default() -> Result<ResolvedRuntime> {
     let runtime = if let Some(query) = configuration::optional_file(&saved)? {
         named(query.trim())
             .with_context(|| format!("Invalid saved Wine selection {}", saved.display()))?
-    } else if let Some(path) = configuration::optional_file(&wine::custom_wine_path_file())? {
-        named(path.trim())?
     } else {
         wine::find_primary_wine_runtime()
             .context("No Intel Wine default; install Wine and run 'nucleon wine use <runtime>'")?
