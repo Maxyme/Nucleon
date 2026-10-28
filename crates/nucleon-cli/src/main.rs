@@ -91,6 +91,15 @@ mod tests {
         for args in [
             vec!["nucleon", "run", "Game.exe", "--upscaler", "fsr3.1"],
             vec!["nucleon", "launch", "123", "--upscaler", "fsr4-native-lite"],
+            vec!["nucleon", "run", "Game.exe", "--upscaler", "fsr4.1.2"],
+            vec![
+                "nucleon",
+                "upscaler",
+                "install",
+                "native412",
+                "--wine",
+                "/runtime",
+            ],
             vec![
                 "nucleon",
                 "upscaler",
@@ -128,7 +137,7 @@ mod tests {
             assert!(Cli::try_parse_from(args).is_ok());
         }
         assert!(
-            Cli::try_parse_from(["nucleon", "run", "Game.exe", "--upscaler", "fsr4.1.2"]).is_err()
+            Cli::try_parse_from(["nucleon", "run", "Game.exe", "--upscaler", "fsr4.1.3"]).is_err()
         );
     }
 

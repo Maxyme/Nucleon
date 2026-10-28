@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 #[derive(Debug, Clone, Default, Args)]
 pub struct SettingsArgs {
-    /// game, fsr2, fsr3.1, metalfx, fsr4-native-lite, fsr4-native or xess
+    /// game, fsr2, fsr3.1, metalfx, fsr4-native-lite, fsr4-native, fsr4.1.2 or xess
     #[arg(long)]
     upscaler: Option<nucleon_core::upscaler::Backend>,
     /// Exact Wine ID or complete runtime path (overrides the bottle setting)

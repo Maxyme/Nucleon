@@ -8,7 +8,7 @@ use std::path::PathBuf;
 
 #[derive(Debug, Subcommand)]
 pub enum Action {
-    /// Fetch/verify a stock, metalfx, native, bridge or patcher provider; never starts Wine
+    /// Fetch/verify a stock, metalfx, native, native412, bridge or patcher provider; never starts Wine
     Install {
         provider: String,
         #[arg(long)]
@@ -67,7 +67,7 @@ pub fn run(action: Action) -> Result<()> {
                 .as_deref()
                 .map(nucleon_core::runtime_selection::named)
                 .transpose()?;
-            if matches!(provider.as_str(), "native" | "bridge") {
+            if matches!(provider.as_str(), "native" | "native412" | "bridge") {
                 ensure!(
                     runtime
                         .as_ref()

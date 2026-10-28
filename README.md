@@ -38,7 +38,7 @@ runtime selection.
 ## Upscaling games
 
 Nucleon can use OptiScaler to replace a game's existing temporal upscaler with
-FSR2, FSR 3.1, experimental XeSS, MetalFX or native FSR 4.1.1/Lite. It works
+FSR2, FSR 3.1, experimental XeSS, MetalFX or native FSR 4.1.1/Lite and 4.1.2 INT8 Lite. It works
 with direct EXEs, saved applications, bottles and Steam.
 
 Eligible games are **x64 DX11/DX12 games with compatible DLSS, FSR2/3/3.1 or
