@@ -1,4 +1,3 @@
-use crate::paths;
 use anyhow::{Context, Result, ensure};
 use std::fs;
 use std::path::Path;
@@ -239,20 +238,6 @@ pub(crate) fn run_prefix_command(
     }
 }
 
-pub fn ensure_prefix(prefix_dir: &Path, runner_dir: &Path) -> Result<()> {
-    let runtime = crate::runtime::ResolvedRuntime::inspect(runner_dir)?;
-    let plan = crate::launch::LaunchPlan::new(
-        runtime,
-        prefix_dir.to_path_buf(),
-        crate::detector::TargetEngine::WineStaging,
-        Default::default(),
-        true,
-        Some(false),
-        &crate::detector::GraphicsApi::Unknown,
-    )?;
-    ensure_prefix_for_plan(&plan)
-}
-
 /// Isolates user shell folders (Desktop, Downloads, Documents, etc.) inside the Wine prefix.
 /// By default, Wine symlinks these to the user's macOS host directories (`/Users/<user>/Desktop`,
 /// `/Users/<user>/Downloads`), which triggers invasive macOS TCC privacy permission prompts
@@ -365,10 +350,7 @@ const STEAM_REGISTRY: &str = r#"
 
 "#;
 
-pub fn stage_bridge_libraries(prefix_dir: &Path) -> Result<()> {
-    stage_bridge_libraries_from(prefix_dir, &paths::bridge_dir())
-}
-
+#[cfg(test)]
 fn stage_bridge_libraries_from(prefix_dir: &Path, bridge: &Path) -> Result<()> {
     stage_bridge_layout(prefix_dir, bridge, "x86_64-unix", false, None)
 }

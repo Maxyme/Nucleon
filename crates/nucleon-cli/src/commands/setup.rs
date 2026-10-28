@@ -15,7 +15,6 @@ pub struct SetupArgs {
     pub action: Option<SetupAction>,
     pub non_interactive: bool,
     pub force: bool,
-    pub kosmickrisp: bool,
     pub kosmickrisp_path: Option<PathBuf>,
     pub kosmickrisp_version: Option<String>,
     pub fetch_vkd3d: bool,
@@ -188,9 +187,6 @@ pub fn print_prerequisites_table(checks: &[PrerequisiteCheck]) {
 /// Prepares Nucleon directories, bridge and runtime without changing Steam.
 pub fn run_fix(args: &SetupArgs) -> Result<()> {
     let _ = args.non_interactive;
-    if args.kosmickrisp {
-        runner::force_kosmickrisp_detection();
-    }
     ui::header("Remediating Nucleon Prerequisites ('nucleon setup fix')...");
 
     // 1. Ensure required support directories

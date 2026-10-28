@@ -557,25 +557,6 @@ pub fn setup_kosmickrisp_shim() -> Result<PathBuf> {
     Ok(shim_dir)
 }
 
-static FORCE_KOSMICKRISP_DETECTION: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
-
-/// Override detection in this process without mutating the native process environment.
-pub fn force_kosmickrisp_detection() {
-    FORCE_KOSMICKRISP_DETECTION.store(true, std::sync::atomic::Ordering::Relaxed);
-}
-
-/// Returns true if the driver is detected or explicitly forced in this process/environment.
-pub fn is_kosmickrisp_installed() -> bool {
-    if env::var("KOSMICKRISP_DISABLE").is_ok() {
-        return false;
-    }
-    FORCE_KOSMICKRISP_DETECTION.load(std::sync::atomic::Ordering::Relaxed)
-        || env::var("KOSMICKRISP_FORCE").is_ok()
-        || find_kosmickrisp_icd().is_some()
-        || find_kosmickrisp_driver_dylib().is_some()
-}
-
 /// What the host already provides for runner resolution.
 ///
 /// Discovery is captured once so [`plan_runner`] holds no environment or filesystem lookups.

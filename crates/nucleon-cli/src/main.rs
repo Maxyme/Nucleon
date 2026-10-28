@@ -294,9 +294,6 @@ enum Commands {
         /// Force re-assembly of runner and reinstall of components
         #[arg(short, long)]
         force: bool,
-        /// Enable KosmicKrisp (Mesa Vulkan 1.4) discovery
-        #[arg(short, long)]
-        kosmickrisp: bool,
         /// Point to custom KosmicKrisp ICD manifest, driver dylib, or directory
         #[arg(long)]
         kosmickrisp_path: Option<PathBuf>,
@@ -425,7 +422,6 @@ fn main() -> Result<()> {
             action,
             non_interactive,
             force,
-            kosmickrisp,
             kosmickrisp_path,
             kosmickrisp_version,
             fetch_vkd3d,
@@ -444,7 +440,6 @@ fn main() -> Result<()> {
             action,
             non_interactive,
             force,
-            kosmickrisp,
             kosmickrisp_path,
             kosmickrisp_version,
             fetch_vkd3d,

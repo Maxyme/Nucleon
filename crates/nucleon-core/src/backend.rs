@@ -175,11 +175,6 @@ pub fn get_active_backend_with_origin() -> (GraphicsBackend, String) {
     })
 }
 
-/// Returns the currently active graphics backend.
-pub fn get_active_backend() -> GraphicsBackend {
-    get_active_backend_with_origin().0
-}
-
 /// Persists the active graphics backend into `backend.toml`.
 pub fn set_active_backend(backend: GraphicsBackend) -> Result<()> {
     paths::ensure_dirs()?;

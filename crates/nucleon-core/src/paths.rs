@@ -63,23 +63,6 @@ pub fn steam_data_dir() -> PathBuf {
     home_dir().join("Library/Application Support/Steam")
 }
 
-/// Relative paths within `steam_data_dir()` where Steam client package manifests may be located.
-pub const STEAM_CLIENT_MANIFEST_REL_PATHS: &[&str] = &[
-    "Steam.AppBundle/Steam/Contents/MacOS/package/steam_client_signed-2_osx.manifest",
-    "Steam.AppBundle/Steam/Contents/MacOS/package/steam_client_osx.manifest",
-    "package/steam_client_signed-2_osx.manifest",
-    "package/steam_client_osx.manifest",
-];
-
-/// Returns absolute paths to all possible Steam client package manifest locations.
-pub fn steam_client_manifest_candidates() -> Vec<PathBuf> {
-    let data_dir = steam_data_dir();
-    STEAM_CLIENT_MANIFEST_REL_PATHS
-        .iter()
-        .map(|rel| data_dir.join(rel))
-        .collect()
-}
-
 pub fn game_profiles_dir(fex_tool: bool) -> PathBuf {
     let base = support_dir().join("game_profiles");
     if fex_tool {

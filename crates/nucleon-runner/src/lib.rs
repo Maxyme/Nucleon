@@ -488,10 +488,6 @@ pub fn wine_process_pids(prefix: &Path) -> Vec<i32> {
         .collect()
 }
 
-pub fn is_wine_game_process_running(runner_dir: &Path, target_exe: &Path, prefix: &Path) -> bool {
-    is_wine_process_running(runner_dir, target_exe, prefix, false)
-}
-
 fn is_wine_process_running(
     runner_dir: &Path,
     target_exe: &Path,

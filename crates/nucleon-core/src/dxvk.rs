@@ -214,10 +214,6 @@ pub fn find_dxvk() -> Option<DxvkBundle> {
     None
 }
 
-pub fn is_dxvk_installed() -> bool {
-    find_dxvk().is_some()
-}
-
 pub fn set_custom_dxvk_path(path: &Path) -> Result<DxvkBundle> {
     crate::graphics_bundle::register(
         path,

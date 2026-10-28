@@ -17,8 +17,6 @@ pub struct CustomWineRecord {
 pub struct WineRuntime {
     pub id: String,
     pub name: String,
-    pub display_name: String,
-    pub tool_id: String,
     pub root: PathBuf,
     pub version: Option<String>,
 }
@@ -268,14 +266,9 @@ pub fn inspect_wine_dir(
         .map(|i| i.to_string())
         .unwrap_or_else(|| name.to_lowercase().replace([' ', '_'], "-"));
 
-    let display_name = format!("Nucleon (Wine: {name})");
-    let tool_id = format!("nucleon-wine-{}", id.trim_start_matches("nucleon-wine-"));
-
     Some(WineRuntime {
         id,
         name,
-        display_name,
-        tool_id,
         root: actual_root,
         version,
     })
@@ -589,8 +582,6 @@ fn described_wine(runtime: &crate::runtime::ResolvedRuntime, id: &str) -> WineRu
     WineRuntime {
         id: id.into(),
         name: id.into(),
-        display_name: format!("Nucleon (Wine: {id})"),
-        tool_id: format!("nucleon-wine-{id}"),
         root: runtime.root.clone(),
         version,
     }
@@ -1067,8 +1058,6 @@ mod tests {
         let rt = inspect_wine_dir(&tool_dir, None, None).unwrap();
         assert_eq!(rt.name, "Wine-GE-Proton8-26");
         assert_eq!(rt.id, "wine-ge-proton8-26");
-        assert_eq!(rt.tool_id, "nucleon-wine-wine-ge-proton8-26");
-        assert_eq!(rt.display_name, "Nucleon (Wine: Wine-GE-Proton8-26)");
 
         // 2. Custom .app bundle
         let custom_app = dir.path().join("WhiskyCustom.app");
@@ -1080,7 +1069,5 @@ mod tests {
         let rt_app = inspect_wine_dir(&custom_app, None, None).unwrap();
         assert_eq!(rt_app.name, "WhiskyCustom");
         assert_eq!(rt_app.id, "whiskycustom");
-        assert_eq!(rt_app.tool_id, "nucleon-wine-whiskycustom");
-        assert_eq!(rt_app.display_name, "Nucleon (Wine: WhiskyCustom)");
     }
 }

@@ -115,10 +115,6 @@ fn find_d7vk_with(env_paths: &[PathBuf]) -> Option<D7vkBundle> {
     None
 }
 
-pub fn is_d7vk_installed() -> bool {
-    find_d7vk().is_some()
-}
-
 pub fn set_custom_d7vk_path(path: &Path) -> Result<D7vkBundle> {
     crate::graphics_bundle::register(
         path,

@@ -119,11 +119,6 @@ fn find_vkd3d_proton_with(env_paths: &[PathBuf]) -> Option<Vkd3dProtonBundle> {
     None
 }
 
-/// Returns true if VKD3D-Proton is detected on the system.
-pub fn is_vkd3d_proton_installed() -> bool {
-    find_vkd3d_proton().is_some()
-}
-
 /// Sets a custom path to a VKD3D-Proton installation directory.
 pub fn set_custom_vkd3d_proton_path(path: &Path) -> Result<Vkd3dProtonBundle> {
     let path = &path
