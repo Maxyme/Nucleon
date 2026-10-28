@@ -83,6 +83,25 @@ Discovery is not validation. Confirmed recipes use Wine 11.18 with specific
 patches, not an arbitrary newer version. Preserve a working build and profile.
 CrossOver can be registered, but is not required.
 
+### Install an Isotope/FEX runtime
+
+Install an exact published version or a complete local runtime, then select the
+installed directory printed by the command:
+
+```sh
+nucleon wine install isotope --version 0.1.0-rc.1
+# Alternatively: nucleon wine install /path/to/runtime-or-archive
+nucleon wine fex select /path/to/installed/runtime
+nucleon wine fex verify
+nucleon launch <appid> --emulator fex
+```
+
+`wine install` checks release metadata and archive checksums. URL archives without
+adjacent release metadata require `--sha256`; local runtime directories are also
+accepted. Installation does not change the selected runtime. A single launch can
+use `--wine /path/to/installed/runtime` without changing the FEX default. The
+runtime must include the graphics components needed by the chosen engine.
+
 ## Optional GPTK
 
 Obtain Apple's components under their terms. Supply `D3DMetal.framework` and
@@ -95,8 +114,7 @@ nucleon gptk status
 ```
 
 Verification checks ABI pairing with the selected Wine, not game rendering.
-The former overlay's experimental Wine bridge is absent; GPTK configurations
-need another gameplay check before deployment.
+Confirm presentation and input with the selected GPTK configuration.
 
 ## Graphics configuration
 

@@ -708,7 +708,7 @@ pub fn set_custom_wine_path(path: &Path) -> Result<WineRuntime> {
         anyhow::ensure!(
             crate::runtime::ResolvedRuntime::inspect(&root)?.mode
                 == crate::runtime::ExecutionMode::Intel,
-            "Keep the Intel/Rosetta default separate; register native Wine with 'nucleon wine fex register <runtime>'"
+            "Keep the Intel/Rosetta default separate; select native Wine with 'nucleon wine fex select <runtime>'"
         );
     }
     let runtime = add_custom_wine("custom", &canonical)?;
@@ -831,7 +831,7 @@ pub fn set_active_wine(identifier_or_path: &str) -> Result<WineRuntime> {
     if runtime.root.join(crate::runtime::DESCRIPTOR).is_file() {
         anyhow::ensure!(
             runtime.capabilities()?.mode == crate::runtime::ExecutionMode::Intel,
-            "Keep the Intel/Rosetta default separate; register native Wine with 'nucleon wine fex register <runtime>'"
+            "Keep the Intel/Rosetta default separate; select native Wine with 'nucleon wine fex select <runtime>'"
         );
     }
 

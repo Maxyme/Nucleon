@@ -3,7 +3,7 @@
 Wine/FEX builds, runtime assembly, CPU/GPU probes and source-inclusive publishing
 have moved to the standalone sibling [isotope repository](../../isotope/README.md).
 Its `isotope` executable has no Cargo dependency on Nucleon. Production
-Nucleon consumes release archives through [wine install](../RUNTIME-RELEASES.md).
+Nucleon consumes release archives through [wine install](../SETUP.md#install-an-isotopefex-runtime).
 
 The remaining Rust `nucleon-devtools` crate contains Nucleon-specific diagnostics:
 
@@ -48,5 +48,5 @@ target/release/nucleon run /tmp/nucleon-d3d11-present.exe \
 ```
 
 Success requires the `NUCLEON_D3D11_OK` marker and exit 0. See
-[the DiRT runtime repair](../DIRT2-NO-GPTK-TEST.md) for the tested Wine 11.18
-driver patch and its limits. A successful probe does not establish gameplay.
+[Wine setup](../SETUP.md#download-and-patch-the-recommended-build) for the
+reviewed Wine 11.18 patches and their limits. A successful probe does not establish gameplay.

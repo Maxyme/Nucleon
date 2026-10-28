@@ -68,7 +68,7 @@ pub enum WineAction {
         /// Wine identifier, name keyword, or custom path
         version: String,
     },
-    /// Inspect details of active Wine runtime and Steam registration
+    /// Show installed runtimes and the active Wine selection
     Status,
     /// Register a custom Wine runtime with a custom name
     Add {
@@ -337,7 +337,7 @@ pub fn run(action: WineAction) -> Result<()> {
                         "Experimental: use only in a game-specific profile with NUCLEON_STEAMCLIENT_REDIRECT=1 and matching Valve/lsteamclient libraries.",
                     );
                     println!(
-                        "Per-game launch option: NUCLEON_WINE={} NUCLEON_STEAMCLIENT_REDIRECT=1 %command%",
+                        "Launch through Nucleon: NUCLEON_STEAMCLIENT_REDIRECT=1 nucleon launch <appid> --wine {}",
                         runtime.id
                     );
                 }

@@ -110,8 +110,9 @@ libraries and a bridge for the selected Wine architecture. Standalone applicatio
 do not require those files. Read the [setup guide](SETUP.md) for details.
 
 Prebuilt ARM64 Wine/FEX core runtime prereleases are built in the separate
-`isotope` repository. See [runtime releases](RUNTIME-RELEASES.md) for publisher automation,
-source/license contents, installation commands and the current graphics limits.
+`isotope` repository. See [Isotope setup](SETUP.md#install-an-isotopefex-runtime)
+for installation and selection, and the [consumer validation workflow](.github/workflows/isotope-runtime.yml)
+for release verification.
 
 Install an exact Wine/FEX version or a local runtime:
 

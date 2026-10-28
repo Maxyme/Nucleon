@@ -70,9 +70,7 @@ To install or configure DXVK without committing binaries:
                 "Detected {} translation DLL(s)",
                 bundle.dll_count()
             ));
-            println!(
-                "\nGames running under 'Nucleon (Wine + Mesa KosmicKrisp Vulkan)' will now translate Direct3D 9/10/11 -> Vulkan 1.4."
-            );
+            println!("\nSelect DXVK with nucleon launch <appid> --engine dxvk.");
         }
         DxvkAction::SetPath { path } => {
             ui::header(format!("Registering custom DXVK path: {}", path.display()));
