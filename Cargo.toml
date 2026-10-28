@@ -30,7 +30,7 @@ core-foundation = "0.9"
 plist = "1.7"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 ureq = { version = "2.10", default-features = false, features = ["tls"] }
-zip = { version = "2.2", default-features = false, features = ["deflate"] }
+zip = { version = "9.0", default-features = false, features = ["deflate"] }
 tar = "0.4"
 flate2 = "1.0"
 zstd = "0.13"
