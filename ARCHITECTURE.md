@@ -1,40 +1,70 @@
 # Architecture
 
-[README](README.md) · [Setup](SETUP.md) · [Troubleshooting](TROUBLESHOOTING.md)
-
-## Launch flow
+Nucleon owns installation records and launches. Desktop Steam remains an
+unmodified service provider for games requiring Steamworks.
 
 ```mermaid
 flowchart TD
-    Steam[Native macOS Steam] --> Hook[Hook and Steam UI integration]
-    Hook --> Tool[Registered compatibility tool]
-    Tool --> Runner[Nucleon runner]
-    Runner --> Profile[Game profile and explicit overrides]
-    Profile --> Wine[Selected Wine and WoW64 prefix]
-    Wine --> Bridge[Steamworks bridge to native Steam]
-    Wine --> Graphics[Graphics backend]
-    Graphics --> Host[Metal or macOS OpenGL]
+    CLI[Nucleon CLI] --> Download[DepotDownloader process]
+    Download --> Files[Nucleon-owned Windows game files]
+    CLI --> Metadata[Read-only Steam metadata / Nucleon installation record]
+    Metadata --> Runtime[Runtime and per-game profile selection]
+    Runtime --> Runner[Wine and process supervision]
+    Runner --> Graphics[Graphics backend]
+    Runner --> Bridge[Steamworks bridge when required]
+    Bridge --> Steam[Unmodified signed-in Steam client]
 ```
-
-The injected hook enables compatibility features in macOS Steam. Local WebUI
-patches expose controls. Steam invokes a registered tool script, which starts
-the runner embedded in the CLI binary.
-
-Steam integration uses an exact reviewed ARM64 contract under
-`assets/steam-contracts/macos-arm64/`. Its typed TOML fields bind instructions to
-a Mach-O UUID and executable-text SHA-256.
 
 ## Workspace
 
 | Crate | Responsibility |
 | --- | --- |
-| `nucleon-cli` | Setup, runtime/backend management, launch, diagnostics, guard commands |
-| `nucleon-core` | Detection, Steam integration, runner assembly, bridge staging, graphics configuration, validation |
-| `nucleon-runner` | Per-game configuration, Wine arguments/environment, process supervision and shutdown |
-| `nucleon-hook` | Frida Gum hooks inside Steam and Steam Helper; private client ABI integration |
+| `nucleon-cli` | Runtime/backend management, download orchestration, launch and diagnostics |
+| `nucleon-core` | Metadata discovery, installation records, Wine/bridge and graphics configuration |
+| `nucleon-runner` | Launch resolution, Wine execution, logging and process shutdown |
+| `nucleon-devtools` | Explicit development probes |
 
-There is no overlay-shim crate. Nucleon configures external graphics translation
-implementations; it does not itself translate Direct3D.
+The injected hook crate, client instruction contracts and automatic repair guard
+have been removed. Build and release packaging do not ship a Steam injection
+library. Runtime selection never installs compatibility tools.
+
+## Download and launch ownership
+
+The download provider runs as a child process with explicit Windows selection,
+architecture, branch, language and destination arguments. Authentication stays
+interactive; passwords are neither command arguments nor Nucleon settings. Only a
+successful provider exit with Windows executable content publishes an installation
+record. Failed updates retain the previous record. In-place provider updates can
+leave partial files when interrupted; use update to resume and validate them.
+
+`nucleon launch` and `nucleon steam play` resolve an explicit AppID, EXE, working
+directory, arguments, per-game profile and prefix. They call the shared runner
+directly, without `steam://run`, configuration writes or repair side effects.
+Resolution previews do not create prefixes or start authentication or Wine.
+
+Existing library folders and app manifests are read-only inputs. Bounded appinfo
+framing rejects malformed or unknown metadata; `--exe` provides a fallback when
+metadata is unavailable. Ambiguous Windows launch entries require an explicit
+selection. Game-relative metadata paths cannot escape the installation through
+traversal, absolute paths or symlinks. Arguments are parsed using Windows quoting
+rules and passed directly to the process, without shell evaluation.
+
+## One-time migration
+
+`steam detach` requires Steam to be stopped. It stops the old guard and backs up
+its plist, Steam config, compatibility tools, cached Steam program bundle and launch plist.
+Tool backend choices become ordinary per-game preferences when no explicit
+profile engine exists. FEX runtime selection is retained independently of Steam.
+
+Mapped Windows game installations are adopted without moving game files or
+prefixes. Their app manifests move into the migration backup so desktop Steam
+cannot replace their content with Mac depots. Native Mac installations are
+excluded. Custom shell launchers are not interpreted; their recipes must first be
+made explicit in profiles and installation records. Migration is the only code
+that rewrites old integration state. It never installs hooks or signs Steam.
+
+Replace the modified app with Valve's official installer after migration to
+restore vendor signing. Historical migration backups are retained for recovery.
 
 ## Runtime selection
 
@@ -67,24 +97,6 @@ publishes individual files atomically, and restores the previous contents and
 symlinks if any staging or restoration step fails. Rollback failures retain the
 backup and report its location.
 
-The update guard compares every hook architecture's UUID and section contents,
-ignoring code-signature blobs. It signs and verifies stale-hook replacements before
-publishing them. Guard health requires valid signatures, injection, current hook,
-WebUI patches, and the reviewed contract for the installed Steam client; cached
-contracts alone do not mark a repair healthy.
-
-GPTK assembly publishes complete generations with Wine/GPTK provenance stamps.
-Launches resolve an immutable generation. Unix-call ABI pairing comes from the
-selected Wine's own binaries, with signature-gated edits and verification;
-assembly does not blindly replace matching opcodes.
-
-## CPU and Windows architecture
-
-Confirmed runtimes use x86_64 Wine under Rosetta. One win64 WoW64 prefix and
-loader handle PE32 and PE64 games automatically. PE DLLs must still match the
-game; Unix bridge libraries and drivers must match the host Wine process.
-Nucleon does not currently supply a FEX execution path.
-
 ## Steamworks bridge
 
 Native Steam must be running with the appropriate account session. Windows
@@ -111,61 +123,20 @@ compatibility. The old ntdll adapter is no longer staged. DMC5's confirmed
 recipe also needs its private Wine loader redirect patch; it is not a global
 default for other games.
 
-## Graphics paths
+## Remaining compatibility boundaries
 
-| Backend | Path | Qualification |
-| --- | --- | --- |
-| WineD3D | Direct3D → host OpenGL | GoNNER baseline; host OpenGL limits modern titles |
-| DXVK | Direct3D → Vulkan → driver → Metal | Pinned DXVK-macOS/MoltenVK confirmed for DiRT and DMC5 |
-| DXMT | Direct3D 11 → Metal | Configurable; outside these confirmed baselines |
-| D3DMetal/GPTK | Direct3D 11/12 → Metal | Requires compatible Wine and Apple components; recheck after shim removal |
-| VKD3D-Proton | Direct3D 12 → Vulkan → driver → Metal | Experimental; driver features and architecture are gates |
-| D7VK | Legacy DirectDraw/Direct3D → Vulkan | Configurable; game-level validation required |
+The Steamworks bridge still depends on Steam's interfaces and the selected Wine
+ABI. Removing client injection reduces update-sensitive code; it does not promise
+that all Steam updates, DRM, anti-cheat or third-party launchers will work.
 
-KosmicKrisp is a Vulkan driver, not Wine. ICD discovery does not establish host
-architecture compatibility or backend feature support. The installed ARM-only
-build was not a valid Rosetta path. Zink is a possible OpenGL-over-Vulkan route,
-not a validated automatic replacement for host OpenGL in this project.
+Independent startup must be validated for ownership and relaunch behavior per
+game. Cloud synchronization, playtime, overlay, controller configuration and
+Steam's Stop button are not established by a running process. Nucleon owns process
+shutdown and per-prefix cancellation. Preserve known game recipes and distinguish
+startup/device evidence from visual gameplay and input confirmation.
 
-## Ownership and updates
-
-Shutdown is scoped to the game's prefix/process tree, excluding other runners;
-it must not kill all processes using a shared Wine directory. Prefix folder
-redirection reduces host-folder access, but is not a macOS security sandbox or
-a guarantee against privacy prompts. The update guard repairs local integration;
-a repaired UI does not prove hook offsets are valid for a new client.
-
-## Safety boundaries
-
-The runner forbids unsafe Rust. Executable detection, client-contract validation,
-and direct ntdll binding also forbid unsafe Rust. File parsing uses owned bytes
-or safe cached reads. Slice-based byte matching is safe. Workspace lints deny
-implicit unsafe operations inside unsafe functions.
-
-Remaining unsafe operations and unresolved risks:
-
-- Three CoreGraphics/Core Foundation boundaries in `validator.rs`. Ownership is
-  retained/transferred explicitly and values are checked by runtime type.
-- Foreign calls, raw image pointers, function-pointer conversion, and native
-  code patches in the injected hook.
-- Five mutable trampoline globals remain in spawn/filesystem hooks without
-  established publication ordering. The compatibility detour uses typed
-  `OnceLock` storage and a Frida transaction; code patches verify/roll back
-  individually and are not jointly atomic.
-- Exact-client instruction patch semantics and the eligibility callback's
-  foreign ABI still require runtime validation. Removed C++ probing is not a
-  proof that the remaining native boundaries are universally safe.
-- Constructor `set_var` inside native Steam, which may already have threads
-  reading the environment. Constructor timing is not a safety proof.
-- Loader and kernel-copy FFI remain. Compatibility installation owns its pinned
-  image and uses kernel copies instead of borrowing patched executable memory.
-  The obsolete dyld enumerator and raw-memory scanner were removed.
-
-Native detour installation is serialized across hook groups and runs once per group.
-Original trampolines use release/acquire publication before the Gum transaction
-activates any replacement. Failed preparation reverts the whole group and caches
-the error; callbacks never transmute null pointers. Transaction cleanup also runs
-on unwinding. Steam's `LSEnvironment` supplies `STEAM_EXTRA_COMPAT_TOOLS_PATHS`
-before launch, preserving additional configured tool directories. The native
-constructor never changes the process environment. Direct executable launches
-must supply any additional tool paths in their own launch environment.
+Retained Windows files from a Steam library are read-only inputs for Nucleon's
+download routing. Updating an adopted game downloads into a separate Nucleon
+folder and switches the installation record only after success. The original
+Steam game directory and existing Wine prefix are retained. This first update
+can require a complete download and additional disk space.

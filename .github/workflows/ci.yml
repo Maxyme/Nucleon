@@ -87,39 +87,33 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
-      - name: Build thin arm64 release binaries & hook
+      - name: Build thin arm64 release binary
         run: |
           cargo build --release --target aarch64-apple-darwin \
-            -p nucleon-cli \
-            -p nucleon-hook
+            -p nucleon-cli
 
       - name: Ad-hoc sign release binaries for Apple Silicon
         run: |
           RELEASE_DIR="target/aarch64-apple-darwin/release"
           codesign -fs - "${RELEASE_DIR}/nucleon"
-          codesign -fs - "${RELEASE_DIR}/libnucleon.dylib"
 
       - name: Verify Mach-O thin arm64 format & ad-hoc signatures
         run: |
           RELEASE_DIR="target/aarch64-apple-darwin/release"
           file "${RELEASE_DIR}/nucleon"
-          file "${RELEASE_DIR}/libnucleon.dylib"
           codesign -dv "${RELEASE_DIR}/nucleon"
-          codesign -dv "${RELEASE_DIR}/libnucleon.dylib"
 
       - name: Package release bundle
         run: |
           BUNDLE_DIR="nucleon-macos-arm64"
           mkdir -p "${BUNDLE_DIR}/assets"
 
-          # Distribute single binary, backwards-compatible runner symlink, and hook
+          # Distribute the CLI and backwards-compatible runner symlink
           cp target/aarch64-apple-darwin/release/nucleon "${BUNDLE_DIR}/"
           ln -sf nucleon "${BUNDLE_DIR}/nucleon-runner"
-          cp target/aarch64-apple-darwin/release/libnucleon.dylib "${BUNDLE_DIR}/"
 
-          # Distribute manifests and AoB templates
+          # Distribute bridge manifest
           cp assets/bridge-manifest.json "${BUNDLE_DIR}/assets/"
-          cp -R assets/steam-contracts "${BUNDLE_DIR}/assets/"
 
           # Include documentation & license
           cp README.md ARCHITECTURE.md SETUP.md TROUBLESHOOTING.md ROADMAP.md LICENSE NOTICE.md "${BUNDLE_DIR}/"

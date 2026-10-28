@@ -1,15 +1,12 @@
 use super::ui;
 use anyhow::{Result, bail};
 use clap::Subcommand;
-use nucleon_core::{
-    backend, d7vk, dxmt, dxvk, guard, manifest, paths, runner, steam, steam_contract, vkd3d, wine,
-};
-use std::fs;
+use nucleon_core::{backend, d7vk, dxmt, dxvk, manifest, paths, runner, steam, vkd3d, wine};
 use std::path::{Path, PathBuf};
 
 #[derive(Subcommand, Debug, Clone)]
 pub enum SetupAction {
-    /// Remediate missing directories, cache reviewed contracts, and register tools
+    /// Prepare Nucleon directories, runtime and Steamworks bridge
     Fix,
 }
 
@@ -62,7 +59,7 @@ pub fn check_prerequisites(gptk_override: Option<&Path>) -> Vec<PrerequisiteChec
     checks.push(PrerequisiteCheck {
         name: "Steam Installation",
         passed: steam_installed,
-        required: true,
+        required: false,
         details: if steam_installed {
             paths::steam_app().display().to_string()
         } else {
@@ -113,7 +110,7 @@ pub fn check_prerequisites(gptk_override: Option<&Path>) -> Vec<PrerequisiteChec
     checks.push(PrerequisiteCheck {
         name: "Apple GPTK (User-Supplied)",
         passed: gptk_ok,
-        required: true,
+        required: false,
         details: gptk_details,
         remediation: gptk_remedy,
     });
@@ -141,20 +138,18 @@ pub fn check_prerequisites(gptk_override: Option<&Path>) -> Vec<PrerequisiteChec
     });
 
     // 5. Runner & Steam Compatibility Tools
-    let runner_ok = paths::current_runner().exists() || steam::is_auto_tool_registered();
+    let runner_ok = paths::current_runner().exists();
     let runner_details = if paths::current_runner().exists() {
         paths::current_runner().display().to_string()
     } else {
         "Not assembled / not registered".to_string()
     };
     checks.push(PrerequisiteCheck {
-        name: "Runner & Steam Tools",
+        name: "Runtime",
         passed: runner_ok,
         required: false,
         details: runner_details,
-        remediation:
-            "Run 'nucleon setup fix' to assemble runner and register Steam compatibility tools."
-                .to_string(),
+        remediation: "Run 'nucleon setup fix' to assemble the Nucleon runtime.".to_string(),
     });
 
     // 6. Graphics Backend
@@ -190,7 +185,7 @@ pub fn print_prerequisites_table(checks: &[PrerequisiteCheck]) {
     println!("--------------------------------------------------------------------------------");
 }
 
-/// Executes remediation of missing directories, contracts, bridges, and runner staging.
+/// Prepares Nucleon directories, bridge and runtime without changing Steam.
 pub fn run_fix(args: &SetupArgs) -> Result<()> {
     let _ = args.non_interactive;
     if args.kosmickrisp {
@@ -278,27 +273,13 @@ pub fn run_fix(args: &SetupArgs) -> Result<()> {
         let _ = dxmt::fetch_dxmt(None, None);
     }
 
-    // 3. Validate/cache the exact Steam contract
-    match steam_contract::ensure_contract_for_installed_steam() {
-        Ok((path, db)) => {
-            ui::success(format!(
-                "Verified & cached Steam client contract (build {}) at {}",
-                db.contract().client.steam_build,
-                path.display()
-            ));
-        }
-        Err(e) => {
-            ui::warn(format!("Note: Could not validate the Steam contract: {e}"));
-        }
-    }
-
     // 4. Stage Valve bridge packages
     match manifest::fetch_and_stage_valve_packages(args.bridge_path.as_deref()) {
         Ok(()) => ui::success("Valve client bridge libraries staged"),
         Err(e) => ui::warn(format!("Failed to stage bridge packages: {e}")),
     }
 
-    // 5. Assemble runner & register Steam compatibility tools if components are resolvable
+    // Assemble the Nucleon runtime if components are resolvable
     let gptk_comps = runner::find_gptk_components(args.gptk_path.as_deref())
         .ok()
         .flatten();
@@ -312,41 +293,11 @@ pub fn run_fix(args: &SetupArgs) -> Result<()> {
         ) {
             Ok(runner_path) => {
                 ui::success(format!("Runner assembled at: {}", runner_path.display()));
-
-                let runner_bin = paths::support_dir().join("nucleon-runner");
-                let current_exe = std::env::current_exe()?;
-                let runner_src = current_exe
-                    .parent()
-                    .map(|p| p.join("nucleon-runner"))
-                    .unwrap_or_else(|| PathBuf::from("nucleon-runner"));
-
-                if runner_src.exists() {
-                    let _ = fs::copy(&runner_src, &runner_bin);
-                } else {
-                    let _ = fs::copy(&current_exe, &runner_bin);
-                }
-
-                if runner_bin.exists() {
-                    if let Err(e) = steam::install_compatibility_tool(&runner_bin) {
-                        ui::warn(format!("Failed to register Steam compatibility tools: {e}"));
-                    } else {
-                        ui::success("Registered Steam compatibility tools");
-                    }
-                }
             }
             Err(e) => {
                 ui::warn(format!("Could not assemble runner during fix: {e}"));
             }
         }
-    }
-
-    // 6. Install guard LaunchAgent if missing
-    let plist = paths::steam_guard_plist();
-    if !plist.exists()
-        && let Ok(bin) = std::env::current_exe()
-    {
-        let _ = guard::install_launchagent(Some(&bin));
-        ui::success("Installed Steam guard background LaunchAgent");
     }
 
     Ok(())

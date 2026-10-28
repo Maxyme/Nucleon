@@ -11,7 +11,6 @@ nucleon backends status
 nucleon detect /path/to/game.exe
 nucleon validate <AppID>
 nucleon logs --runner -n 100
-nucleon logs --hook -n 100
 ```
 
 `validate` inspects windows owned by processes in the game's prefix. A window
@@ -55,21 +54,28 @@ uses pinned DXVK-macOS 1.10.3/MoltenVK. DMC5's baseline uses DX11. Neither prove
 that newer DXVK or DX12 works. ARM-only KosmicKrisp cannot load into x86_64 Wine;
 check architecture and feature requirements before shader/device debugging.
 
-## Steam update or overlay changes
+## Steam updates and old integration
 
-```sh
-nucleon guard status
-nucleon guard run
-nucleon logs --hook -n 100
-```
+New Nucleon builds do not patch Steam. `nucleon status` reports whether the legacy
+integration remains; quit Steam and use `nucleon steam detach` to retire it. Keep
+the printed backup, replace the modified app with Valve's official installer, and
+launch games through Nucleon. Do not run an older `setup fix` or guard binary,
+which can restore the retired integration.
 
-Restart Steam after repair. A repaired UI does not prove private ABI offsets
-or hook publication safety. See [remaining risks](ARCHITECTURE.md#safety-boundaries).
+The Steamworks bridge still requires a compatible, signed-in client. Diagnose
+ownership/session or ABI failures separately from graphics. A game that redirects
+itself to Steam may require a game-specific launch recipe. Do not add
+`steam_appid.txt` as a general workaround.
 
-The copied overlay shim is absent from new builds. Opt-in uses Valve's native
-renderer only. HDR/Metal 4 corrections, microphone suppression, and the old
-experimental Wine bridge are absent. GoNNER and GPTK paths need another check;
-older installed binaries may still contain the shim until deliberately updated.
+## Downloads and launch entries
+
+Use `nucleon steam install <appid> --username <account>`, then `steam update` to
+resume or validate managed downloads. Install DepotDownloader or supply its path
+with `--downloader`. Native Steam's Downloads screen does not manage these files.
+
+Use `nucleon steam show <appid>` for cached launch choices and choose
+`--launch-id <id>` if several entries exist. `--exe` works without cached metadata.
+Preview with `nucleon launch <appid> --dry-run` before changing a runtime recipe.
 
 ## Avoid regressions with LLM-assisted changes
 

@@ -613,29 +613,29 @@ fn finish_run(session: &mut RunSession, result: Result<RunOutcome>) -> Result<()
 }
 
 fn run_with_args_inner(args: &[String], session: &mut RunSession) -> Result<RunOutcome> {
+    if args.iter().any(|a| a.contains("iscriptevaluator.exe")) || args.len() < 3 {
+        return Ok(RunOutcome {
+            code: 0,
+            status: "skipped",
+        });
+    }
+    let data = env::var_os("STEAM_COMPAT_DATA_PATH")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| paths::support_dir().join("default_prefix"));
+    let resolved = resolve_steam_launch(args, session.appid.clone(), data, None)?;
+    execute_launch(resolved, session)
+}
+
+fn resolve_steam_launch(
+    args: &[String],
+    compat_appid: Option<String>,
+    compat_data_path: PathBuf,
+    request: Option<&SteamRequest>,
+) -> Result<ResolvedLaunch> {
     if args.len() < 2 {
         bail!("Usage: nucleon-runner <verb> [args...]");
     }
     let verb = &args[1];
-    for arg in args {
-        if arg.contains("iscriptevaluator.exe") {
-            log_runner("Intercepted iscriptevaluator.exe, exiting cleanly");
-            return Ok(RunOutcome {
-                code: 0,
-                status: "skipped",
-            });
-        }
-    }
-
-    // Parse Steam compatibility environment
-    let compat_appid = session.appid.clone();
-    let compat_data_path = env::var_os("STEAM_COMPAT_DATA_PATH")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| paths::support_dir().join("default_prefix"));
-    // WINEPREFIX is deliberately not exported into this process' environment: every Wine and
-    // wineserver invocation receives it explicitly in its own environment map, which keeps the
-    // value from leaking to unrelated children (and mutating env while other threads read it).
-
     // Determine target executable and arguments
     // Steam invokes: nucleon-runner run <exe_path> [game_args...]
     let game_args: Vec<String> = if args.len() > 2 {
@@ -644,13 +644,7 @@ fn run_with_args_inner(args: &[String], session: &mut RunSession) -> Result<RunO
         vec![]
     };
 
-    if game_args.is_empty() {
-        log_runner("No game executable specified to run, exiting.");
-        return Ok(RunOutcome {
-            code: 0,
-            status: "skipped",
-        });
-    }
+    anyhow::ensure!(!game_args.is_empty(), "No game executable specified");
 
     let target_exe = PathBuf::from(&game_args[0]);
 
@@ -664,12 +658,15 @@ fn run_with_args_inner(args: &[String], session: &mut RunSession) -> Result<RunO
     let explicit_profile = config::environment("NUCLEON_GAME_PROFILE")?.map(PathBuf::from);
     let override_path = compat_appid
         .as_ref()
+        .filter(|_| request.is_none())
         .map(|id| paths::support_dir().join(format!("launch_override_{id}.json")));
     let override_source = override_path
         .as_ref()
         .map(|p| p.display().to_string())
         .unwrap_or_else(|| "launch override".into());
-    let launch_override = if explicit_profile.is_some() {
+    let launch_override = if let Some(request) = request {
+        Some(request.overrides.clone())
+    } else if explicit_profile.is_some() {
         None
     } else {
         override_path
@@ -720,8 +717,8 @@ fn run_with_args_inner(args: &[String], session: &mut RunSession) -> Result<RunO
     let fex_selection = if explicit_runtime_request {
         None
     } else {
-        config::environment(nucleon_core::steam::fex::SELECTION_ENV)?
-            .map(|path| nucleon_core::steam::fex::load_selection(Path::new(&path)))
+        config::environment("NUCLEON_FEX_SELECTION")?
+            .map(|path| nucleon_core::runtime_selection::load_fex_selection(Path::new(&path)))
             .transpose()?
     };
     let mut selected_runtime = explicit_runtime.or(fex_selection);
@@ -965,7 +962,7 @@ fn run_with_args_inner(args: &[String], session: &mut RunSession) -> Result<RunO
             "ARM64/FEX cannot use the Intel GPTK engine. Choose auto, dxmt, vkd3d, dxvk or wine in its profile"
         );
     }
-    log_runner(&format!(
+    trace_runner(&format!(
         "Engine Router: target '{}' [{}] -> engine {:?}",
         target_exe.display(),
         api_desc,
@@ -1001,7 +998,7 @@ fn run_with_args_inner(args: &[String], session: &mut RunSession) -> Result<RunO
             game_profile.dxvk_path.as_deref(),
         )?,
     };
-    let plan = LaunchPlan::new(
+    let mut plan = LaunchPlan::new(
         runtime,
         pfx_dir.clone(),
         active_engine,
@@ -1010,23 +1007,85 @@ fn run_with_args_inner(args: &[String], session: &mut RunSession) -> Result<RunO
         user_shim_override,
         &graphics_api,
     )?;
-    execute_launch(
-        PreparedLaunch {
-            plan,
-            data_path: compat_data_path,
-            appid: compat_appid,
-            arguments: game_args,
-            cwd: None,
-            hud: enable_hud,
-            overlay: enable_overlay,
-            wait: verb == "waitforexitandrun",
-            consume_override: override_path.filter(|_| launch_override.is_some()),
-            upscaler: effective_profile.upscaler,
-            environment: Default::default(),
-        }
-        .resolve()?,
-        session,
-    )
+    if env::var_os("NUCLEON_STEAM_BRIDGE").is_none()
+        && let Some(bridge) = launch_override
+            .as_ref()
+            .and_then(|p| p.steam_bridge.as_ref())
+            .or(game_profile.steam_bridge.as_ref())
+    {
+        anyhow::ensure!(
+            bridge.is_dir(),
+            "Configured Steamworks bridge is missing: {}",
+            bridge.display()
+        );
+        plan.bridge = bridge.canonicalize()?;
+    }
+    PreparedLaunch {
+        plan,
+        data_path: compat_data_path,
+        appid: compat_appid,
+        arguments: game_args,
+        cwd: request.and_then(|r| r.cwd.clone()),
+        hud: enable_hud,
+        overlay: enable_overlay,
+        wait: verb == "waitforexitandrun",
+        consume_override: override_path.filter(|_| launch_override.is_some()),
+        upscaler: effective_profile.upscaler,
+        environment: Default::default(),
+    }
+    .resolve()
+}
+
+/// Steam-aware launch owned by Nucleon; never patches or asks Steam to launch a game.
+pub struct SteamRequest {
+    pub appid: u32,
+    pub executable: PathBuf,
+    pub arguments: Vec<String>,
+    pub cwd: Option<PathBuf>,
+    pub data_path: PathBuf,
+    pub overrides: LaunchOverride,
+}
+
+pub fn launch_steam(request: SteamRequest, dry_run: bool) -> Result<()> {
+    let mut args = vec![
+        "nucleon".into(),
+        "run".into(),
+        request
+            .executable
+            .to_str()
+            .context("Game path must be UTF-8")?
+            .into(),
+    ];
+    args.extend(request.arguments.clone());
+    let id = request.appid.to_string();
+    let resolved = resolve_steam_launch(
+        &args,
+        Some(id.clone()),
+        request.data_path.clone(),
+        Some(&request),
+    )?;
+    if dry_run {
+        let prepared = &resolved.prepared;
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "appid": request.appid, "executable": request.executable, "arguments": request.arguments,
+                "cwd": request.cwd, "prefix": prepared.plan.prefix,
+                "runtime": prepared.plan.runtime.root, "engine": prepared.plan.engine.display_name(),
+                "steamworks": prepared.plan.steam_integration, "steam_client_modified": false,
+            }))?
+        );
+        return Ok(());
+    }
+    anyhow::ensure!(
+        nucleon_core::steam::is_steam_running(),
+        "Start Steam and sign in before launching this Steam game"
+    );
+    let mut session = RunSession::steam(&args, &id)?;
+    let result = session
+        .configure()
+        .and_then(|()| execute_launch(resolved, &mut session));
+    finish_run(&mut session, result)
 }
 
 struct PreparedLaunch {

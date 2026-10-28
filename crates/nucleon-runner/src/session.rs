@@ -120,6 +120,9 @@ impl RunSession {
             Some(identity.into()),
         )
     }
+    pub fn steam(args: &[String], appid: &str) -> Result<Self> {
+        Self::create_with_identity(&paths::support_dir(), args, Some(appid.into()), appid, None)
+    }
     pub fn create(args: &[String]) -> Result<Self> {
         Self::create_at(&paths::support_dir(), args)
     }

@@ -3,28 +3,16 @@ set shell := ["bash", "-uc"]
 
 target_dir := "target/release"
 
-# Default recipe: build all binaries and universal hook dylib
+# Default recipe: build CLI binary
 default: build
 
-# Build all release binaries and universal hook dylib
-build: build-hook build-bins
+# Build the release CLI
+build: build-bins
 
 # Build CLI release binary (single binary embedding runner)
 build-bins:
 	cargo build --release -p nucleon-cli
 	ln -sf nucleon {{target_dir}}/nucleon-runner
-
-# Build universal Mach-O hook dylib (arm64 + x86_64)
-build-hook:
-    cargo build --release --target aarch64-apple-darwin -p nucleon-hook
-    cargo build --release --target x86_64-apple-darwin -p nucleon-hook
-    mkdir -p {{target_dir}}
-    lipo -create -output {{target_dir}}/libnucleon.dylib \
-        target/aarch64-apple-darwin/release/libnucleon.dylib \
-        target/x86_64-apple-darwin/release/libnucleon.dylib
-    cp {{target_dir}}/libnucleon.dylib {{target_dir}}/nucleon.dylib
-    codesign -fs - {{target_dir}}/libnucleon.dylib
-    codesign -fs - {{target_dir}}/nucleon.dylib
 
 # Run automated Nucleon setup
 setup: build
@@ -42,18 +30,6 @@ unregister: build
 # Inspect Nucleon runtime status
 status:
     ./{{target_dir}}/nucleon status
-
-# Inspect Steam Update Guard status
-guard-status:
-    ./{{target_dir}}/nucleon guard status
-
-# Run Steam Update Guard self-healing verification
-guard-run:
-    ./{{target_dir}}/nucleon guard run
-
-# Install and activate Background Steam Update Guard LaunchAgent
-guard-install:
-    ./{{target_dir}}/nucleon guard install
 
 # Format all code across the workspace
 fmt:
@@ -79,19 +55,16 @@ check: lint test
 
 # Build and package the release bundle (thin arm64) for Apple Silicon
 package:
-	@echo "==> Building thin arm64 release binary and hook..."
-	cargo build --release --target aarch64-apple-darwin -p nucleon-cli -p nucleon-hook
+	@echo "==> Building thin arm64 release binary..."
+	cargo build --release --target aarch64-apple-darwin -p nucleon-cli
 	@echo "==> Applying ad-hoc codesignatures..."
 	codesign -fs - target/aarch64-apple-darwin/release/nucleon
-	codesign -fs - target/aarch64-apple-darwin/release/libnucleon.dylib
 	@echo "==> Assembling release bundle directory..."
 	rm -rf target/nucleon-macos-arm64 target/nucleon-macos-arm64.tar.gz
 	mkdir -p target/nucleon-macos-arm64/assets
 	cp target/aarch64-apple-darwin/release/nucleon target/nucleon-macos-arm64/
 	ln -sf nucleon target/nucleon-macos-arm64/nucleon-runner
-	cp target/aarch64-apple-darwin/release/libnucleon.dylib target/nucleon-macos-arm64/
 	cp assets/bridge-manifest.json target/nucleon-macos-arm64/assets/
-	cp -R assets/steam-contracts target/nucleon-macos-arm64/assets/
 	cp README.md ARCHITECTURE.md SETUP.md TROUBLESHOOTING.md ROADMAP.md LICENSE NOTICE.md target/nucleon-macos-arm64/
 	git archive --format=tar.gz --prefix=nucleon-source/ HEAD -o target/nucleon-source.tar.gz
 	tar -czvf target/nucleon-macos-arm64.tar.gz -C target/nucleon-macos-arm64 .

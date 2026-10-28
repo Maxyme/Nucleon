@@ -1,7 +1,6 @@
 //! File-level compatibility checks used before Automatic chooses a graphics path.
 use anyhow::{Result, bail};
-use object::{Architecture, BinaryFormat, Object, ObjectSection, ObjectSymbol};
-use sha2::{Digest, Sha256};
+use object::{Architecture, BinaryFormat, Object, ObjectSymbol};
 use std::{fs, path::Path};
 
 pub(crate) fn native_arch(path: &Path, arch: Architecture) -> bool {
@@ -195,40 +194,6 @@ pub(crate) fn has_export(data: &[u8], aliases: &[&str]) -> bool {
             })
         })
     })
-}
-
-/// Compare loadable code/data, architecture, and UUID, excluding code-signature blobs.
-pub(crate) fn hook_identity(data: &[u8]) -> Result<Vec<[u8; 32]>> {
-    let mut hashes = Vec::new();
-    for image in crate::binary_image::slices(data, None)? {
-        let f = object::File::parse(image)?;
-        if f.format() != BinaryFormat::MachO || f.kind() != object::ObjectKind::Dynamic {
-            bail!("Hook must be a Mach-O dynamic library");
-        }
-        let mut hash = Sha256::new();
-        hash.update(format!("{:?}", f.architecture()));
-        if let Some(uuid) = f.mach_uuid()? {
-            hash.update(uuid);
-        }
-        let mut count = 0;
-        for section in f.sections() {
-            hash.update(section.segment_name()?.unwrap_or("").as_bytes());
-            hash.update(section.name()?.as_bytes());
-            hash.update(section.address().to_le_bytes());
-            hash.update(section.size().to_le_bytes());
-            hash.update(section.data()?);
-            count += 1;
-        }
-        if count == 0 {
-            bail!("Hook has no loadable sections");
-        }
-        hashes.push(hash.finalize().into());
-    }
-    if hashes.is_empty() {
-        bail!("Hook contains no architectures");
-    }
-    hashes.sort();
-    Ok(hashes)
 }
 
 #[cfg(test)]

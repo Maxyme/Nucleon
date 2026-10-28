@@ -2,7 +2,7 @@
 use crate::{
     configuration, paths,
     runtime::{ExecutionMode, ResolvedRuntime},
-    steam, wine,
+    wine,
 };
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
@@ -56,17 +56,17 @@ pub fn fex_default() -> Result<ResolvedRuntime> {
     let path = if saved.try_exists()? {
         saved
     } else {
-        paths::steam_fex_compat_tools_dir().join(steam::fex::SELECTION_FILE)
+        paths::steam_fex_compat_tools_dir().join("fex-runtime.json")
     };
-    steam::fex::load_selection(&path)
-        .context("No usable FEX default. Run 'nucleon wine fex select <runtime>' for standalone use, or 'nucleon wine fex register <runtime>' for Steam")
+    load_fex_selection(&path)
+        .context("No usable FEX default. Run 'nucleon wine fex select <runtime>'")
 }
 
 pub fn fex_default_file() -> std::path::PathBuf {
     paths::support_dir().join("fex-runtime.json")
 }
 
-/// Use the same validated identity as a Steam tool, stored independently of Steam.
+/// Store a validated runtime identity independently of Steam.
 pub fn set_fex_default(runtime: &ResolvedRuntime) -> Result<()> {
     Emulator::Fex.check(runtime)?;
     std::fs::create_dir_all(paths::support_dir())?;
@@ -83,7 +83,7 @@ pub fn set_fex_default(runtime: &ResolvedRuntime) -> Result<()> {
 pub fn standalone_default() -> Result<ResolvedRuntime> {
     if fex_default_file().try_exists()?
         || paths::steam_fex_compat_tools_dir()
-            .join(steam::fex::SELECTION_FILE)
+            .join("fex-runtime.json")
             .try_exists()?
     {
         fex_default()
@@ -188,7 +188,7 @@ mod tests {
         assert_eq!(standalone_default().unwrap().root, runtime.root);
         assert!(
             !paths::steam_fex_compat_tools_dir()
-                .join(steam::fex::SELECTION_FILE)
+                .join("fex-runtime.json")
                 .exists()
         );
         std::fs::write(fex_default_file(), b"broken").unwrap();
@@ -219,4 +219,42 @@ mod tests {
         assert!(named("/missing/fex-preview").is_err());
         assert!("box64".parse::<Emulator>().is_err());
     }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Selection {
+    schema: u32,
+    root: std::path::PathBuf,
+    #[serde(default)]
+    managed: bool,
+    prefix: crate::runtime::PrefixCompatibility,
+}
+
+pub fn load_fex_selection(path: &Path) -> Result<ResolvedRuntime> {
+    let selection: Selection = serde_json::from_slice(
+        &std::fs::read(path)
+            .with_context(|| format!("Read experimental runtime selection {}", path.display()))?,
+    )
+    .with_context(|| format!("Invalid experimental runtime selection {}", path.display()))?;
+    ensure!(
+        selection.schema == 1,
+        "Unsupported experimental tool selection schema"
+    );
+    ensure!(
+        !selection.managed
+            || selection
+                .root
+                .join(crate::managed_runtime::RECEIPT)
+                .is_file(),
+        "Managed runtime installation is incomplete. Run 'nucleon wine fex verify' or reinstall the verified source"
+    );
+    let runtime = ResolvedRuntime::inspect(&selection.root)?;
+    ensure!(
+        runtime.mode == ExecutionMode::Arm64Fex
+            && runtime.root == selection.root
+            && runtime.prefix == selection.prefix,
+        "Native runtime identity changed. Select it again with 'nucleon wine fex select <runtime>'"
+    );
+    Ok(runtime)
 }

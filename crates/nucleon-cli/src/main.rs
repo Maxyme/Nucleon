@@ -4,15 +4,15 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use commands::{
     backends::BackendsAction, d7vk::D7vkAction, dxmt::DxmtAction, dxvk::DxvkAction,
-    gptk::GptkAction, guard::GuardAction, kosmickrisp::KosmickrispAction, setup::SetupArgs,
-    steam::SteamAction, vkd3d::Vkd3dAction, wine::WineAction,
+    gptk::GptkAction, kosmickrisp::KosmickrispAction, setup::SetupArgs, steam::SteamAction,
+    vkd3d::Vkd3dAction, wine::WineAction,
 };
 use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(name = "nucleon")]
 #[command(
-    about = "Nucleon: Windows games and programs on macOS with Wine, Isotope/FEX and Steam integration"
+    about = "Nucleon: Windows games and programs on macOS with Wine and independent Steam game launching"
 )]
 #[command(version)]
 struct Cli {
@@ -259,11 +259,11 @@ mod tests {
             .unwrap();
             assert!(matches!(
                 cli.command,
-                Commands::Launch {
+                Commands::Launch(commands::steam::PlayArgs {
                     wine: Some(_),
                     emulator: Some(_),
                     ..
-                }
+                })
             ));
         }
         assert!(
@@ -301,7 +301,7 @@ enum Commands {
         /// Force re-assembly of runner and reinstall of components
         #[arg(short, long)]
         force: bool,
-        /// Enable or stage KosmicKrisp (Mesa Vulkan 1.4) compatibility tool in Steam
+        /// Enable KosmicKrisp (Mesa Vulkan 1.4) discovery
         #[arg(short, long)]
         kosmickrisp: bool,
         /// Point to custom KosmicKrisp ICD manifest, driver dylib, or directory
@@ -334,7 +334,7 @@ enum Commands {
         /// Point to custom DXMT installation directory
         #[arg(long)]
         dxmt_path: Option<PathBuf>,
-        /// Select desired Wine runtime flavor or path for Steam (e.g. staging, crossover, or /Applications/CrossOver.app)
+        /// Select desired Wine runtime flavor or path (e.g. staging, crossover, or /Applications/CrossOver.app)
         #[arg(long)]
         wine: Option<String>,
         /// Point to custom Wine installation directory or app bundle (e.g. /Applications/CrossOver.app)
@@ -347,13 +347,8 @@ enum Commands {
         #[arg(long)]
         bridge_path: Option<PathBuf>,
     },
-    /// Inspect status of Nucleon, Steam patches, runner, and prefix
+    /// Inspect runtime, graphics and Steam launch configuration
     Status,
-    /// Background Steam update guard and LaunchAgent management
-    Guard {
-        #[command(subcommand)]
-        action: GuardAction,
-    },
     /// Manage Wine runtimes (Heroic, Homebrew, Whisky, CrossOver, and custom)
     Wine {
         #[command(subcommand)]
@@ -400,59 +395,25 @@ enum Commands {
         /// Path to Windows .exe binary or game folder
         path: PathBuf,
     },
-    /// Launch a Windows game by Steam AppID
-    Launch {
-        /// Steam Application ID
-        appid: u32,
-        /// Enable Apple Metal Performance HUD
-        #[arg(long)]
-        hud: bool,
-        /// Choose an exact installed Wine ID or a complete runtime path
-        #[arg(long)]
-        wine: Option<String>,
-        /// Choose the configured Wine for rosetta or fex (constrains --wine when combined)
-        #[arg(long)]
-        emulator: Option<nucleon_core::runtime_selection::Emulator>,
-        /// Force graphics engine (auto, gptk, dxmt, dxvk, vkd3d, kosmickrisp, wine)
-        #[arg(short, long)]
-        engine: Option<String>,
-        /// Select a prepared temporal upscaler for this launch
-        #[arg(long)]
-        upscaler: Option<nucleon_core::upscaler::Backend>,
-    },
+    /// Launch a Steam game directly through Nucleon
+    Launch(commands::steam::PlayArgs),
     /// Diagnostic troubleshooting tool: verify whether a game window is actively displaying on macOS (0 screen capture)
     Validate {
         /// Steam Application ID
         appid: u32,
     },
-    /// Steam patch and UI integration management
+    /// Download and launch Steam games without modifying Steam
     Steam {
         #[command(subcommand)]
         action: SteamAction,
     },
-    /// Map a Steam game (by AppID) to a Nucleon compatibility tool in Steam config.vdf
-    Map {
-        /// Steam Application ID (e.g. 601150)
-        appid: u32,
-        /// Optional tool name (default: 'nucleon')
-        #[arg(long, short)]
-        tool: Option<String>,
-    },
-    /// Unmap a Steam game (by AppID) from Steam config.vdf
-    Unmap {
-        /// Steam Application ID (e.g. 601150)
-        appid: u32,
-    },
     /// Remove Nucleon from Steam UI, compatibility tools, and game mappings
     Unregister,
-    /// View Nucleon hook and runner logs
+    /// View per-launch Nucleon logs
     Logs {
         /// Number of lines to display (default: 50)
         #[arg(short = 'n', long, default_value_t = 50)]
         lines: usize,
-        /// Show only hook logs
-        #[arg(long)]
-        hook: bool,
         /// Show only runner logs
         #[arg(long)]
         runner: bool,
@@ -460,9 +421,6 @@ enum Commands {
         #[arg(short, long)]
         follow: bool,
     },
-    /// Internal compatibility tool runner invoked by Steam (or via symlink 'nucleon-runner')
-    #[command(external_subcommand)]
-    Runner(Vec<String>),
 }
 
 fn main() -> Result<()> {
@@ -533,7 +491,6 @@ fn main() -> Result<()> {
             bridge_path,
         }),
         Commands::Status => commands::status::run(),
-        Commands::Guard { action } => commands::guard::run(action),
         Commands::Wine { action } => commands::wine::run(action),
         Commands::Backends { action } => commands::backends::run(action),
         Commands::Gptk { action } => commands::gptk::run(action),
@@ -543,29 +500,17 @@ fn main() -> Result<()> {
         Commands::Dxvk { action } => commands::dxvk::run(action),
         Commands::Dxmt { action } => commands::dxmt::run(action),
         Commands::Detect { path } => commands::detect::run(&path),
-        Commands::Launch {
-            appid,
-            hud,
-            engine,
-            wine,
-            emulator,
-            upscaler,
-        } => commands::launch::run_launch(appid, hud, engine, wine, emulator, upscaler),
+        Commands::Launch(args) => commands::launch::run_launch(args),
         Commands::Validate { appid } => commands::launch::run_validate(appid),
         Commands::Steam { action } => commands::steam::run(action),
-        Commands::Map { appid, tool } => commands::steam::run(SteamAction::Map { appid, tool }),
-        Commands::Unmap { appid } => commands::steam::run(SteamAction::Unmap { appid }),
         Commands::Unregister => commands::steam::run_unregister(),
         Commands::Logs {
             lines,
-            hook,
             runner,
             follow,
-        } => commands::logs::run(lines, hook, runner, follow),
-        Commands::Runner(mut args) => {
-            let mut runner_args = vec!["nucleon-runner".to_string()];
-            runner_args.append(&mut args);
-            nucleon_runner::run_with_args(&runner_args)
+        } => {
+            let _ = runner;
+            commands::logs::run(lines, follow)
         }
     }
 }

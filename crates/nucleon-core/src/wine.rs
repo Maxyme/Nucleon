@@ -1,6 +1,5 @@
 use crate::fs_util::atomic_write_file;
 use crate::paths;
-use crate::vdf;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -833,7 +832,7 @@ pub fn get_active_wine_runtime() -> Option<WineRuntime> {
 }
 
 /// Sets the active Wine runtime by ID, name, or path, persists the selection,
-/// and immediately updates the Steam compatibility tool shim if installed.
+/// without changing Steam or registering compatibility tools.
 pub fn set_active_wine(identifier_or_path: &str) -> Result<WineRuntime> {
     let runtime = resolve_wine_runtime_by_query(identifier_or_path)
         .context(format!("Could not find a valid Wine runtime matching '{}'. Run 'nucleon wine list' to view available options.", identifier_or_path))?;
@@ -867,23 +866,6 @@ pub fn set_active_wine(identifier_or_path: &str) -> Result<WineRuntime> {
     atomic_write_file(active_wine_selection_file(), runtime.id.as_bytes())
         .with_context(|| format!("Failed to write {}", active_wine_selection_file().display()))?;
 
-    // Also update Steam's nucleon-wine/run shim if it exists so changes take effect immediately
-    let steam_wine_run = paths::home_dir()
-        .join("Library/Application Support/Steam/compatibilitytools.d/nucleon-wine/run");
-    if steam_wine_run.exists() {
-        let script = vdf::generate_run_script_full(Some("staging"), None);
-        let _ = fs::write(&steam_wine_run, script);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            if let Ok(meta) = fs::metadata(&steam_wine_run) {
-                let mut perms = meta.permissions();
-                perms.set_mode(0o755);
-                let _ = fs::set_permissions(&steam_wine_run, perms);
-            }
-        }
-    }
-
     log::info!(
         "Set active Wine runtime to '{}' ({})",
         runtime.name,
@@ -897,16 +879,6 @@ pub fn clear_active_wine() -> Result<()> {
     let sel_file = active_wine_selection_file();
     if sel_file.is_file() {
         let _ = fs::remove_file(&sel_file);
-    }
-
-    // Update Steam tool shim to primary runtime if present
-    if find_primary_wine_runtime().is_some() {
-        let steam_wine_run = paths::home_dir()
-            .join("Library/Application Support/Steam/compatibilitytools.d/nucleon-wine/run");
-        if steam_wine_run.exists() {
-            let script = vdf::generate_run_script_full(Some("staging"), None);
-            let _ = fs::write(&steam_wine_run, script);
-        }
     }
 
     Ok(())

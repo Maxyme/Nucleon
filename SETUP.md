@@ -16,8 +16,8 @@ just build
 ```
 
 Use `./target/release/nucleon` below, or install it on your PATH and use `nucleon`.
-`just build` also prepares the universal Steam hook. Earlier release bundles
-were withdrawn; build from source until another release is published.
+`just build` builds the CLI; no Steam hook or second architecture build is needed.
+Earlier release bundles were withdrawn; build from source.
 
 ## Register Wine
 
@@ -113,7 +113,7 @@ These are alternatives, not a required sequence. Automatically fetched upstream
 releases may differ from the macOS builds used in confirmed profiles. Vulkan
 drivers must match Wine's host architecture and the backend's feature needs.
 
-The Wine / Automatic Steam option detects the game's graphics API and checks
+Nucleon's Automatic engine detects the game's graphics API and checks
 installed backends. Its default preference is GPTK then VKD3D-Proton for DX12;
 DXMT, GPTK, then DXVK for DX11; and DXVK for DX9/10. Vulkan paths require
 KosmicKrisp. Older DirectDraw games can use D7VK with KosmicKrisp; OpenGL and
@@ -122,25 +122,39 @@ instructions. These preferences are not benchmark results. Explicit engine
 and backend choices take precedence; a per-game Wine choice keeps automatic
 routing on that runtime.
 
-## Steam bridge and integration
+## Steam games and bridge
 
-You need Windows client libraries matching installed Steam and the bridge/helper
-required by your recipe. The Valve staging manifest does not build a macOS
-`lsteamclient` port. Preserve exact binary source revisions and license notices.
-
-With the required client files extracted:
+Steam stays unmodified. Use DepotDownloader for Windows content, and keep the
+ordinary signed-in Steam client running for Steamworks services. Install the
+provider from [its upstream releases](https://github.com/SteamRE/DepotDownloader)
+or its documented Homebrew package. Then:
 
 ```sh
-nucleon setup --bridge-path /path/to/extracted-client-files
+nucleon steam install <appid> --username <account>
+nucleon steam show <appid>
+nucleon launch <appid> --dry-run
+nucleon launch <appid>
+nucleon steam update <appid> --username <account>
+```
+
+Authentication is interactive. `--qr` selects mobile-app QR authentication.
+Passwords are not passed on the command line. Optional `--branch`, `--language`
+and `--downloader` settings select download preferences. A failed download is not
+recorded as completed. Updating reuses the recorded directory and preferences.
+
+Supply Windows client libraries matching Steam and the bridge/helper required by
+your runtime. The Valve staging manifest does not build a macOS `lsteamclient`
+port. Preserve binary source revisions and license notices.
+
+```sh
+nucleon setup fix --bridge-path /path/to/extracted-client-files
 nucleon status
 ```
 
-Quit Steam before integration changes and restart afterward. Setup may report
-partial remediation; inspect failures instead of assuming registration means a
-game can run. See `nucleon setup --help` and `nucleon setup fix --help`.
-
-In Properties → Compatibility, force a Nucleon tool for the Windows game. Leave
-native macOS titles native. Confirm actual runtime/backend selection in logs.
+Multiple Windows launch entries require `--launch-id <id>` from `steam show`, or
+`--exe <path>`. Nucleon reads existing Steam library manifests and reuses their
+per-game prefixes. A native Mac installation has no usable Windows executable;
+install its Windows version into Nucleon if you intend to run it through Wine.
 
 ## Profiles and launch options
 
@@ -162,27 +176,34 @@ Omit irrelevant backend fields. DMC5's recipe instead uses loader-patched Wine
 and direct execution; do not copy the helper choice blindly. Isolate support
 and prefix directories for experiments and save the old profile.
 
-Steam launch options include:
+Launch overrides belong on Nucleon's command line:
 
 ```sh
-NUCLEON_WINE=/path/to/wine %command%
-NUCLEON_WINEDEBUG=+timestamp,+loaddll,+msgbox,+dialog %command%
-NUCLEON_OVERLAY=1 %command%
+nucleon launch <appid> --wine /path/to/wine --engine dxvk
+nucleon launch <appid> --exe Game.exe -- --fullscreen
 ```
 
-Overlay injection defaults off. A profile's `overlay: false` wins over opt-in.
-The removed shim's HDR/Metal 4 fixes and microphone guards are not supplied.
+## Retiring the previous integration
 
-## Guard and removal
+Quit Steam, preserve custom launcher recipes as explicit game profiles, and run:
 
 ```sh
-nucleon guard status
-nucleon guard run
-nucleon guard install
-nucleon guard uninstall
-nucleon unregister
+nucleon steam detach
 ```
 
-Guard repairs local integration; new Steam builds still need hook validation.
-Unregister removes integration/tool mappings. Preserve runtime/prefix backups
-before cleanup and consult command help for exact behavior.
+Detachment stops and removes the old guard, backs up configuration and registered
+tools, removes injection and backs up the cached Steam program bundle. Existing runtime profiles,
+Windows game files and prefixes are retained. Mapped Windows installations get
+Nucleon records; their Steam manifests are backed up to prevent platform changes.
+Native Mac installations remain under Steam's control.
+
+The backup path is printed. Restoration failures are errors, not success notices.
+The command does not sign or patch Steam. Reinstall Valve's official Steam app to
+restore its original signature. Preserve `~/Library/Application Support/Steam`
+and its game libraries when replacing the app.
+
+Retained Windows files from a Steam library are read-only inputs for Nucleon's
+download routing. Updating an adopted game downloads into a separate Nucleon
+folder and switches the installation record only after success. The original
+Steam game directory and existing Wine prefix are retained. This first update
+can require a complete download and additional disk space.

@@ -143,7 +143,7 @@ mod tests {
             } else {
                 image[header + 8..header + 12].copy_from_slice(&u32::MAX.to_be_bytes());
             }
-            assert!(crate::client_image::extract_arm64_slice(&image).is_err());
+            assert!(slices(&image, Some(macho::CPU_TYPE_ARM64)).is_err());
         }
         assert!(slices(&[], None).is_err());
         assert!(slices(&[0; 32], Some(macho::CPU_TYPE_ARM64)).is_err());

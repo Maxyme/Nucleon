@@ -55,10 +55,6 @@ pub fn downloads_dir() -> PathBuf {
     support_dir().join("downloads")
 }
 
-pub fn steam_contracts_dir() -> PathBuf {
-    support_dir().join("steam-contracts/arm64")
-}
-
 pub fn steam_app() -> PathBuf {
     PathBuf::from("/Applications/Steam.app")
 }
@@ -90,34 +86,6 @@ pub fn steam_client_manifest_candidates() -> Vec<PathBuf> {
         .iter()
         .map(|rel| data_dir.join(rel))
         .collect()
-}
-
-pub fn steam_compat_tools_dir() -> PathBuf {
-    home_dir().join("Library/Application Support/Steam/compatibilitytools.d/nucleon")
-}
-
-pub fn steam_gptk_compat_tools_dir() -> PathBuf {
-    home_dir().join("Library/Application Support/Steam/compatibilitytools.d/nucleon-gptk")
-}
-
-pub fn steam_kosmickrisp_compat_tools_dir() -> PathBuf {
-    home_dir().join("Library/Application Support/Steam/compatibilitytools.d/nucleon-kosmickrisp")
-}
-
-pub fn steam_dxvk_compat_tools_dir() -> PathBuf {
-    home_dir().join("Library/Application Support/Steam/compatibilitytools.d/nucleon-dxvk")
-}
-
-pub fn steam_vkd3d_compat_tools_dir() -> PathBuf {
-    home_dir().join("Library/Application Support/Steam/compatibilitytools.d/nucleon-vkd3d")
-}
-
-pub fn steam_dxmt_compat_tools_dir() -> PathBuf {
-    home_dir().join("Library/Application Support/Steam/compatibilitytools.d/nucleon-dxmt")
-}
-
-pub fn steam_wine_compat_tools_dir() -> PathBuf {
-    home_dir().join("Library/Application Support/Steam/compatibilitytools.d/nucleon-wine")
 }
 
 pub fn steam_fex_compat_tools_dir() -> PathBuf {
@@ -197,18 +165,6 @@ pub fn steam_guard_plist() -> PathBuf {
     launch_agents_dir().join("com.nucleon.steam-guard.plist")
 }
 
-pub fn guard_bin() -> PathBuf {
-    support_dir().join("bin/nucleon")
-}
-
-pub fn guard_log() -> PathBuf {
-    support_dir().join("guard.log")
-}
-
-pub fn guard_state() -> PathBuf {
-    support_dir().join("guard-state.json")
-}
-
 pub fn ensure_dirs() -> Result<()> {
     for d in &[
         support_dir(),
@@ -216,15 +172,12 @@ pub fn ensure_dirs() -> Result<()> {
         runners_dir(),
         bridge_dir(),
         downloads_dir(),
-        steam_contracts_dir(),
-        steam_compat_tools_dir(),
         kosmickrisp_dir(),
         kosmickrisp_shim_dir(),
         vkd3d_proton_dir(),
         d7vk_dir(),
         dxvk_dir(),
         dxmt_dir(),
-        launch_agents_dir(),
     ] {
         fs::create_dir_all(d)
             .with_context(|| format!("Failed to create directory: {}", d.display()))?;

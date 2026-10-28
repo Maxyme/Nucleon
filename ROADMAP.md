@@ -2,7 +2,7 @@
 
 [README](README.md) · [Architecture](ARCHITECTURE.md)
 
-Priority: a reliable native Steam flow, automatic Windows architecture handling,
+Priority: reliable independent launching with an unmodified Steam client, automatic Windows architecture handling,
 and preserved working configurations. These are planned tasks, not implemented
 support claims.
 
@@ -16,16 +16,14 @@ support claims.
 
 ## Reliability and safety
 
-- [ ] Recheck GoNNER and supported GPTK pairings without the copied overlay.
-- [ ] Validate the compatibility contract's new patch strategy in live Steam.
-- [ ] Replace remaining spawn/filesystem trampoline globals and prove publication.
-- [ ] Set Steam's tool environment before process startup.
-- [ ] Extend reviewed client coverage and validate callback ABI/image lifetimes;
-  retain fail-closed behavior on unsupported clients.
-- [ ] Maintain a Steam/runtime/backend regression matrix covering presentation,
-  input, ownership, and shutdown.
-- [ ] Record source revisions, hashes, licenses, and required source for
-  distributed bridge/runtime components.
+- [x] Remove client injection, instruction contracts, UI patches and repair guard.
+- [x] Launch Steam games directly through Nucleon with explicit game identity.
+- [x] Delegate Windows downloads to an independent authenticated downloader.
+- [x] Preserve existing prefixes and back up retired integration state.
+- [ ] Maintain a game/runtime/backend matrix covering visual presentation, input,
+  ownership, shutdown, DRM relaunches and client updates.
+- [ ] Validate Cloud, controller and overlay behavior outside Steam's launcher.
+- [ ] Record source revisions, hashes and required source for bridge components.
 
 ## Runtime and graphics
 
@@ -39,13 +37,11 @@ support claims.
 - [ ] Independently implement microphone/GPTK workarounds only for demonstrated
   needs with clear runtime contracts.
 
-## Steam integration
+## Steam game management
 
-- [ ] Improve signature recovery using string anchors and instruction references,
-  retaining build gates and refusing ambiguity.
-- [ ] Improve missing-bridge, ABI, driver-architecture, and session diagnostics.
-- [ ] Make configuration and rollback easier within the Steam flow.
+- [ ] Improve launch-entry discovery and game-specific ownership diagnostics.
+- [ ] Add richer download progress while keeping authentication outside Nucleon.
+- [ ] Test resuming interrupted updates and mixed native/Windows libraries.
 - [ ] Investigate controller/audio issues from reproducible game reports.
 
-A separate GUI, broad game-library browser, and automated generated patches are
-deferred until the reliability and safety work is addressed.
+A separate GUI is deferred until the core launch and download paths are validated.

@@ -64,6 +64,8 @@ pub struct GameProfile {
     pub graphics_api: Option<GraphicsPreference>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub steam_protocol: Option<SteamProtocol>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub steam_bridge: Option<PathBuf>,
 }
 
 impl GameProfile {
@@ -91,6 +93,7 @@ impl GameProfile {
             emulator: self.emulator.or(defaults.emulator),
             graphics_api: self.graphics_api.or(defaults.graphics_api),
             steam_protocol: self.steam_protocol.or(defaults.steam_protocol),
+            steam_bridge: self.steam_bridge.or(defaults.steam_bridge),
         }
     }
 
