@@ -92,6 +92,8 @@ struct Receipt {
     engine: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     upscaler: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    frame_generation: Option<serde_json::Value>,
     prefix: Option<PathBuf>,
     shader_caches: Option<serde_json::Value>,
     staged_files: Option<usize>,
@@ -173,6 +175,7 @@ impl RunSession {
             frontend_manifest: None,
             engine: None,
             upscaler: None,
+            frame_generation: None,
             prefix: None,
             shader_caches: None,
             staged_files: None,
@@ -240,6 +243,16 @@ impl RunSession {
         self.receipt.prefix = Some(plan.prefix.clone());
         self.receipt.staged_files = staged;
         self.receipt.shader_caches = caches;
+        self.save()
+    }
+
+    pub fn frame_generation(
+        &mut self,
+        setting: &nucleon_core::frame_generation::Resolved,
+    ) -> Result<()> {
+        self.receipt.frame_generation = Some(
+            serde_json::json!({"requested":setting.setting,"preparation":"configured","activation":"not-observed"}),
+        );
         self.save()
     }
 

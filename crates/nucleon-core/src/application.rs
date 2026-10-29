@@ -15,6 +15,7 @@ use std::{
 #[serde(deny_unknown_fields)]
 pub struct Settings {
     pub upscaler: Option<crate::upscaler::Settings>,
+    pub frame_generation: Option<crate::frame_generation::Setting>,
     pub wine: Option<String>,
     pub emulator: Option<Emulator>,
     pub engine: Option<String>,
@@ -27,6 +28,7 @@ impl Settings {
     pub fn with_defaults(self, defaults: Self) -> Self {
         Self {
             upscaler: self.upscaler.or(defaults.upscaler),
+            frame_generation: self.frame_generation.or(defaults.frame_generation),
             wine: self.wine.or(defaults.wine),
             emulator: self.emulator.or(defaults.emulator),
             engine: self.engine.or(defaults.engine),
@@ -48,6 +50,7 @@ impl Settings {
     pub fn profile(&self) -> GameProfile {
         GameProfile {
             upscaler: self.upscaler.clone(),
+            frame_generation: self.frame_generation,
             wine: self.wine.clone(),
             emulator: self.emulator,
             engine: self.engine.clone(),
@@ -138,6 +141,7 @@ pub fn resolve_launch(
 pub struct Application {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub upscaler: Option<crate::upscaler::Settings>,
+    pub frame_generation: Option<crate::frame_generation::Setting>,
     pub executable: PathBuf,
     #[serde(default)]
     pub arguments: Vec<String>,
@@ -152,6 +156,7 @@ impl Application {
         crate::detector::executable_guest(&executable)?;
         Ok(Self {
             upscaler: None,
+            frame_generation: None,
             executable,
             arguments,
             cwd: cwd.map(working_directory).transpose()?,
@@ -325,13 +330,21 @@ mod tests {
     fn choices() -> impl Strategy<Value = Settings> {
         (
             prop::option::of(any::<bool>()),
+            prop::option::of(any::<bool>()),
             prop::option::of("[a-z]{1,16}"),
             prop::option::of(0_usize..3),
             prop::option::of(0_usize..3),
             prop::option::of(0_usize..2),
             prop::option::of(0_usize..3),
         )
-            .prop_map(|(hud, wine, engine, api, emulator, scaler)| Settings {
+            .prop_map(|(hud, fg, wine, engine, api, emulator, scaler)| Settings {
+                frame_generation: fg.map(|on| {
+                    if on {
+                        crate::frame_generation::Setting::Metalfx
+                    } else {
+                        crate::frame_generation::Setting::Off
+                    }
+                }),
                 hud,
                 wine,
                 engine: engine.map(|i| ["auto", "wine", "gptk"][i].into()),

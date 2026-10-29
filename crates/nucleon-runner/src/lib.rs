@@ -703,6 +703,9 @@ fn resolve_steam_launch(request: &SteamRequest) -> Result<ResolvedLaunch> {
         &game_profile,
     )?;
     effective_profile.graphics_api = request_settings.graphics_api.or(game_profile.graphics_api);
+    effective_profile.frame_generation = request_settings
+        .frame_generation
+        .or(game_profile.frame_generation);
     effective_profile.steam_protocol = request_settings
         .steam_protocol
         .or(game_profile.steam_protocol);
@@ -858,6 +861,7 @@ fn resolve_steam_launch(request: &SteamRequest) -> Result<ResolvedLaunch> {
         hud: enable_hud,
         overlay: enable_overlay,
         upscaler: effective_profile.upscaler,
+        frame_generation: effective_profile.frame_generation,
         environment: Default::default(),
     }
     .resolve()
@@ -894,6 +898,7 @@ pub fn launch_steam(request: SteamRequest, dry_run: bool) -> Result<()> {
             "{}",
             serde_json::to_string_pretty(&serde_json::json!({
                 "appid": request.appid, "executable": request.executable, "arguments": request.arguments,
+                "frame_generation": resolved.resolved_frame_generation,
                 "cwd": request.cwd, "prefix": prepared.plan.prefix,
                 "runtime": prepared.plan.runtime.root, "engine": prepared.plan.engine.display_name(),
                 "steamworks": prepared.plan.steam_integration, "steam_client_modified": false,
@@ -915,6 +920,7 @@ pub fn launch_steam(request: SteamRequest, dry_run: bool) -> Result<()> {
 struct PreparedLaunch {
     environment: std::collections::BTreeMap<String, String>,
     upscaler: Option<nucleon_core::upscaler::Settings>,
+    frame_generation: Option<nucleon_core::frame_generation::Setting>,
     plan: LaunchPlan,
     data_path: PathBuf,
     appid: Option<String>,
@@ -931,6 +937,7 @@ struct ResolvedLaunch {
     scaler_root: PathBuf,
     scaler_choice: nucleon_core::upscaler::Settings,
     resolved_scaler: nucleon_core::upscaler::Resolved,
+    resolved_frame_generation: Option<nucleon_core::frame_generation::Resolved>,
 }
 
 impl PreparedLaunch {
@@ -955,7 +962,14 @@ impl PreparedLaunch {
                 .unwrap_or(""),
             scaler_choice.backend,
         )?;
+        let resolved_frame_generation = self
+            .frame_generation
+            .map(|choice| {
+                nucleon_core::frame_generation::resolve(choice, &self.plan, &resolved_scaler)
+            })
+            .transpose()?;
         Ok(ResolvedLaunch {
+            resolved_frame_generation,
             prepared: self,
             scaler_root,
             scaler_choice,
@@ -970,8 +984,10 @@ fn execute_launch(resolved: ResolvedLaunch, session: &mut RunSession) -> Result<
         scaler_root,
         scaler_choice,
         resolved_scaler,
+        resolved_frame_generation,
     } = resolved;
     let PreparedLaunch {
+        frame_generation: _,
         upscaler,
         mut plan,
         data_path: compat_data_path,
@@ -1061,6 +1077,10 @@ fn execute_launch(resolved: ResolvedLaunch, session: &mut RunSession) -> Result<
             runner_dir.display()
         )
     })?;
+    if let Some(frame_generation) = &resolved_frame_generation {
+        frame_generation.apply()?;
+        session.frame_generation(frame_generation)?;
+    }
     let staged = plan.stage_graphics()?;
     log_runner(&format!(
         "Resolved graphics {:?} active ({staged} DLL operations)",

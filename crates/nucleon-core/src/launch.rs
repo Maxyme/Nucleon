@@ -363,7 +363,7 @@ impl LaunchPlan {
             engine,
             runtime.mode
         );
-        let use_steam_helper = helper.unwrap_or(runtime.steam_helper || !is64);
+        let use_steam_helper = helper.unwrap_or(!is64);
         let runtime_features = RuntimeFeatures::inspect(&runtime);
         Ok(Self {
             api: api.clone(),
@@ -1087,7 +1087,6 @@ mod tests {
     #[test]
     fn standalone_ignores_runtime_steam_capabilities_and_needs_no_bridge() {
         let (_temp, mut runtime) = runtime::fixture(ExecutionMode::Arm64Fex);
-        runtime.steam_helper = true;
         runtime.steam_protocol = SteamProtocol::ValveRedirect;
         let plan = LaunchPlan::new(
             runtime,
@@ -1346,15 +1345,14 @@ mod tests {
 
     #[test]
     fn protocol_uses_windows_executable_path_and_respects_explicit_choice() {
-        let (temp, mut runtime) = runtime::fixture(ExecutionMode::Arm64Fex);
-        runtime.steam_helper = true;
+        let (temp, runtime) = runtime::fixture(ExecutionMode::Arm64Fex);
         let mut plan = LaunchPlan::new(
             runtime.clone(),
             temp.path().join("prefix"),
             TargetEngine::WineStaging,
             Default::default(),
             true,
-            None,
+            Some(true),
             &GraphicsApi::Unknown,
         )
         .unwrap();

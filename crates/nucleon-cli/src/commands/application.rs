@@ -8,6 +8,9 @@ pub struct SettingsArgs {
     /// game, fsr2, fsr3.1, metalfx, fsr4-native-lite, fsr4-native, fsr4.1.2 or xess
     #[arg(long)]
     upscaler: Option<nucleon_core::upscaler::Backend>,
+    /// metalfx or off; currently validated for Talos 2 with the MetalFX upscaler
+    #[arg(long)]
+    frame_generation: Option<nucleon_core::frame_generation::Setting>,
     /// Exact Wine ID or complete runtime path (overrides the bottle setting)
     #[arg(long)]
     wine: Option<String>,
@@ -28,6 +31,7 @@ impl SettingsArgs {
     pub(crate) fn settings(self) -> Result<Settings> {
         let settings = Settings {
             upscaler: self.upscaler.map(nucleon_core::upscaler::Settings::selected),
+            frame_generation: self.frame_generation,
             wine: self.wine, emulator: self.emulator, engine: self.engine,
             graphics_api: self.graphics_api.map(|value| serde_json::from_value(serde_json::Value::String(value))
                 .context("Choose auto, dx7, dx9, dx10, dx11, dx12, vulkan or opengl for --graphics-api")).transpose()?,
@@ -79,6 +83,7 @@ pub fn run(args: RunArgs) -> Result<()> {
 #[derive(Debug, Clone, Copy, ValueEnum)]
 pub enum SettingField {
     Upscaler,
+    FrameGeneration,
     Wine,
     Emulator,
     Engine,
@@ -125,6 +130,9 @@ pub enum BottleAction {
         /// Save a scaler preference for this application only
         #[arg(long)]
         upscaler: Option<nucleon_core::upscaler::Backend>,
+        /// metalfx or off; currently validated for Talos 2 with the MetalFX upscaler
+        #[arg(long)]
+        frame_generation: Option<nucleon_core::frame_generation::Setting>,
         #[arg(last = true)]
         arguments: Vec<String>,
     },
@@ -207,6 +215,7 @@ pub fn bottle(action: BottleAction) -> Result<()> {
                         SettingField::GraphicsApi => bottle.settings.graphics_api = None,
                         SettingField::Hud => bottle.settings.hud = None,
                         SettingField::Upscaler => bottle.settings.upscaler = None,
+                        SettingField::FrameGeneration => bottle.settings.frame_generation = None,
                     }
                 }
                 bottle.settings = changes.with_defaults(bottle.settings.clone());
@@ -225,11 +234,13 @@ pub fn bottle(action: BottleAction) -> Result<()> {
             cwd,
             replace,
             upscaler,
+            frame_generation,
             arguments,
         } => {
             nucleon_core::application::validate_name(&application)?;
             let mut entry = Application::new(&executable, arguments, cwd.as_deref())?;
             entry.upscaler = upscaler.map(nucleon_core::upscaler::Settings::selected);
+            entry.frame_generation = frame_generation;
             Bottle::update(&name, |bottle| {
                 ensure!(
                     replace || !bottle.applications.contains_key(&application),

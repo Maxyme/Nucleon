@@ -45,6 +45,8 @@ pub struct GameProfile {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub upscaler: Option<crate::upscaler::Settings>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub frame_generation: Option<crate::frame_generation::Setting>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub hud: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub engine: Option<String>,
@@ -83,6 +85,7 @@ impl GameProfile {
     pub fn with_defaults(self, defaults: Self) -> Self {
         Self {
             upscaler: self.upscaler.or(defaults.upscaler),
+            frame_generation: self.frame_generation.or(defaults.frame_generation),
             hud: self.hud.or(defaults.hud),
             engine: self.engine.or(defaults.engine),
             use_steam_shim: self.use_steam_shim.or(defaults.use_steam_shim),
@@ -106,9 +109,8 @@ impl GameProfile {
     pub fn apply_protocol(&self, runtime: &mut ResolvedRuntime) -> Result<()> {
         if let Some(protocol) = self.steam_protocol {
             ensure!(
-                protocol != SteamProtocol::ValveRedirect
-                    || runtime.steam_protocol == SteamProtocol::ValveRedirect,
-                "Selected runtime does not advertise the Valve Steam redirect; choose bridge or a redirect-capable runtime"
+                runtime.steam_protocols.contains(&protocol),
+                "Selected runtime does not advertise the requested Steam protocol; choose a supported protocol or runtime"
             );
             runtime.steam_protocol = protocol;
         }

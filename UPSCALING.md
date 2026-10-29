@@ -232,3 +232,37 @@ Keep live authentication arguments out of saved profiles and shared logs.
 
 See the [quick setup guide](tools/upscalers/README.md) and
 [provider catalog](assets/upscalers/dependencies.toml) for dependencies and sources.
+
+## MetalFX frame generation
+
+`--frame-generation metalfx` enables the game's native DLSS-G path through the
+prepared MetalFX bridge. `--frame-generation off` disables it. This is separate
+from OptiScaler's FSR/XeSS frame-generation outputs, which remain disabled.
+Currently the recipe is validated only for **Talos 2, DX12, Intel GPTK**, with
+`--upscaler metalfx`. Other games and upscalers are rejected before launching.
+
+```sh
+nucleon app run talos2 --upscaler metalfx --frame-generation metalfx
+nucleon app run talos2 --frame-generation off
+```
+
+Save `"frame_generation": "metalfx"` (or `"off"`) in a standalone profile's
+`settings`, a bottle's settings, a bottle application entry, or a Steam game
+profile. CLI choices override saved choices; `off` overrides an inherited enabled
+setting. A saved enabled choice must also select the MetalFX upscaler. Omission
+leaves the game's existing configuration alone; it does not undo a prior choice.
+
+At launch, under the prefix lock, Nucleon updates Talos's existing Windows-user
+settings: `r.Streamline.InitializePlugin`, `r.Streamline.DLSSG.Enable`, and
+`FrameGeneration`. Start the game once before using this recipe. Existing settings
+for older Wine usernames in that prefix are updated too, so switching the runtime
+username does not silently lose the choice. Original INIs are backed up once as
+`*.ini.nucleon-framegen.bak`; unrelated options are retained. Updates persist, and
+an explicit `off` launch applies the inverse settings. Dry runs list the setting
+and affected configuration directories without editing them.
+
+The launch receipt records the requested choice and configuration preparation,
+with activation initially `not-observed`. It does not infer successful generated
+presentation from the setting alone. The tested bridge returned successful FG
+evaluations with about two HUD presentations per evaluation; visual quality,
+latency and long-session stability remain experimental.

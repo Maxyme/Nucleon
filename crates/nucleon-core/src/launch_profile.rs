@@ -70,6 +70,7 @@ impl LaunchProfile {
                 self.application.cwd.as_deref().map(resolve).as_deref(),
             )?;
             app.upscaler = self.application.upscaler.clone();
+            app.frame_generation = self.application.frame_generation;
             app
         };
         self.prefix = self

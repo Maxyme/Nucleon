@@ -8,6 +8,7 @@ pub mod detector;
 mod downloads;
 pub mod dxmt;
 pub mod dxvk;
+pub mod frame_generation;
 mod frontend;
 pub mod fs_util;
 pub mod gptk_abi;

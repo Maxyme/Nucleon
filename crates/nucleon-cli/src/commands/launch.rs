@@ -15,6 +15,7 @@ pub fn run_launch(args: super::steam::PlayArgs) -> Result<()> {
     overrides.upscaler = args
         .upscaler
         .map(nucleon_core::upscaler::Settings::selected);
+    overrides.frame_generation = args.frame_generation;
     nucleon_runner::launch_steam(
         nucleon_runner::SteamRequest {
             appid: args.appid,

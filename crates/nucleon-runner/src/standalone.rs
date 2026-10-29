@@ -34,6 +34,9 @@ pub fn resolve_standalone(request: StandaloneRequest) -> Result<ResolvedStandalo
     let saved_upscaler = request.application.upscaler.clone();
     let mut settings = request.settings;
     settings.upscaler = settings.upscaler.or(saved_upscaler);
+    settings.frame_generation = settings
+        .frame_generation
+        .or(request.application.frame_generation);
     let application = Application::new(
         &request.application.executable,
         request.application.arguments,
@@ -86,6 +89,7 @@ pub fn resolve_standalone(request: StandaloneRequest) -> Result<ResolvedStandalo
         hud: settings.hud.unwrap_or(false),
         overlay: false,
         upscaler: settings.upscaler,
+        frame_generation: settings.frame_generation,
         environment: Default::default(),
     }
     .resolve()?;
@@ -113,6 +117,7 @@ impl ResolvedStandalone {
             },
             "arguments": nucleon_core::launch_profile::redact_arguments(&p.arguments[1..]),
             "upscaler": self.launch.resolved_scaler,
+            "frame_generation": self.launch.resolved_frame_generation,
             "authenticated": false, "executed": false,
         })
     }

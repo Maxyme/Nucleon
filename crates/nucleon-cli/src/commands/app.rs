@@ -275,6 +275,7 @@ mod tests {
         let profile = LaunchProfile {
             schema: 1,
             application: Application {
+                frame_generation: None,
                 executable: options.executable.clone().unwrap(),
                 arguments: vec!["saved argument".into()],
                 cwd: None,

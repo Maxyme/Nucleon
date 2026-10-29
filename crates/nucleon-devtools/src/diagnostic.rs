@@ -304,7 +304,7 @@ mod tests {
             backends: vec![GraphicsBackend::Auto],
             environment: Default::default(),
             steam_protocol: SteamProtocol::Bridge,
-            steam_helper: false,
+            steam_protocols: vec![SteamProtocol::Bridge],
             graphics: GraphicsPaths::default(),
         };
         let cli = dir.path().join("nucleon");

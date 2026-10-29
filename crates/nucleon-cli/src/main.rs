@@ -22,6 +22,51 @@ struct Cli {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn frame_generation_choice_is_available_on_saved_direct_bottle_and_steam_launches() {
+        use clap::Parser;
+        for args in [
+            vec![
+                "nucleon",
+                "app",
+                "run",
+                "talos2",
+                "--frame-generation",
+                "metalfx",
+            ],
+            vec!["nucleon", "run", "Talos2.exe", "--frame-generation", "off"],
+            vec![
+                "nucleon",
+                "bottle",
+                "configure",
+                "talos2",
+                "--frame-generation",
+                "metalfx",
+            ],
+            vec![
+                "nucleon",
+                "bottle",
+                "configure",
+                "talos2",
+                "--clear",
+                "frame-generation",
+            ],
+            vec![
+                "nucleon",
+                "launch",
+                "835960",
+                "--frame-generation",
+                "metalfx",
+            ],
+        ] {
+            assert!(Cli::try_parse_from(args).is_ok());
+        }
+        assert!(
+            Cli::try_parse_from(["nucleon", "run", "Talos2.exe", "--frame-generation", "fsr"])
+                .is_err()
+        );
+    }
+
     use super::*;
 
     #[test]
