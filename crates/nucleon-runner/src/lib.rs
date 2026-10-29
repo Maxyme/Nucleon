@@ -1019,14 +1019,17 @@ fn execute_launch(resolved: ResolvedLaunch, session: &mut RunSession) -> Result<
     plan.log_directory = Some(session.directory.clone());
     plan.diagnostics = session.debug;
     session.resolved(&plan, None, None)?;
-    let run_seconds = config::environment("NUCLEON_RUN_SECONDS")?
-        .map(|value| {
-            value
-                .parse::<std::num::NonZeroU64>()
-                .map(|n| Duration::from_secs(n.get()))
-                .with_context(|| "NUCLEON_RUN_SECONDS must be a positive number of seconds")
-        })
-        .transpose()?;
+    let run_seconds = match environment.get("NUCLEON_RUN_SECONDS") {
+        Some(value) => Some(value.clone()),
+        None => config::environment("NUCLEON_RUN_SECONDS")?,
+    }
+    .map(|value| {
+        value
+            .parse::<std::num::NonZeroU64>()
+            .map(|n| Duration::from_secs(n.get()))
+            .with_context(|| "NUCLEON_RUN_SECONDS must be a positive number of seconds")
+    })
+    .transpose()?;
     let wine_bin = plan.runtime.loader.clone();
     trace_runner(&format!(
         "Resolved runtime mode: {:?}; native libraries: {}",
@@ -1101,6 +1104,25 @@ fn execute_launch(resolved: ResolvedLaunch, session: &mut RunSession) -> Result<
         Some(staged),
         caches.as_ref().map(serde_json::to_value).transpose()?,
     )?;
+    // The generic Wine engine label does not identify the actual graphics layer.
+    // A resolved MetalFX bridge is also evidence of configured D3DMetal on legacy GPTK.
+    let d3dmetal = if resolved_scaler.bridge.is_some() {
+        runner::inspect_gptk_dir(&plan.runtime.root)
+    } else if plan.engine == nucleon_core::detector::TargetEngine::Gptk {
+        runner::find_gptk_components(None).ok().flatten()
+    } else {
+        None
+    };
+    if let Some((framework, _)) = d3dmetal {
+        log_runner("Configured graphics layer: D3DMetal; recording backend-owned cache metadata");
+        session.backend_cache(nucleon_core::backend_cache::D3dMetal::discover(
+            &plan.runtime.root,
+            framework,
+            &resolved_scaler.renderer,
+            &plan.prefix,
+            &format!("{:?}", plan.runtime.mode),
+        ))?;
+    }
     if let Some(directory) = target_exe.parent() {
         let helpers = nucleon_core::detector::bundled_directx_helpers(
             directory,

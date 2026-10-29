@@ -102,3 +102,20 @@ such as `nucleon dxvk clear-path` or `nucleon kosmickrisp clear-path`.
 Vulkan overrides must name readable ICD JSON manifests whose driver libraries
 exist. `VK_DRIVER_FILES` takes precedence over `VK_ICD_FILENAMES`; colon-separated
 manifest lists are preserved in the game's environment.
+
+## D3DMetal cache diagnostics
+
+After a D3DMetal launch, `nucleon cache status` reports the current backend-owned
+cache path, size and Unreal pipeline-cache files. Use `--json` for the full file
+inventory and OS/runtime/framework context. Launch receipts record a snapshot,
+refreshed after shutdown. `shader_caches` remains reserved for Nucleon-managed
+DXVK/VKD3D/Mesa caches; `backend_caches` describes D3DMetal/application-owned files.
+Discovery follows the backend's renderer-filename convention. File presence does
+not establish cache hits or compatibility across OS/toolkit/GPU updates. The
+command reads metadata and does not create, clear, relocate or restore caches.
+
+For reproducible captures, `nucleon app run talos2 --run-seconds 60` requests a
+60-second game runtime followed by normal prefix cleanup. Preparation and cleanup
+add to the total elapsed time. This explicit option survives saved-app dispatch;
+inherited `NUCLEON_*` launch controls are intentionally cleaned. Use the same
+scene, route, upscaler and frame-generation settings for comparisons.

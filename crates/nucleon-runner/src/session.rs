@@ -90,6 +90,9 @@ struct Receipt {
     frontend_abi: Option<nucleon_core::runtime::FrontendAbi>,
     frontend_manifest: Option<PathBuf>,
     engine: Option<String>,
+    /// Explicitly configured graphics layer; not runtime activation verification.
+    graphics_backend: Option<String>,
+    backend_caches: Option<nucleon_core::backend_cache::D3dMetal>,
     #[serde(skip_serializing_if = "Option::is_none")]
     upscaler: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -174,6 +177,8 @@ impl RunSession {
             frontend_abi: None,
             frontend_manifest: None,
             engine: None,
+            graphics_backend: None,
+            backend_caches: None,
             upscaler: None,
             frame_generation: None,
             prefix: None,
@@ -246,6 +251,17 @@ impl RunSession {
         self.save()
     }
 
+    pub fn backend_cache(&mut self, report: nucleon_core::backend_cache::D3dMetal) -> Result<()> {
+        self.receipt.graphics_backend = Some("D3DMetal (configured)".into());
+        if self.receipt.engine.as_deref()
+            == Some(nucleon_core::detector::TargetEngine::WineStaging.display_name())
+        {
+            self.receipt.engine = Some("Wine + D3DMetal (configured)".into());
+        }
+        self.receipt.backend_caches = Some(report);
+        self.save()
+    }
+
     pub fn frame_generation(
         &mut self,
         setting: &nucleon_core::frame_generation::Resolved,
@@ -309,6 +325,9 @@ impl RunSession {
         self.receipt.exit_code = code;
         self.receipt.error = error;
         self.receipt.finished_at = Some(chrono::Utc::now().to_rfc3339());
+        if let Some(report) = &mut self.receipt.backend_caches {
+            report.refresh();
+        }
         self.receipt.timings = self.clock.timings();
         self.save()
     }

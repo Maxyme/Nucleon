@@ -1,6 +1,7 @@
 pub mod app;
 pub mod application;
 pub mod backends;
+pub mod cache;
 pub mod d7vk;
 pub mod detect;
 pub mod dxmt;

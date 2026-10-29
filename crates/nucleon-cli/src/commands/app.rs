@@ -68,6 +68,9 @@ pub struct Options {
     /// Validate and preview without authentication, Wine, or game execution
     #[arg(long)]
     dry_run: bool,
+    /// Stop this launch after the given number of seconds (diagnostic only)
+    #[arg(long)]
+    run_seconds: Option<std::num::NonZeroU64>,
     #[arg(last = true)]
     arguments: Vec<String>,
 }
@@ -203,6 +206,9 @@ fn dispatch_command(options: &Options, profile: &LaunchProfile) -> Result<Comman
     if options.dry_run {
         command.arg("--dry-run");
     }
+    if let Some(seconds) = options.run_seconds {
+        command.args(["--run-seconds", &seconds.to_string()]);
+    }
     // Freeze the selected profile before re-exec; no second profile load, default
     // selection, or command-line flattening can change it. Never put it in argv.
     command
@@ -210,6 +216,9 @@ fn dispatch_command(options: &Options, profile: &LaunchProfile) -> Result<Comman
         .env(LAUNCH_REQUEST, serde_json::to_string(profile)?)
         .arg("--")
         .args(&options.arguments);
+    if let Some(seconds) = options.run_seconds {
+        command.env("NUCLEON_RUN_SECONDS", seconds.to_string());
+    }
     Ok(command)
 }
 
@@ -254,6 +263,9 @@ fn launch(options: Options, dispatch: bool) -> Result<()> {
     resolved.append_arguments(options.arguments);
     let mut environment = auth.environment;
     environment.extend(profile.environment);
+    if let Some(seconds) = options.run_seconds {
+        environment.insert("NUCLEON_RUN_SECONDS".into(), seconds.to_string());
+    }
     resolved.run(environment)
 }
 
@@ -270,6 +282,7 @@ mod tests {
             cwd: None,
             settings: SettingsArgs::default(),
             dry_run: false,
+            run_seconds: std::num::NonZeroU64::new(45),
             arguments: vec!["--game-option".into(), "a b".into(), "".into()],
         };
         let profile = LaunchProfile {
@@ -283,7 +296,11 @@ mod tests {
             },
             settings: Default::default(),
             prefix: options.prefix.clone(),
-            environment: [("GAME_OPTION".into(), "a b".into())].into(),
+            environment: [
+                ("GAME_OPTION".into(), "a b".into()),
+                ("NUCLEON_RUN_SECONDS".into(), "999".into()),
+            ]
+            .into(),
             authentication: None,
         };
         let command = dispatch_command(&options, &profile).unwrap();
@@ -297,6 +314,8 @@ mod tests {
                 "app",
                 "dispatch",
                 "any-game",
+                "--run-seconds",
+                "45",
                 "--",
                 "--game-option",
                 "a b",
@@ -317,6 +336,15 @@ mod tests {
         assert_eq!(frozen.prefix, profile.prefix);
         assert_eq!(frozen.application.arguments, profile.application.arguments);
         assert_eq!(frozen.environment, profile.environment);
+        assert_eq!(
+            command
+                .get_envs()
+                .find(|(k, _)| *k == "NUCLEON_RUN_SECONDS")
+                .unwrap()
+                .1
+                .unwrap(),
+            "45"
+        );
         assert_ne!(command.get_program(), "sh");
         assert_ne!(command.get_program(), "python3");
     }

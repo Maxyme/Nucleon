@@ -23,6 +23,20 @@ struct Cli {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn timed_saved_launches_require_positive_seconds() {
+        use clap::Parser;
+        assert!(
+            Cli::try_parse_from(["nucleon", "app", "run", "talos2", "--run-seconds", "45"]).is_ok()
+        );
+        for value in ["0", "-1", "abc", "1.5"] {
+            assert!(
+                Cli::try_parse_from(["nucleon", "app", "run", "talos2", "--run-seconds", value])
+                    .is_err()
+            );
+        }
+        assert!(Cli::try_parse_from(["nucleon", "cache", "status", "--json"]).is_ok());
+    }
+    #[test]
     fn frame_generation_choice_is_available_on_saved_direct_bottle_and_steam_launches() {
         use clap::Parser;
         for args in [
@@ -312,6 +326,11 @@ mod tests {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Read-only graphics cache diagnostics
+    Cache {
+        #[command(subcommand)]
+        action: commands::cache::Action,
+    },
     /// Save and launch EXEs with reusable runtime, prefix and store-authentication profiles
     App {
         #[command(subcommand)]
@@ -460,6 +479,7 @@ fn main() -> Result<()> {
 
     match cli.command {
         Commands::App { action } => commands::app::run(action),
+        Commands::Cache { action } => commands::cache::run(action),
         Commands::Run(args) => commands::application::run(args),
         Commands::Bottle { action } => commands::application::bottle(action),
         Commands::Upscaler { action } => commands::upscaler::run(action),
