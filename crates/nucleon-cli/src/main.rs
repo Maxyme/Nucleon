@@ -267,6 +267,13 @@ mod tests {
     }
     #[test]
     fn wine_install_accepts_named_versions_and_explicit_sources() {
+        let cli = Cli::try_parse_from(["nucleon", "wine", "fetch"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Wine {
+                action: WineAction::Fetch { version, .. }
+            } if version == nucleon_core::wine_build::RECOMMENDED_VERSION
+        ));
         for args in [
             vec![
                 "nucleon",

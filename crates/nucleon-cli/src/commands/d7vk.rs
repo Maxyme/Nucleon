@@ -10,7 +10,7 @@ pub enum D7vkAction {
     Status,
     /// Fetch official D7VK release binaries from GitHub without tracking in git
     Fetch {
-        /// Specific version tag (default: latest, e.g. v2.3)
+        /// Specific version tag (default: catalog version, e.g. v2.4)
         #[arg(short, long)]
         version: Option<String>,
     },

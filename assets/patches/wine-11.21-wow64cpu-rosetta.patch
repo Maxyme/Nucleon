@@ -38,10 +38,11 @@
  };
  #pragma pack(pop)
  
-@@ -57,6 +82,19 @@
+@@ -56,6 +81,19 @@
+ static USHORT fs32_sel;
  
  void **__wine_unix_call_dispatcher = NULL;
- 
++
 +BOOL use_rosetta2_workaround;
 +
 +static BOOL is_rosetta2(void)
@@ -54,10 +55,9 @@
 +
 +    return TRUE;
 +}
-+
+ 
  BOOL WINAPI DllMain( HINSTANCE inst, DWORD reason, void *reserved )
  {
-     if (reason == DLL_PROCESS_ATTACH) LdrDisableThreadCalloutsForDll( inst );
 @@ -210,7 +248,21 @@
                     "movl %edx,4(%rsp)\n\t"
                     "movl 0xc4(%r13),%r14d\n\t"  /* context->Esp */
@@ -120,7 +120,7 @@
      LdrGetDllHandle( NULL, 0, &str, &module );
      p__wine_unix_call_dispatcher = RtlFindExportedRoutineByName( module, "__wine_unix_call_dispatcher" );
      __wine_unix_call_dispatcher = *p__wine_unix_call_dispatcher;
-@@ -335,18 +401,66 @@
+@@ -335,17 +401,65 @@
      cs32_sel = context_i386.SegCs;
      ss32_sel = context_i386.SegSs;
  
@@ -129,6 +129,12 @@
 -    thunk->syscall_thunk.op    = PtrToUlong( &thunk->syscall_thunk.addr );
 -    thunk->syscall_thunk.addr  = PtrToUlong( syscall_32to64 );
 -    thunk->syscall_thunk.cs    = cs64_sel;
+-
+-    thunk->unix_thunk.ljmp  = 0xff;
+-    thunk->unix_thunk.modrm = 0x2d;
+-    thunk->unix_thunk.op    = PtrToUlong( &thunk->unix_thunk.addr );
+-    thunk->unix_thunk.addr  = PtrToUlong( unix_call_32to64 );
+-    thunk->unix_thunk.cs    = cs64_sel;
 +    /* CW HACK 20760 */
 +    if (use_rosetta2_workaround)
 +    {
@@ -137,18 +143,13 @@
 +        thunk->syscall_thunk_rosetta.op        = PtrToUlong( &thunk->syscall_thunk_rosetta.addr );
 +        thunk->syscall_thunk_rosetta.addr      = PtrToUlong( &thunk->syscall_thunk_rosetta.add );
 +        thunk->syscall_thunk_rosetta.cs        = cs64_sel;
- 
--    thunk->unix_thunk.ljmp  = 0xff;
--    thunk->unix_thunk.modrm = 0x2d;
--    thunk->unix_thunk.op    = PtrToUlong( &thunk->unix_thunk.addr );
--    thunk->unix_thunk.addr  = PtrToUlong( unix_call_32to64 );
--    thunk->unix_thunk.cs    = cs64_sel;
++
 +        /* We are now in 64-bit. */
 +        /* add $0x08,%esp to remove the addr/segment pushed on the stack by the lcall */
 +        thunk->syscall_thunk_rosetta.add       = 0x83;
 +        thunk->syscall_thunk_rosetta.add_modrm = 0xc4;
 +        thunk->syscall_thunk_rosetta.add_op    = 0x08;
- 
++
 +        /* jmp to syscall_32to64 */
 +        thunk->syscall_thunk_rosetta.jmp       = 0xff;
 +        thunk->syscall_thunk_rosetta.jmp_modrm = 0x25;
@@ -193,7 +194,6 @@
 +        thunk->unix_thunk.addr  = PtrToUlong( unix_call_32to64 );
 +        thunk->unix_thunk.cs    = cs64_sel;
 +    }
-+
+ 
      NtProtectVirtualMemory( GetCurrentProcess(), (void **)&thunk, &size, PAGE_EXECUTE_READ, &old_prot );
      return STATUS_SUCCESS;
- }

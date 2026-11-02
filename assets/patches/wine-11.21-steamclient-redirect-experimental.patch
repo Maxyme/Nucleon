@@ -70,10 +70,11 @@
  static NTSTATUS build_module( LPCWSTR load_path, const UNICODE_STRING *nt_name, void **module,
                                const SECTION_IMAGE_INFORMATION *image_info, const struct file_id *id,
                                DWORD flags, BOOL system, BOOL redirected, WINE_MODREF **pwm )
-@@ -2296,6 +2359,15 @@
+@@ -2295,6 +2358,15 @@
+     wm->system = system;
  
      update_load_config( *module );
- 
++
 +#ifdef __x86_64__
 +    if (!is_builtin)
 +    {
@@ -82,7 +83,6 @@
 +        if (did_redirect) flags |= LDR_DONT_RESOLVE_REFS;
 +    }
 +#endif
-+
+ 
      /* fixup imports */
  
-     if (!(flags & LDR_DONT_RESOLVE_REFS) &&

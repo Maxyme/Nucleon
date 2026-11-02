@@ -420,7 +420,7 @@ mod tests {
     #[test]
     fn catalog_resolves_default_and_explicit_release_urls() {
         let expected = [
-            ("dxvk", "v2.4.1", "dxvk-2.4.1.tar.gz", ArchiveFormat::TarGz),
+            ("dxvk", "v3.1.1", "dxvk-3.1.1.tar.gz", ArchiveFormat::TarGz),
             (
                 "dxmt",
                 "v0.80",
@@ -429,11 +429,11 @@ mod tests {
             ),
             (
                 "vkd3d",
-                "v3.0.1",
-                "vkd3d-proton-3.0.1.tar.zst",
+                "v3.1",
+                "vkd3d-proton-3.1.tar.zst",
                 ArchiveFormat::TarZstd,
             ),
-            ("d7vk", "v2.3", "d7vk-v2.3.zip", ArchiveFormat::Zip),
+            ("d7vk", "v2.4", "d7vk-v2.4.zip", ArchiveFormat::Zip),
         ];
         for (id, tag, archive, format) in expected {
             let resolved = release(id, None).unwrap();

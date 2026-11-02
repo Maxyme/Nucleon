@@ -24,13 +24,13 @@ Earlier release bundles were withdrawn; build from source.
 ### Download and patch the recommended build
 
 Wine download and module building are native Nucleon commands; Python is not
-required. The reviewed recipe currently supports Gcenx's plain Wine 11.18.
+required. The reviewed recipe currently supports Gcenx's plain Wine 11.21.
 
 ```sh
-nucleon wine fetch --version 11.18
+nucleon wine fetch --version 11.21
 brew install mingw-w64 bison flex
-nucleon wine patch rosetta wine-devel-11.18
-nucleon wine use wine-devel-11.18-rosetta
+nucleon wine patch rosetta wine-devel-11.21
+nucleon wine use wine-devel-11.21-rosetta
 ```
 
 The patch command requires Xcode Command Line Tools, make, patch, and the build
@@ -43,7 +43,7 @@ the explicit `wine use` command does that.
 An experimental Steam redirect can be added to a separate copy:
 
 ```sh
-nucleon wine patch steam-redirect wine-devel-11.18-rosetta
+nucleon wine patch steam-redirect wine-devel-11.21-rosetta
 ```
 
 This rebuilds only Windows-side `ntdll.dll`. Use the resulting runtime in a
@@ -54,14 +54,14 @@ You can also supply a matching installation path, output directory, and cached
 archives:
 
 ```sh
-nucleon wine fetch --version 11.18 --archive /path/to/wine-devel-11.18-osx64.tar.xz
+nucleon wine fetch --version 11.21 --archive /path/to/wine-devel-11.21-osx64.tar.xz
 nucleon wine patch rosetta /path/to/Wine\ Devel.app \
   --output /new/runtime --name my-wine-rosetta \
-  --source-archive /path/to/wine-11.18.tar.xz
+  --source-archive /path/to/wine-11.21.tar.xz
 ```
 
 Outputs must not exist; registration names must be new. Downloads use the managed
-`downloads/wine/11.18` cache; runtime defaults are under `wines/` in Nucleon's
+`downloads/wine/11.21` cache; runtime defaults are under `wines/` in Nucleon's
 support directory. The input's core module hashes must match the reviewed build,
 not merely its version string. Other versions/distributions need reviewed recipes.
 Rosetta and Steam redirect can be combined in separate copies; applying a patch
@@ -83,8 +83,8 @@ Runtime selection accepts an exact installed ID/name or a runtime path. Custom
 registrations live in `custom_wines.json` under Nucleon's support directory;
 `wine set-path` and `wine clear-path` manage the entry named `custom` there.
 
-Discovery is not validation. Confirmed recipes use Wine 11.18 with specific
-patches, not an arbitrary newer version. Preserve a working build and profile.
+The reviewed download/build recipe uses Wine 11.21 with version-specific patches.
+Preserve a working build and profile; game compatibility still needs validation.
 CrossOver can be registered, but is not required.
 
 ### Install an Isotope/FEX runtime

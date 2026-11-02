@@ -31,7 +31,7 @@ pub enum WineAction {
     },
     /// Download and register the recommended Wine build without selecting it
     Fetch {
-        #[arg(long, default_value = "11.18")]
+        #[arg(long, default_value = wine_build::RECOMMENDED_VERSION)]
         version: String,
         /// New package directory; defaults to Nucleon's managed wines directory
         #[arg(long)]

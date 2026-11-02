@@ -10,7 +10,7 @@ pub enum Vkd3dAction {
     Status,
     /// Fetch official VKD3D-Proton release binaries from GitHub without tracking in git
     Fetch {
-        /// Specific version tag (default: latest, e.g. v3.0.1)
+        /// Specific version tag (default: catalog version, e.g. v3.1)
         #[arg(short, long)]
         version: Option<String>,
     },

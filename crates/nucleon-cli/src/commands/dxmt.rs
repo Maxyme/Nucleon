@@ -10,7 +10,7 @@ pub enum DxmtAction {
     Status,
     /// Fetch official DXMT release binaries from GitHub (https://github.com/3Shain/dxmt) without tracking in git
     Fetch {
-        /// Specific version tag (default: latest, e.g. v0.80)
+        /// Specific version tag (default: catalog version, e.g. v0.80)
         #[arg(short, long)]
         version: Option<String>,
     },

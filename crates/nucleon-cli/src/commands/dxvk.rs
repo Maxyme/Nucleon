@@ -10,7 +10,7 @@ pub enum DxvkAction {
     Status,
     /// Fetch official DXVK release binaries from GitHub without tracking in git
     Fetch {
-        /// Specific version tag (default: latest, e.g. v2.4.1)
+        /// Specific version tag (default: catalog version, e.g. v3.1.1)
         #[arg(short, long)]
         version: Option<String>,
     },

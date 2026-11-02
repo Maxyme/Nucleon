@@ -18,7 +18,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-pub const RECOMMENDED_VERSION: &str = "11.18";
+pub const RECOMMENDED_VERSION: &str = "11.21";
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -54,8 +54,8 @@ impl WinePatch {
     }
     fn payload(self) -> &'static str {
         let path = match self {
-            Self::Rosetta => "patches/wine-11.18-wow64cpu-rosetta.patch",
-            Self::SteamRedirect => "patches/wine-11.18-steamclient-redirect-experimental.patch",
+            Self::Rosetta => "patches/wine-11.21-wow64cpu-rosetta.patch",
+            Self::SteamRedirect => "patches/wine-11.21-steamclient-redirect-experimental.patch",
         };
         ASSETS
             .get_file(path)
@@ -92,7 +92,7 @@ fn recipe(version: &str) -> Result<Recipe> {
     );
     let result: Recipe = toml::from_str(
         ASSETS
-            .get_file("wine/recipes/11.18.toml")
+            .get_file("wine/recipes/11.21.toml")
             .context("Missing embedded Wine recipe")?
             .contents_utf8()
             .context("Wine recipe must be UTF-8")?,
