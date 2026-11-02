@@ -121,8 +121,10 @@ fn launch_resolved(
             },
         )
         .join(format!("{appid}.json"));
-    let mut profile = profile.clone();
-    profile.steam_bridge = Some(std::path::absolute(bridge)?);
+    let profile = GameProfile {
+        steam_bridge: Some(std::path::absolute(bridge)?),
+        ..profile.clone()
+    };
     write_json(&profile_file, &profile)?;
     let record = support
         .join("games/steam")

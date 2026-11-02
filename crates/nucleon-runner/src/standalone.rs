@@ -32,11 +32,14 @@ pub fn resolve_standalone(request: StandaloneRequest) -> Result<ResolvedStandalo
         .map(nucleon_core::application::working_directory)
         .transpose()?;
     let saved_upscaler = request.application.upscaler.clone();
-    let mut settings = request.settings;
-    settings.upscaler = settings.upscaler.or(saved_upscaler);
-    settings.frame_generation = settings
-        .frame_generation
-        .or(request.application.frame_generation);
+    let settings = Settings {
+        upscaler: request.settings.upscaler.or(saved_upscaler),
+        frame_generation: request
+            .settings
+            .frame_generation
+            .or(request.application.frame_generation),
+        ..request.settings
+    };
     let application = Application::new(
         &request.application.executable,
         request.application.arguments,
@@ -130,8 +133,10 @@ impl ResolvedStandalone {
 
     pub fn run(mut self, environment: std::collections::BTreeMap<String, String>) -> Result<()> {
         self.launch.prepared.environment = environment;
-        let mut receipt_args = vec!["nucleon".into(), "run".into()];
-        receipt_args.extend(self.launch.prepared.arguments.clone());
+        let receipt_args = ["nucleon".into(), "run".into()]
+            .into_iter()
+            .chain(self.launch.prepared.arguments.iter().cloned())
+            .collect::<Vec<_>>();
         let mut session = RunSession::standalone(&receipt_args, &self.identity)?;
         log_runner(&format!("Launch logs: {}", session.directory.display()));
         let result = session

@@ -172,10 +172,11 @@ impl ResolvedRuntime {
         let (steam_protocols, steam_protocol) = if d.schema == 1 {
             // Read published schema-1 runtimes without rewriting immutable generations.
             let selected = d.steam_protocol.unwrap_or_default();
-            let mut protocols = vec![SteamProtocol::Bridge];
-            if selected != SteamProtocol::Bridge {
-                protocols.push(selected);
-            }
+            let protocols = if selected == SteamProtocol::Bridge {
+                vec![SteamProtocol::Bridge]
+            } else {
+                vec![SteamProtocol::Bridge, selected]
+            };
             (protocols, selected)
         } else {
             ensure!(
@@ -445,16 +446,17 @@ impl ResolvedRuntime {
         .map(|p| root.join(p))
         .filter(|p| p.is_dir())
         .collect();
-        let mut guests = vec![GuestAbi::X64];
-        if [
+        let guests = if [
             "lib/wine/i386-windows/ntdll.dll",
             "lib64/wine/i386-windows/ntdll.dll",
         ]
         .iter()
         .any(|p| runtime_checks::pe(Some(&root.join(p)), false))
         {
-            guests.push(GuestAbi::X86);
-        }
+            vec![GuestAbi::X64, GuestAbi::X86]
+        } else {
+            vec![GuestAbi::X64]
+        };
         Ok(Self {
             root: root.to_owned(),
             mode: ExecutionMode::Intel,

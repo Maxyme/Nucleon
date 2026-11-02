@@ -238,9 +238,11 @@ pub fn bottle(action: BottleAction) -> Result<()> {
             arguments,
         } => {
             nucleon_core::application::validate_name(&application)?;
-            let mut entry = Application::new(&executable, arguments, cwd.as_deref())?;
-            entry.upscaler = upscaler.map(nucleon_core::upscaler::Settings::selected);
-            entry.frame_generation = frame_generation;
+            let entry = Application {
+                upscaler: upscaler.map(nucleon_core::upscaler::Settings::selected),
+                frame_generation,
+                ..Application::new(&executable, arguments, cwd.as_deref())?
+            };
             Bottle::update(&name, |bottle| {
                 ensure!(
                     replace || !bottle.applications.contains_key(&application),

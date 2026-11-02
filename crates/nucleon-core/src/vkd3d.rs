@@ -151,9 +151,10 @@ fn restore_d3d12_in_dir(
     if !dst_dir.is_dir() {
         return Ok(0);
     }
-    let mut count = crate::backend_files::restore(dst_dir, "d3d12.dll", runner_dir, subdirs)?;
-    count += crate::backend_files::restore(dst_dir, "d3d12core.dll", runner_dir, subdirs)?;
-    Ok(count)
+    Ok(
+        crate::backend_files::restore(dst_dir, "d3d12.dll", runner_dir, subdirs)?
+            + crate::backend_files::restore(dst_dir, "d3d12core.dll", runner_dir, subdirs)?,
+    )
 }
 
 /// Unstages VKD3D-Proton DLLs from a Wine prefix's system32 and syswow64 directories.

@@ -721,15 +721,14 @@ fn runtime_unix_lib_dirs(runner_dir: &Path) -> Vec<PathBuf> {
 /// Reports exports that could not be verified in the runtime's library images.
 pub fn missing_d3dmetal_exports(runner_dir: &Path) -> Vec<&'static str> {
     let candidates = ["gdi32.so", "win32u.so"];
-    let mut images: Vec<Vec<u8>> = Vec::new();
-    for dir in runtime_unix_lib_dirs(runner_dir) {
-        for name in candidates {
-            let path = dir.join(name);
-            if let Ok(bytes) = fs::read(&path) {
-                images.push(bytes);
-            }
-        }
-    }
+    let images: Vec<Vec<u8>> = runtime_unix_lib_dirs(runner_dir)
+        .into_iter()
+        .flat_map(|dir| {
+            candidates
+                .into_iter()
+                .filter_map(move |name| fs::read(dir.join(name)).ok())
+        })
+        .collect();
     D3DMETAL_REQUIRED_EXPORTS
         .into_iter()
         .filter(|(_, aliases)| {
@@ -1302,13 +1301,12 @@ fn source_tree_identity(root: &Path, excluded: Option<&Path>) -> Result<String> 
     let mut rows = Vec::new();
     collect(&root, &root, excluded, &mut rows)?;
     rows.sort();
-    let mut hash = 0xcbf29ce484222325u64;
-    for row in rows {
-        for byte in row.bytes().chain(std::iter::once(0)) {
-            hash ^= u64::from(byte);
-            hash = hash.wrapping_mul(0x100000001b3);
-        }
-    }
+    let hash = rows
+        .iter()
+        .flat_map(|row| row.bytes().chain(std::iter::once(0)))
+        .fold(0xcbf29ce484222325u64, |hash, byte| {
+            (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3)
+        });
     Ok(format!("metadata-v1:{hash:016x}"))
 }
 

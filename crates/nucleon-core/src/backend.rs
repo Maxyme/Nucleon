@@ -238,12 +238,10 @@ impl Backend for AutoBackend {
     }
 
     fn disable(&self, prefix: &Path, runner_dir: Option<&Path>) -> Result<usize> {
-        let mut count = 0;
-        count += crate::dxvk::unstage_dxvk_from_prefix(prefix, runner_dir)?;
-        count += crate::dxmt::unstage_dxmt_from_prefix(prefix, runner_dir)?;
-        count += crate::vkd3d::unstage_vkd3d_proton_from_prefix(prefix, runner_dir)?;
-        count += crate::d7vk::unstage_d7vk_from_prefix(prefix, runner_dir)?;
-        Ok(count)
+        Ok(crate::dxvk::unstage_dxvk_from_prefix(prefix, runner_dir)?
+            + crate::dxmt::unstage_dxmt_from_prefix(prefix, runner_dir)?
+            + crate::vkd3d::unstage_vkd3d_proton_from_prefix(prefix, runner_dir)?
+            + crate::d7vk::unstage_d7vk_from_prefix(prefix, runner_dir)?)
     }
 
     fn apply_env(
@@ -302,12 +300,10 @@ impl Backend for D3DMetalBackend {
 
     fn enable(&self, prefix: &Path, runner_dir: Option<&Path>) -> Result<usize> {
         // Unstage Vulkan/DXMT translation layers to allow native D3DMetal execution
-        let mut count = 0;
-        count += crate::dxvk::unstage_dxvk_from_prefix(prefix, runner_dir)?;
-        count += crate::dxmt::unstage_dxmt_from_prefix(prefix, runner_dir)?;
-        count += crate::vkd3d::unstage_vkd3d_proton_from_prefix(prefix, runner_dir)?;
-        count += crate::d7vk::unstage_d7vk_from_prefix(prefix, runner_dir)?;
-        Ok(count)
+        Ok(crate::dxvk::unstage_dxvk_from_prefix(prefix, runner_dir)?
+            + crate::dxmt::unstage_dxmt_from_prefix(prefix, runner_dir)?
+            + crate::vkd3d::unstage_vkd3d_proton_from_prefix(prefix, runner_dir)?
+            + crate::d7vk::unstage_d7vk_from_prefix(prefix, runner_dir)?)
     }
 
     fn disable(&self, prefix: &Path, runner_dir: Option<&Path>) -> Result<usize> {
@@ -384,11 +380,11 @@ impl Backend for KosmicKrispBackend {
     }
 
     fn disable(&self, prefix: &Path, runner_dir: Option<&Path>) -> Result<usize> {
-        let mut count = 0;
-        count += crate::vkd3d::unstage_vkd3d_proton_from_prefix(prefix, runner_dir)?;
-        count += crate::d7vk::unstage_d7vk_from_prefix(prefix, runner_dir)?;
-        count += crate::dxvk::unstage_dxvk_from_prefix(prefix, runner_dir)?;
-        Ok(count)
+        Ok(
+            crate::vkd3d::unstage_vkd3d_proton_from_prefix(prefix, runner_dir)?
+                + crate::d7vk::unstage_d7vk_from_prefix(prefix, runner_dir)?
+                + crate::dxvk::unstage_dxvk_from_prefix(prefix, runner_dir)?,
+        )
     }
 
     fn apply_env(

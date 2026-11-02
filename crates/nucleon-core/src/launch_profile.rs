@@ -63,15 +63,14 @@ impl LaunchProfile {
                 base.join(p)
             }
         };
-        self.application = {
-            let mut app = Application::new(
+        self.application = Application {
+            upscaler: self.application.upscaler.clone(),
+            frame_generation: self.application.frame_generation,
+            ..Application::new(
                 &resolve(&self.application.executable),
                 self.application.arguments.clone(),
                 self.application.cwd.as_deref().map(resolve).as_deref(),
-            )?;
-            app.upscaler = self.application.upscaler.clone();
-            app.frame_generation = self.application.frame_generation;
-            app
+            )?
         };
         self.prefix = self
             .prefix

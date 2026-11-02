@@ -119,10 +119,10 @@ pub fn align_bridge_with_client(
     bridge_dir: &Path,
     client_legacy_dir: &Path,
 ) -> Result<Vec<String>> {
-    let mut restored = Vec::new();
-    for name in bridge_client_mismatches(bridge_dir, client_legacy_dir) {
-        let reference = client_legacy_dir.join(&name);
-        let exposed = bridge_dir.join(&name);
+    let restored = bridge_client_mismatches(bridge_dir, client_legacy_dir);
+    for name in &restored {
+        let reference = client_legacy_dir.join(name);
+        let exposed = bridge_dir.join(name);
         if exposed.exists() {
             let backup = bridge_dir.join(format!("{name}.foreign"));
             let _ = fs::remove_file(&backup);
@@ -135,7 +135,6 @@ pub fn align_bridge_with_client(
                 exposed.display()
             )
         })?;
-        restored.push(name);
     }
     Ok(restored)
 }

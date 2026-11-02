@@ -891,7 +891,6 @@ impl LaunchPlan {
             return Ok(args.to_vec());
         }
         self.validate_steam_helper()?;
-        let mut result = vec!["C:\\Program Files (x86)\\Steam\\steam.exe".into()];
         let mut args = args.to_vec();
         if let Some(exe) = args.first_mut()
             && (Path::new(exe).is_absolute() || Path::new(exe).is_file())
@@ -901,8 +900,11 @@ impl LaunchPlan {
                 .with_context(|| format!("Cannot resolve game executable path: {exe}"))?;
             *exe = format!("Z:{}", canonical.display().to_string().replace('/', "\\"));
         }
-        result.extend(args);
-        Ok(result)
+        Ok(
+            std::iter::once("C:\\Program Files (x86)\\Steam\\steam.exe".into())
+                .chain(args)
+                .collect(),
+        )
     }
 
     pub(crate) fn validate_steam_helper(&self) -> Result<()> {
