@@ -366,7 +366,7 @@ impl Installation {
             e.installed = if let Some(data) = desired.get(&e.relative) {
                 use sha2::{Digest, Sha256};
                 Some(Fingerprint {
-                    sha256: Some(format!("{:x}", Sha256::digest(data))),
+                    sha256: Some(hex::encode(Sha256::digest(data))),
                     mode: Some(0o644),
                     symlink: None,
                 })

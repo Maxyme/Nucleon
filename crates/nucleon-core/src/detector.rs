@@ -572,7 +572,7 @@ pub fn image_uses_steamworks(data: &[u8]) -> bool {
     if let Ok(file) = object::File::parse(data)
         && let Ok(imports) = file.imports()
     {
-        for import in imports {
+        for import in imports.flatten() {
             let lib = String::from_utf8_lossy(import.library()).to_ascii_lowercase();
             if STEAMWORKS_DLLS.iter().any(|dll| lib.ends_with(dll)) {
                 return true;

@@ -137,8 +137,9 @@ pub fn bind_prefix_for_runtime(
         .chain(
             ntdll_object
                 .exports()?
-                .iter()
-                .map(|export| export.name().to_vec()),
+                .collect::<Result<Vec<_>, _>>()?
+                .into_iter()
+                .filter_map(|export| export.name().into_name().map(Vec::from)),
         )
         .collect();
 
@@ -170,9 +171,16 @@ pub fn bind_prefix_for_runtime(
         let mut dependencies = BTreeSet::new();
         let mut required = BTreeSet::new();
         for import in object.imports()? {
+            let import = import?;
             if is_ntdll_dependency(import.library()) {
                 dependencies.insert(String::from_utf8(import.library().to_vec())?);
-                required.insert(import.name().to_vec());
+                required.insert(
+                    import
+                        .name()
+                        .into_name()
+                        .context("Steam bridge ntdll import has no symbol name")?
+                        .to_vec(),
+                );
             }
         }
         if dependencies.is_empty() || required.is_empty() {
@@ -243,10 +251,15 @@ pub fn bind_prefix_for_runtime(
         }
         let updated = fs::read(&temporary)?;
         let object = object::File::parse(updated.as_slice())?;
-        if object.imports()?.iter().any(|import| {
-            is_ntdll_dependency(import.library())
-                && import.library() != DIRECT_DEPENDENCY.as_bytes()
-        }) {
+        if object
+            .imports()?
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .any(|import| {
+                is_ntdll_dependency(import.library())
+                    && import.library() != DIRECT_DEPENDENCY.as_bytes()
+            })
+        {
             bail!(
                 "Steam bridge still refers to an old ntdll library: {}",
                 library.display()
@@ -341,7 +354,7 @@ mod tests {
                 .unwrap()
                 .imports()
                 .unwrap()
-                .iter()
+                .map(Result::unwrap)
                 .any(|i| i.library() == DIRECT_DEPENDENCY.as_bytes())
         );
         fs::write(&source, "int other_export(void) { return 0; }\n").unwrap();

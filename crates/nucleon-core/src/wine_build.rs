@@ -431,7 +431,7 @@ pub fn build(options: &BuildOptions) -> Result<PathBuf> {
         "base": base, "patch": options.patch, "source_url": recipe.source_url,
         "source_sha256": recipe.source_sha256, "binary_url": recipe.binary_url,
         "binary_sha256": recipe.binary_sha256, "source_archive": input,
-        "patch_sha256": format!("{:x}", Sha256::digest(options.patch.payload().as_bytes())),
+        "patch_sha256": hex::encode(Sha256::digest(options.patch.payload().as_bytes())),
         "module": relative, "base_module_sha256": expected, "module_sha256": digest(&destination)?,
         "configure_arguments": configure, "make_target": target, "nucleon_version": env!("CARGO_PKG_VERSION"),
         "license": "LGPL-2.1-or-later", "experimental": matches!(options.patch, WinePatch::SteamRedirect),

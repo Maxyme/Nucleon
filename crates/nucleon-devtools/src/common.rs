@@ -198,7 +198,7 @@ impl FileLock {
                 .canonicalize()?
                 .join(absolute.file_name().context("Configuration has no name")?)
         };
-        let hash = format!("{:x}", Sha256::digest(p(canonical).as_bytes()));
+        let hash = hex::encode(Sha256::digest(p(canonical).as_bytes()));
         Self::acquire(&std::env::temp_dir().join(format!(
             "nucleon-config-{}-{hash}.lock",
             rustix::process::getuid().as_raw()

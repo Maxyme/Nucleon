@@ -204,7 +204,10 @@ fn mapped_regions(data: &[u8]) -> Option<Vec<MappedRegion>> {
         }
         regions.push(MappedRegion {
             range: start..end,
-            executable: section.characteristics.get(LE) & object::pe::IMAGE_SCN_MEM_EXECUTE != 0,
+            executable: section
+                .characteristics
+                .get(LE)
+                .contains(object::pe::IMAGE_SCN_MEM_EXECUTE),
         });
     }
     (!regions.is_empty()).then_some(regions)

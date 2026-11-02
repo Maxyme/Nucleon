@@ -8,7 +8,7 @@ use core_foundation::number::CFNumber;
 #[cfg(target_os = "macos")]
 use core_foundation::string::CFString;
 #[cfg(target_os = "macos")]
-use core_graphics::display::kCGNullWindowID;
+use core_graphics::window::kCGNullWindowID;
 #[cfg(target_os = "macos")]
 use core_graphics::window::{CGWindowListCopyWindowInfo, kCGWindowListOptionAll};
 #[cfg(target_os = "macos")]

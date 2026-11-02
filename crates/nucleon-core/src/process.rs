@@ -118,7 +118,13 @@ impl OwnedChild {
 #[cfg(target_os = "macos")]
 fn group_has_live_members(group: rustix::process::Pid) -> bool {
     use sysinfo::{ProcessStatus, ProcessesToUpdate, System};
-    let mut system = System::new();
+    let mut system = match System::new() {
+        Ok(system) => system,
+        Err(error) => {
+            log::warn!("Cannot inspect launcher group: {error}");
+            return true;
+        }
+    };
     system.refresh_processes(ProcessesToUpdate::All, true);
     system.processes().iter().any(|(pid, process)| {
         if process.status() == ProcessStatus::Zombie {
@@ -180,7 +186,7 @@ mod tests {
     fn assert_not_running(pid: u32) {
         let start = Instant::now();
         loop {
-            let mut system = System::new();
+            let mut system = System::new().unwrap();
             let pid = Pid::from_u32(pid);
             system.refresh_processes(ProcessesToUpdate::Some(&[pid]), true);
             if system

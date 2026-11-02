@@ -9,7 +9,7 @@ use object::{
 /// filter selects the first matching entry before checking its range: a corrupt unrelated
 /// architecture must not prevent extracting an otherwise valid slice. Without a filter,
 /// every range is checked so runtime audits cannot silently skip corrupt entries.
-pub(crate) fn slices(data: &[u8], cpu: Option<u32>) -> Result<Vec<&[u8]>> {
+pub(crate) fn slices(data: &[u8], cpu: Option<macho::CpuType>) -> Result<Vec<&[u8]>> {
     Ok(match FileKind::parse(data)? {
         FileKind::MachOFat32 => fat_slices(MachOFatFile32::parse(data)?.arches(), data, cpu)?,
         FileKind::MachOFat64 => fat_slices(MachOFatFile64::parse(data)?.arches(), data, cpu)?,
@@ -28,7 +28,7 @@ pub(crate) fn slices(data: &[u8], cpu: Option<u32>) -> Result<Vec<&[u8]>> {
 fn fat_slices<'a, Fat: FatArch>(
     arches: &[Fat],
     data: &'a [u8],
-    cpu: Option<u32>,
+    cpu: Option<macho::CpuType>,
 ) -> Result<Vec<&'a [u8]>> {
     arches
         .iter()
@@ -42,9 +42,9 @@ fn fat_slices<'a, Fat: FatArch>(
 mod tests {
     use super::*;
 
-    fn thin(cpu: u32, big_endian: bool) -> Vec<u8> {
+    fn thin(cpu: macho::CpuType, big_endian: bool) -> Vec<u8> {
         let mut image = vec![0; 32];
-        for (offset, value) in [(0, macho::MH_MAGIC_64), (4, cpu)] {
+        for (offset, value) in [(0, macho::MH_MAGIC_64), (4, cpu.0)] {
             image[offset..offset + 4].copy_from_slice(&if big_endian {
                 value.to_be_bytes()
             } else {
@@ -70,7 +70,7 @@ mod tests {
         {
             let header = 8 + index * entry_size;
             let offset = 128 + index * 32;
-            image[header..header + 4].copy_from_slice(&cpu.to_be_bytes());
+            image[header..header + 4].copy_from_slice(&cpu.0.to_be_bytes());
             if fat64 {
                 image[header + 8..header + 16].copy_from_slice(&(offset as u64).to_be_bytes());
                 image[header + 16..header + 24].copy_from_slice(&32u64.to_be_bytes());

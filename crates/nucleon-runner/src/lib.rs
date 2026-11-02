@@ -459,19 +459,20 @@ pub fn is_wine_game_process_line(
     }
 }
 
-pub fn wine_process_pids(prefix: &Path) -> Vec<i32> {
+pub fn wine_process_pids(prefix: &Path) -> Result<Vec<i32>> {
     let prefix_env = std::ffi::OsString::from(format!("WINEPREFIX={}", prefix.display()));
-    let mut sys = System::new();
+    let mut sys = System::new().context("Cannot inspect Wine processes")?;
     sys.refresh_processes_specifics(
         ProcessesToUpdate::All,
         true,
         sysinfo::ProcessRefreshKind::everything(),
     );
-    sys.processes()
+    Ok(sys
+        .processes()
         .iter()
         .filter(|(_, process)| process.environ().contains(&prefix_env))
         .map(|(pid, _)| pid.as_u32() as i32)
-        .collect()
+        .collect())
 }
 
 fn is_wine_process_running(
@@ -479,7 +480,7 @@ fn is_wine_process_running(
     target_exe: &Path,
     prefix: &Path,
     standalone: bool,
-) -> bool {
+) -> Result<bool> {
     let prefix_env = format!("WINEPREFIX={}", prefix.display());
     let runner = runner_dir.to_string_lossy().to_lowercase();
     let target = target_exe
@@ -487,13 +488,13 @@ fn is_wine_process_running(
         .and_then(|name| name.to_str())
         .unwrap_or("")
         .to_lowercase();
-    let mut sys = System::new();
+    let mut sys = System::new().context("Cannot inspect Wine processes")?;
     sys.refresh_processes_specifics(
         ProcessesToUpdate::All,
         true,
         sysinfo::ProcessRefreshKind::everything(),
     );
-    sys.processes().iter().any(|(pid, process)| {
+    Ok(sys.processes().iter().any(|(pid, process)| {
         if !process
             .environ()
             .iter()
@@ -518,7 +519,7 @@ fn is_wine_process_running(
         } else {
             is_wine_game_process_line(&line, std::process::id(), &runner, &target)
         }
-    })
+    }))
 }
 
 struct RunOutcome {
@@ -1309,7 +1310,7 @@ fn execute_launch(resolved: ResolvedLaunch, session: &mut RunSession) -> Result<
                             &target_exe,
                             &pfx_dir,
                             !plan.steam_integration,
-                        ) {
+                        )? {
                             found_game = true;
                             break;
                         }
@@ -1353,15 +1354,19 @@ fn execute_launch(resolved: ResolvedLaunch, session: &mut RunSession) -> Result<
         } else {
             // Check if any background Wine game processes are still running.
             // Require two consecutive negative checks (500ms apart) to avoid false positives during process state changes.
-            if !is_wine_process_running(&runner_dir, &target_exe, &pfx_dir, !plan.steam_integration)
-            {
+            if !is_wine_process_running(
+                &runner_dir,
+                &target_exe,
+                &pfx_dir,
+                !plan.steam_integration,
+            )? {
                 thread::sleep(Duration::from_millis(500));
                 if !is_wine_process_running(
                     &runner_dir,
                     &target_exe,
                     &pfx_dir,
                     !plan.steam_integration,
-                ) {
+                )? {
                     log_runner("All Wine game processes have terminated, exiting cleanly");
                     stop_game(
                         session,
@@ -1433,7 +1438,7 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
-        let mut system = System::new();
+        let mut system = System::new().unwrap();
         system.refresh_processes(ProcessesToUpdate::Some(&[pid]), true);
         assert!(
             system.process(pid).is_none(),
@@ -1522,7 +1527,7 @@ mod tests {
                 panic!("Signal worker did not become ready");
             }
             let pid = Pid::from_u32(child.id());
-            let mut system = System::new();
+            let mut system = System::new().unwrap();
             system.refresh_processes(ProcessesToUpdate::Some(&[pid]), true);
             let sent = system
                 .process(pid)

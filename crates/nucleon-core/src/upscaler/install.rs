@@ -180,10 +180,7 @@ fn extract<R: Read + Seek>(input: R, len: u64, stage: &Path, limit: u64) -> Resu
 }
 
 fn digest_reader(reader: &mut impl Read) -> Result<String> {
-    use sha2::{Digest, Sha256};
-    let mut hash = Sha256::new();
-    io::copy(reader, &mut hash)?;
-    Ok(format!("{:x}", hash.finalize()))
+    crate::staging::digest_reader(reader)
 }
 
 fn stock(root: &Path, provider: &str, archive: Option<&Path>) -> Result<()> {

@@ -127,7 +127,7 @@ fn blob(bytes: &[u8]) -> String {
     let mut hash = Sha1::new();
     hash.update(format!("blob {}\0", bytes.len()));
     hash.update(bytes);
-    format!("{:x}", hash.finalize())
+    hex::encode(hash.finalize())
 }
 
 fn source_bytes(root: &Path, relative: &Path, expected: &str) -> Result<Vec<u8>> {
@@ -443,11 +443,8 @@ fn import_model(output: &Path, archive: Option<&Path>) -> Result<()> {
         archive.metadata()?.len() <= 128 * 1024 * 1024,
         "FSR 4.1.2 archive exceeds size limit"
     );
-    use sha2::Sha256;
-    let mut hash = Sha256::new();
-    std::io::copy(&mut archive, &mut hash)?;
     ensure!(
-        format!("{:x}", hash.finalize()) == spec.sha_256,
+        crate::staging::digest_reader(&mut archive)? == spec.sha_256,
         "FSR 4.1.2 model archive checksum mismatch"
     );
     archive.rewind()?;
@@ -778,7 +775,7 @@ mod tests {
             .trim()
             .parse()
             .unwrap();
-        let mut system = sysinfo::System::new();
+        let mut system = sysinfo::System::new().unwrap();
         let pid = sysinfo::Pid::from_u32(pid);
         system.refresh_processes(sysinfo::ProcessesToUpdate::Some(&[pid]), true);
         assert!(

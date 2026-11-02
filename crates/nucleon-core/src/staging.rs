@@ -49,19 +49,22 @@ impl State {
 }
 pub fn digest(path: &Path) -> Result<String> {
     let mut file = fs::File::open(path).with_context(|| format!("Read {}", path.display()))?;
+    digest_reader(&mut file)
+}
+pub(crate) fn digest_reader(reader: &mut impl Read) -> Result<String> {
     let mut hash = Sha256::new();
     let mut bytes = [0u8; 65536];
     loop {
-        let n = file.read(&mut bytes)?;
+        let n = reader.read(&mut bytes)?;
         if n == 0 {
             break;
         }
         hash.update(&bytes[..n]);
     }
-    Ok(format!("{:x}", hash.finalize()))
+    Ok(hex::encode(hash.finalize()))
 }
 pub(crate) fn key(value: &impl Serialize) -> Result<String> {
-    Ok(format!("{:x}", Sha256::digest(serde_json::to_vec(value)?)))
+    Ok(hex::encode(Sha256::digest(serde_json::to_vec(value)?)))
 }
 fn state(path: &Path, previous: Option<&State>) -> Result<State> {
     let meta = match fs::symlink_metadata(path) {
@@ -326,7 +329,7 @@ pub(crate) fn files(
                         unreachable!()
                     };
                     ensure!(
-                        &format!("{:x}", Sha256::digest(&data)) == sha256,
+                        &hex::encode(Sha256::digest(&data)) == sha256,
                         "Staging source changed: {}",
                         source.display()
                     );
@@ -370,6 +373,23 @@ pub(crate) fn files(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn streaming_checksums_keep_standard_sha256_hex_encoding() {
+        for (bytes, expected) in [
+            (
+                Vec::new(),
+                "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            ),
+            (
+                vec![b'a'; 1_000_000],
+                "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0",
+            ),
+        ] {
+            assert_eq!(digest_reader(&mut bytes.as_slice()).unwrap(), expected);
+        }
+    }
+
     #[test]
     fn unchanged_files_keep_inodes_and_only_changed_or_missing_files_are_repaired() {
         let temp = tempfile::tempdir().unwrap();

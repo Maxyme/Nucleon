@@ -527,7 +527,7 @@ fn import_archive_to(
         hash.update(&buffer[..size]);
     }
     ensure!(
-        format!("{:x}", hash.finalize()).eq_ignore_ascii_case(expected),
+        hex::encode(hash.finalize()).eq_ignore_ascii_case(expected),
         "Runtime archive checksum mismatch"
     );
     reader.rewind()?;

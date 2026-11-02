@@ -65,7 +65,10 @@ pub fn run_validate(appid: u32) -> Result<()> {
     let compat_data = steam::library::installed(appid)?.data_path;
     let pids = paths::game_prefixes(&compat_data)
         .into_iter()
-        .flat_map(|prefix| nucleon_runner::wine_process_pids(&prefix))
+        .map(|prefix| nucleon_runner::wine_process_pids(&prefix))
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .flatten()
         .collect::<Vec<_>>();
     let presented = validator::check_window_presentation(Some(&pids))?;
     if presented.is_empty() {

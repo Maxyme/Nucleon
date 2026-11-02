@@ -94,15 +94,12 @@ pub(super) fn native_model_key(
 ) -> Result<String> {
     use sha2::{Digest, Sha256};
     let identities = builder_identities()?;
-    let adapter = format!(
-        "{:x}",
-        Sha256::digest(
-            ASSETS
-                .get_file("upscalers/fsr4_depth_compat.h")
-                .expect("Embedded depth compatibility shim")
-                .contents()
-        )
-    );
+    let adapter = hex::encode(Sha256::digest(
+        ASSETS
+            .get_file("upscalers/fsr4_depth_compat.h")
+            .expect("Embedded depth compatibility shim")
+            .contents(),
+    ));
     let mut inputs = vec![original_digest, model.commit(), identities.native, &adapter];
     if model == super::native::Model::Fsr412 {
         inputs.push(catalog().fsr_412.sha_256);
@@ -169,7 +166,7 @@ pub fn install_patcher(root: &Path, source: Option<&Path>) -> Result<()> {
     };
     use sha2::{Digest, Sha256};
     ensure!(
-        format!("{:x}", Sha256::digest(&bytes)) == spec.sha_256,
+        hex::encode(Sha256::digest(&bytes)) == spec.sha_256,
         "OptiPatcher checksum mismatch"
     );
     ensure!(

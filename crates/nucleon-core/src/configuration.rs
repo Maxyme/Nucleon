@@ -68,8 +68,13 @@ pub(crate) fn optional_json<T: serde::de::DeserializeOwned>(path: &Path) -> Resu
 }
 
 pub(crate) fn toml<T: serde::de::DeserializeOwned>(text: &str, path: &Path) -> Result<T> {
-    serde_path_to_error::deserialize(toml::Deserializer::new(text))
-        .map_err(|error| parse_error(error, path, "TOML"))
+    let deserializer = toml::Deserializer::parse(text).with_context(|| {
+        format!(
+            "Invalid TOML configuration {} at document root",
+            path.display()
+        )
+    })?;
+    serde_path_to_error::deserialize(deserializer).map_err(|error| parse_error(error, path, "TOML"))
 }
 
 fn parse_error<E: std::error::Error + Send + Sync + 'static>(

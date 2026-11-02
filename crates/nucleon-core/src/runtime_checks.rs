@@ -185,10 +185,15 @@ pub(crate) fn has_export(data: &[u8], aliases: &[&str]) -> bool {
                         && s.is_global()
                         && s.name()
                             .is_ok_and(|name| aliases.contains(&name.trim_start_matches('_')))
-                }) || f.exports().is_ok_and(|exports| {
-                    exports.iter().any(|e| {
-                        std::str::from_utf8(e.name())
-                            .is_ok_and(|name| aliases.contains(&name.trim_start_matches('_')))
+                }) || f.exports().is_ok_and(|mut exports| {
+                    exports.any(|e| {
+                        e.is_ok_and(|e| {
+                            e.name().into_name().is_some_and(|name| {
+                                std::str::from_utf8(name).is_ok_and(|name| {
+                                    aliases.contains(&name.trim_start_matches('_'))
+                                })
+                            })
+                        })
                     })
                 })
             })

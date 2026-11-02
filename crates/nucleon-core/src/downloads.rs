@@ -134,19 +134,23 @@ pub(crate) fn fetch<T>(
 }
 
 pub(crate) fn download(url: &str, limit: u64) -> Result<fs::File> {
-    let agent = ureq::AgentBuilder::new()
-        .timeout_connect(Duration::from_secs(20))
-        .timeout_read(Duration::from_secs(60))
-        .timeout_write(Duration::from_secs(60))
-        .build();
+    let agent = ureq::Agent::config_builder()
+        .timeout_connect(Some(Duration::from_secs(20)))
+        .timeout_per_read(Some(Duration::from_secs(60)))
+        .timeout_per_write(Some(Duration::from_secs(60)))
+        .build()
+        .new_agent();
     let response = agent
         .get(url)
-        .set("User-Agent", "nucleon-fetcher")
+        .header("User-Agent", "nucleon-fetcher")
         .call()
         .with_context(|| format!("Failed to download {url}"))?;
     let mut archive = tempfile::tempfile().context("Failed to create download spool")?;
-    let size = io::copy(&mut response.into_reader().take(limit + 1), &mut archive)
-        .with_context(|| format!("Failed to read download {url}"))?;
+    let size = io::copy(
+        &mut response.into_body().into_reader().take(limit + 1),
+        &mut archive,
+    )
+    .with_context(|| format!("Failed to read download {url}"))?;
     ensure!(size <= limit, "Archive exceeds download size limit");
     archive.rewind()?;
     Ok(archive)
@@ -351,7 +355,67 @@ pub(crate) fn copy_layout(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::{Cursor, Write};
+    use std::io::{BufRead, BufReader, Cursor, Write};
+
+    fn serve(responses: Vec<&'static [u8]>) -> (String, std::thread::JoinHandle<()>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/archive", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            for response in responses {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                stream
+                    .set_write_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut reader = BufReader::new(&stream);
+                let mut request = String::new();
+                loop {
+                    let mut line = String::new();
+                    assert!(reader.read_line(&mut line).unwrap() > 0);
+                    if line == "\r\n" {
+                        break;
+                    }
+                    request.push_str(&line);
+                }
+                assert!(
+                    request
+                        .to_ascii_lowercase()
+                        .contains("user-agent: nucleon-fetcher\r\n")
+                );
+                stream.write_all(response).unwrap();
+            }
+        });
+        (url, server)
+    }
+
+    #[test]
+    fn download_follows_redirects_and_rewinds_binary_spools_at_the_size_limit() {
+        let (url, server) = serve(vec![
+            b"HTTP/1.1 302 Found\r\nLocation: /release\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\n\0\x80\xffa",
+        ]);
+        let mut archive = download(&url, 4).unwrap();
+        let mut bytes = Vec::new();
+        archive.read_to_end(&mut bytes).unwrap();
+        assert_eq!(bytes, b"\0\x80\xffa");
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn download_rejects_oversized_chunked_bodies_http_errors_and_truncation() {
+        for (response, expected) in [
+            (b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n5\r\nabcde\r\n0\r\n\r\n".as_slice(), "Archive exceeds download size limit"),
+            (b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".as_slice(), "Failed to download"),
+            (b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\nab".as_slice(), "Failed to read download"),
+        ] {
+            let (url, server) = serve(vec![response]);
+            let error = download(&url, 4).unwrap_err();
+            assert!(error.to_string().contains(expected), "{error:#}");
+            server.join().unwrap();
+        }
+    }
 
     #[test]
     fn catalog_resolves_default_and_explicit_release_urls() {
