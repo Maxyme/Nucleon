@@ -22,7 +22,23 @@ nucleon steam update 1622910 --username <account>
 
 The downloader requests your password or Steam Guard approval interactively;
 Nucleon does not accept or store a Steam password. Downloads explicitly select
-Windows files and live under Nucleon's support directory. Updates are requested
+Windows files. By default they live under Nucleon's support directory. Choose a
+separate library or an exact game directory when installing:
+
+```sh
+nucleon steam install 1622910 --username <account> --library ~/Games/Nucleon
+# Stores files in ~/Games/Nucleon/steam/1622910
+nucleon steam install 1622910 --username <account> --install-dir "/Volumes/Games/Still Wakes the Deep"
+```
+
+These options are mutually exclusive. Relative paths resolve against the current
+directory. Installation records, profiles, prefixes and logs remain in Nucleon's
+support directory. Updates and launches reuse the recorded game path without
+needing the location option again. Location options cannot move an existing
+installation; existing downloads keep their current location. Putting files in
+a Steam library does not register them with the Steam client.
+
+Updates are requested
 through Nucleon, rather than desktop Steam's Downloads screen. Set `--downloader`
 when the provider is outside PATH; an installation under
 `<support>/tools/depotdownloader/DepotDownloader` is discovered automatically.

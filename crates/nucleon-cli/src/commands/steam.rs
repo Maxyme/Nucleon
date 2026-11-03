@@ -42,6 +42,12 @@ pub struct DownloadArgs {
     /// Installed DepotDownloader executable
     #[arg(long)]
     pub downloader: Option<PathBuf>,
+    /// Game library root; files are stored in <library>/steam/<appid>
+    #[arg(long, conflicts_with = "install_dir")]
+    pub library: Option<PathBuf>,
+    /// Exact directory for the Windows game files
+    #[arg(long, conflicts_with = "library")]
+    pub install_dir: Option<PathBuf>,
     #[arg(long)]
     pub branch: Option<String>,
     #[arg(long)]
@@ -116,9 +122,42 @@ fn download(args: DownloadArgs, updating: bool) -> Result<()> {
         !updating || previous.is_some(),
         "This game is not managed by Nucleon; use 'nucleon steam install' first"
     );
+    ensure!(
+        [&args.library, &args.install_dir]
+            .into_iter()
+            .flatten()
+            .all(|path| !path.as_os_str().is_empty()),
+        "Game library and installation directories must not be empty"
+    );
+    let requested_directory = args
+        .install_dir
+        .or_else(|| {
+            args.library
+                .map(|root| root.join("steam").join(args.appid.to_string()))
+        })
+        .map(std::path::absolute)
+        .transpose()?;
+    if let (Some(previous), Some(requested)) = (&previous, &requested_directory) {
+        let normalize = |path: &std::path::Path| -> Result<PathBuf> {
+            match path.canonicalize() {
+                Ok(path) => Ok(path),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    Ok(std::path::absolute(path)?)
+                }
+                Err(error) => Err(error.into()),
+            }
+        };
+        ensure!(
+            normalize(requested)? == normalize(&previous.directory)?,
+            "Game {} is already installed at {}. Library options cannot relocate an existing installation",
+            args.appid,
+            previous.directory.display()
+        );
+    }
     let directory = previous
         .as_ref()
         .map(|p| p.directory.clone())
+        .or(requested_directory)
         .unwrap_or_else(|| steam::library::game_directory(args.appid).join("files"));
     let data_path = previous
         .as_ref()
@@ -217,14 +256,17 @@ fn download_arguments(
     language: &str,
     qr: bool,
 ) -> Vec<std::ffi::OsString> {
-    let mut args = vec![
+    let authentication = if qr {
+        vec!["-qr".into()]
+    } else {
+        vec!["-username".into(), username.into()]
+    };
+    [
         "-app".into(),
         appid.to_string().into(),
         "-os".into(),
         "windows".into(),
         "-all-archs".into(),
-        "-username".into(),
-        username.into(),
         "-dir".into(),
         directory.as_os_str().into(),
         "-branch".into(),
@@ -234,11 +276,10 @@ fn download_arguments(
         "-validate".into(),
         "-loginid".into(),
         std::process::id().to_string().into(),
-    ];
-    if qr {
-        args.push("-qr".into());
-    }
-    args
+    ]
+    .into_iter()
+    .chain(authentication)
+    .collect()
 }
 
 #[cfg(test)]
@@ -255,11 +296,22 @@ mod tests {
             false,
         );
         assert!(args.windows(2).any(|a| a == ["-os", "windows"]));
+        assert!(args.windows(2).any(|a| a == ["-username", "a user"]));
         assert!(args.contains(&std::ffi::OsString::from("/Games/a ' $(literal)")));
         assert!(
             !args
                 .iter()
                 .any(|a| a == "-password" || a == "-remember-password")
         );
+        let qr = download_arguments(
+            1622910,
+            "a user",
+            std::path::Path::new("/Games/still-wakes-the-deep"),
+            "public",
+            "english",
+            true,
+        );
+        assert!(qr.contains(&std::ffi::OsString::from("-qr")));
+        assert!(!qr.iter().any(|arg| arg == "-username" || arg == "a user"));
     }
 }

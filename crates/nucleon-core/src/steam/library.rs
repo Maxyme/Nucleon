@@ -27,6 +27,7 @@ pub struct LaunchEntry {
     pub working_directory: Option<String>,
 }
 
+/// Nucleon-owned records and prefix data; game files use `Installation::directory`.
 pub fn game_directory(appid: u32) -> PathBuf {
     paths::support_dir()
         .join("games/steam")
