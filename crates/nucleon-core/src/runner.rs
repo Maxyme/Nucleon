@@ -1631,6 +1631,34 @@ fn assemble_runner_tree(
             .with_context(|| format!("Failed to stage {}", redist_unix.display()))?;
     }
 
+    stage_metalfx_aliases(target)?;
+
+    Ok(())
+}
+
+fn stage_metalfx_aliases(target: &Path) -> Result<()> {
+    let windows = target.join("lib/wine/x86_64-windows");
+    let unix = target.join("lib/wine/x86_64-unix");
+    let vendor = windows.join("nvngx-on-metalfx.dll");
+    if !vendor.is_file() {
+        return Ok(());
+    }
+    anyhow::ensure!(
+        unix.join("nvngx-on-metalfx.so").is_file(),
+        "GPTK MetalFX bridge has no matching Unix library"
+    );
+    // The vendor PE's export-directory name is nvngx.dll. Wine uses that name
+    // to locate the builtin image and register its Unix companion, even when
+    // LoadLibrary requests nvngx-on-metalfx.dll. Apple's redist lacks these
+    // aliases; complete toolkit bundles supply them.
+    for alias in [windows.join("nvngx.dll"), unix.join("nvngx.so")] {
+        if alias.exists() || alias.is_symlink() {
+            fs::remove_file(alias)?;
+        }
+    }
+    fs::copy(&vendor, windows.join("nvngx.dll"))?;
+    #[cfg(unix)]
+    std::os::unix::fs::symlink("nvngx-on-metalfx.so", unix.join("nvngx.so"))?;
     Ok(())
 }
 
@@ -1678,7 +1706,7 @@ pub fn apply_gptk_execution_env(
     // DirectX 11 & 12 Metal DLL Overrides
     env.insert(
         "WINEDLLOVERRIDES".to_string(),
-        "steamclient=n,b;steamclient64=n,b;lsteamclient=b;d3d11,dxgi,d3d12,d3d10core,d3dcompiler_47=n,b;nvapi64,nvngx=n,b".to_string(),
+        "steamclient=n,b;steamclient64=n,b;lsteamclient=b;d3d11,dxgi,d3d12,d3d12core,d3d10core,d3dcompiler_47=n,b;nvapi64,nvngx=n,b".to_string(),
     );
 
     env.insert("WINEDEBUG".to_string(), "warn+all,err+all,+seh".to_string());
@@ -1758,6 +1786,32 @@ fn trim_trailing_slash(value: &str) -> &str {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn metalfx_aliases_bind_the_vendor_image_and_its_unix_companion() {
+        let root = tempdir().unwrap();
+        let windows = root.path().join("lib/wine/x86_64-windows");
+        let unix = root.path().join("lib/wine/x86_64-unix");
+        fs::create_dir_all(&windows).unwrap();
+        fs::create_dir_all(&unix).unwrap();
+        let vendor = windows.join("nvngx-on-metalfx.dll");
+        fs::write(&vendor, "matched vendor PE").unwrap();
+        assert!(stage_metalfx_aliases(root.path()).is_err());
+        fs::write(unix.join("nvngx-on-metalfx.so"), "matched Unix companion").unwrap();
+        fs::write(windows.join("nvngx.dll"), "stale base Wine DLL").unwrap();
+        for _ in 0..2 {
+            stage_metalfx_aliases(root.path()).unwrap();
+            assert_eq!(
+                fs::read(windows.join("nvngx.dll")).unwrap(),
+                fs::read(&vendor).unwrap()
+            );
+            assert_eq!(
+                fs::read(unix.join("nvngx.so")).unwrap(),
+                b"matched Unix companion"
+            );
+        }
+        assert_eq!(fs::read(&vendor).unwrap(), b"matched vendor PE");
+    }
 
     #[test]
     fn test_runtime_search_paths_drop_foreign_wine_trees() {
@@ -2055,7 +2109,7 @@ mod tests {
             Some("warn+all,err+all,+seh")
         );
         let overrides = env.get("WINEDLLOVERRIDES").unwrap();
-        assert!(overrides.contains("d3d11,dxgi,d3d12,d3d10core,d3dcompiler_47=n,b"));
+        assert!(overrides.contains("d3d11,dxgi,d3d12,d3d12core,d3d10core,d3dcompiler_47=n,b"));
         let dyld = env.get("DYLD_FALLBACK_LIBRARY_PATH").unwrap();
         assert!(dyld.contains("/tmp/test_steam"));
         assert!(dyld.contains("/tmp/test_client"));

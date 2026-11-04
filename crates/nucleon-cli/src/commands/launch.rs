@@ -41,8 +41,9 @@ fn prepare_request(
     let runtime = nucleon_core::runtime_selection::resolve(wine, emulator)?;
     if let Some(runtime) = &runtime {
         nucleon_core::runtime_selection::check_host(runtime)?;
+        let has_bundled_gptk = nucleon_core::runner::inspect_gptk_dir(&runtime.root).is_some();
         ensure!(
-            selected_engine != Some(nucleon_core::detector::TargetEngine::Gptk),
+            has_bundled_gptk || selected_engine != Some(nucleon_core::detector::TargetEngine::Gptk),
             "An explicit Wine selection cannot use the separate GPTK runner; choose auto, dxmt, dxvk, vkd3d, kosmickrisp or wine"
         );
     }

@@ -126,20 +126,21 @@ impl GraphicsComponents {
             },
             vulkan,
             gptk: runtime.mode == ExecutionMode::Intel
-                && crate::runner::find_gptk_components(None)
-                    .ok()
-                    .flatten()
-                    .is_some_and(|(framework, shared)| {
-                        runtime_checks::native_arch(&framework.join("D3DMetal"), runtime.arch())
-                            && runtime_checks::native_arch(&shared, runtime.arch())
-                            && crate::runner::gptk_windows_binaries_dir(&framework, &shared)
-                                .is_some_and(|dir| {
-                                    ["d3d11.dll", "dxgi.dll", "d3d12.dll"]
-                                        .iter()
-                                        .all(|n| runtime_checks::pe(Some(&dir.join(n)), true))
-                                })
-                    })
-                && crate::runner::missing_d3dmetal_exports(&runtime.root).is_empty(),
+                && (Self::bundled_gptk(runtime)
+                    || (crate::runner::find_gptk_components(None)
+                        .ok()
+                        .flatten()
+                        .is_some_and(|(framework, shared)| {
+                            runtime_checks::native_arch(&framework.join("D3DMetal"), runtime.arch())
+                                && runtime_checks::native_arch(&shared, runtime.arch())
+                                && crate::runner::gptk_windows_binaries_dir(&framework, &shared)
+                                    .is_some_and(|dir| {
+                                        ["d3d11.dll", "dxgi.dll", "d3d12.dll"]
+                                            .iter()
+                                            .all(|n| runtime_checks::pe(Some(&dir.join(n)), true))
+                                    })
+                        })
+                        && crate::runner::missing_d3dmetal_exports(&runtime.root).is_empty())),
         };
         // Pin source symlinks before preflight so a later "current" switch cannot
         // select another package during staging or environment construction.
@@ -650,7 +651,8 @@ impl LaunchPlan {
                 if !self.steam_integration {
                     env.insert(
                         "WINEDLLOVERRIDES".into(),
-                        "d3d11,dxgi,d3d12,d3d10core,d3dcompiler_47=n,b;nvapi64,nvngx=n,b".into(),
+                        "d3d11,dxgi,d3d12,d3d12core,d3d10core,d3dcompiler_47=n,b;nvapi64,nvngx=n,b"
+                            .into(),
                     );
                     let native = vec![
                         r.root.join("lib/external"),
@@ -743,9 +745,21 @@ impl LaunchPlan {
         }
         if self.steam_integration && r.steam_protocol == SteamProtocol::ValveRedirect {
             env.insert("NUCLEON_STEAMCLIENT_REDIRECT".into(), "1".into());
-            env.entry("WINEDLLOVERRIDES".into())
-                .or_default()
-                .push_str(";steamclient64=n;lsteamclient=n,b");
+            let overrides = env
+                .get("WINEDLLOVERRIDES")
+                .map(String::as_str)
+                .unwrap_or("");
+            let overrides = overrides
+                .split(';')
+                .filter(|group| {
+                    !group.is_empty()
+                        && !group.starts_with("steamclient64=")
+                        && !group.starts_with("lsteamclient=")
+                })
+                .chain(["steamclient64=n", "lsteamclient=n,b"])
+                .collect::<Vec<_>>()
+                .join(";");
+            env.insert("WINEDLLOVERRIDES".into(), overrides);
         }
         if self.engine != TargetEngine::Gptk {
             env.insert("DYLD_LIBRARY_PATH".into(), join(&libs));
@@ -934,6 +948,7 @@ pub const FEATURE_OVERRIDES: &[&str] = &[
     "ROSETTA_ADVERTISE_AVX_COPY",
     "D3DM_MTL4",
     "D3DM_SUPPORT_DXR",
+    "D3DM_WINE_UNIX_CALL",
     "VKD3D_CONFIG",
     "VKD3D_FEATURE_LEVEL",
     "VKD3D_SHADER_MODEL",
@@ -1015,6 +1030,45 @@ pub fn clean_standalone_command(command: &mut Command) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn valve_redirect_overrides_compose_with_optiscaler_for_wine_and_gptk() {
+        for engine in [TargetEngine::WineStaging, TargetEngine::Gptk] {
+            let (temp, mut runtime) = runtime::fixture(ExecutionMode::Intel);
+            runtime.steam_protocols.push(SteamProtocol::ValveRedirect);
+            runtime.steam_protocol = SteamProtocol::ValveRedirect;
+            runtime.backends.push(GraphicsBackend::D3DMetal);
+            let plan = LaunchPlan::new(
+                runtime,
+                temp.path().join("pfx"),
+                engine,
+                Default::default(),
+                true,
+                Some(false),
+                &GraphicsApi::DirectX12,
+            )
+            .unwrap();
+            let environment = plan.execution_env(false, false);
+            let overrides = &environment["WINEDLLOVERRIDES"];
+            let merged = crate::upscaler::compose_overrides(overrides, &[("dxgi", "n,b")]).unwrap();
+            assert_eq!(
+                overrides
+                    .split(';')
+                    .filter(|g| g.starts_with("steamclient64="))
+                    .collect::<Vec<_>>(),
+                ["steamclient64=n"]
+            );
+            assert_eq!(
+                overrides
+                    .split(';')
+                    .filter(|g| g.starts_with("lsteamclient="))
+                    .collect::<Vec<_>>(),
+                ["lsteamclient=n,b"]
+            );
+            assert!(merged.split(';').any(|g| g == "dxgi=n,b"));
+            assert!(merged.split(';').any(|g| g == "steamclient=n,b"));
+        }
+    }
 
     #[test]
     fn standalone_gptk_environment_keeps_metal_and_removes_steam() {

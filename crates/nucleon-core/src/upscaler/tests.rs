@@ -5,7 +5,7 @@ use crate::{
     runtime_checks::test_pe_image,
 };
 
-const TEMPLATE: &str = "[Upscalers]\nDx11Upscaler=auto\nDx12Upscaler=auto\n[FrameGen]\nEnabled=auto\nFGInput=auto\nFGOutput=auto\n[DLSS]\nEnabled=auto\nPassThrough=auto\n[Inputs]\nEnableDlssInputs=auto\nEnableXeSSInputs=auto\nEnableFsr2Inputs=auto\nEnableFsr3Inputs=auto\nEnableFfxInputs=auto\n[Libraries]\nOptiDllPath=auto\nNvngxPath=auto\n[Spoofing]\nDxgi=auto\nVulkan=auto\nStreamlineSpoofing=auto\nRegistry=auto\n[NvApi]\nOverrideNvapiDll=auto\n[Menu]\nOverlayMenu=auto\n[Plugins]\nLoadAsiPlugins=auto\nPath=auto\n[Log]\nLogToFile=auto\nLogToConsole=auto\nLogLevel=auto\nLogFileName=auto\n";
+const TEMPLATE: &str = "[Upscalers]\nDx11Upscaler=auto\nDx12Upscaler=auto\n[FrameGen]\nEnabled=auto\nFGInput=auto\nFGOutput=auto\n[DLSS]\nEnabled=auto\nPassThrough=auto\n[Inputs]\nEnableDlssInputs=auto\nEnableXeSSInputs=auto\nEnableFsr2Inputs=auto\nEnableFsr3Inputs=auto\nEnableFfxInputs=auto\n[Libraries]\nOptiDllPath=auto\nNvngxPath=auto\nNvapiPath=auto\n[Spoofing]\nDxgi=auto\nVulkan=auto\nStreamlineSpoofing=auto\nRegistry=auto\n[NvApi]\nOverrideNvapiDll=auto\n[Menu]\nOverlayMenu=auto\n[Plugins]\nLoadAsiPlugins=auto\nPath=auto\n[Log]\nLogToFile=auto\nLogToConsole=auto\nLogLevel=auto\nLogFileName=auto\n";
 
 struct Fixture {
     _temp: tempfile::TempDir,
@@ -56,15 +56,21 @@ impl Fixture {
         fs::write(dir.join("OptiScaler.dll"), test_pe_image(0x8664)).unwrap();
         fs::write(dir.join("OptiScaler.ini"), TEMPLATE).unwrap();
         fs::write(dir.join("libxess.dll"), test_pe_image(0x8664)).unwrap();
-        let files = ["OptiScaler.dll", "OptiScaler.ini", "libxess.dll"]
-            .into_iter()
-            .map(|n| {
-                (
-                    PathBuf::from(n),
-                    crate::staging::digest(&dir.join(n)).unwrap(),
-                )
-            })
-            .collect();
+        fs::write(dir.join("fakenvapi.dll"), test_pe_image(0x8664)).unwrap();
+        let files = [
+            "OptiScaler.dll",
+            "OptiScaler.ini",
+            "libxess.dll",
+            "fakenvapi.dll",
+        ]
+        .into_iter()
+        .map(|n| {
+            (
+                PathBuf::from(n),
+                crate::staging::digest(&dir.join(n)).unwrap(),
+            )
+        })
+        .collect();
         save(
             &manifest,
             &Provider {
@@ -394,7 +400,17 @@ fn metalfx_bridge_keeps_vendor_name_and_all_owned_dlls_restore_together() {
     resolved.settings.backend = Backend::Metalfx;
     resolved.bridge = Some(bridge.clone());
     let installation = Installation::open(&f.root, &resolved).unwrap();
-    prepare(&f.root, &installation, &resolved).unwrap();
+    let binding = prepare(&f.root, &installation, &resolved).unwrap();
+    let fake_nvapi = assets::fake_nvapi(&f.root).unwrap();
+    assert_eq!(
+        fs::read(installation.directory.join("OptiScaler/fakenvapi.dll")).unwrap(),
+        fs::read(&fake_nvapi).unwrap()
+    );
+    assert!(binding.support_files.contains_key(&fake_nvapi));
+    let ini = fs::read_to_string(installation.directory.join("OptiScaler.ini")).unwrap();
+    assert!(ini.contains("OverrideNvapiDll=true"));
+    assert!(ini.contains("NvapiPath=Z:"));
+    assert!(ini.contains("OptiScaler\\fakenvapi.dll"));
     assert_eq!(
         fs::read(installation.directory.join("nvngx-on-metalfx.dll")).unwrap(),
         original
@@ -417,6 +433,7 @@ fn metalfx_bridge_keeps_vendor_name_and_all_owned_dlls_restore_together() {
         "nvngx.dll",
         "nvngx-on-metalfx.dll",
         "OptiScaler/nucleon-metalfx/nvngx.dll",
+        "OptiScaler/fakenvapi.dll",
     ] {
         assert!(!installation.directory.join(name).exists());
     }
@@ -704,4 +721,54 @@ fn native_observation_distinguishes_a_loaded_hook_from_active_processing_and_fal
     assert!(report["stubs"].is_null());
     begin_observation(&binding).unwrap();
     assert_eq!(observation(&binding).unwrap()["activation"], "not-observed");
+}
+
+#[test]
+fn older_preparations_are_refreshed_and_unrelated_games_do_not_inherit_patcher() {
+    let f = Fixture::new();
+    f.prepare(Backend::Fsr2).unwrap();
+    let installation = Installation::existing(&f.root, &f.exe).unwrap().unwrap();
+    let binding_path = installation.state.join("binding.json");
+    let mut legacy: serde_json::Value = read(&binding_path).unwrap();
+    legacy.as_object_mut().unwrap().remove("recipe_revision");
+    legacy.as_object_mut().unwrap().remove("patcher");
+    save(&binding_path, &legacy).unwrap();
+    let settings = installation.directory.join("OptiScaler.ini");
+    fs::write(&settings, "user edits before recipe upgrade").unwrap();
+    drop(installation);
+    let refreshed = f.prepare(Backend::Fsr2).unwrap();
+    assert!(refreshed.recipe_revision > 0);
+    assert!(
+        fs::read_to_string(settings)
+            .unwrap()
+            .contains("Dx12Upscaler=fsr22")
+    );
+    fs::create_dir_all(f.root.join("plugins")).unwrap();
+    fs::write(
+        f.root.join("plugins/OptiPatcher.asi"),
+        "unrelated global plugin",
+    )
+    .unwrap();
+    assert!(!f.resolve(Backend::Fsr2).unwrap().patcher);
+    assert!(requires_patcher(
+        Path::new("Talos2-Win64-Shipping.exe"),
+        Input::Dlss
+    ));
+    assert!(requires_patcher(
+        Path::new("StillWakesTheDeep.exe"),
+        Input::Dlss
+    ));
+    assert!(!requires_patcher(
+        Path::new("StillWakesTheDeep.exe"),
+        Input::Fsr31
+    ));
+}
+
+#[test]
+fn metalfx_fake_nvapi_must_be_present_verified_and_x64() {
+    let f = Fixture::new();
+    let source = assets::fake_nvapi(&f.root).unwrap();
+    fs::write(&source, "tampered fake NVAPI").unwrap();
+    assert!(assets::fake_nvapi(&f.root).is_err());
+    assert!(!f.root.join("games").exists());
 }

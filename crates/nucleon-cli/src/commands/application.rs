@@ -8,7 +8,7 @@ pub struct SettingsArgs {
     /// game, fsr2, fsr3.1, metalfx, fsr4-native-lite, fsr4-native, fsr4.1.2 or xess
     #[arg(long)]
     upscaler: Option<nucleon_core::upscaler::Backend>,
-    /// metalfx or off; currently validated for Talos 2 with the MetalFX upscaler
+    /// metalfx or off; native DLSS-G frame generation with the MetalFX upscaler
     #[arg(long)]
     frame_generation: Option<nucleon_core::frame_generation::Setting>,
     /// Exact Wine ID or complete runtime path (overrides the bottle setting)
@@ -130,7 +130,7 @@ pub enum BottleAction {
         /// Save a scaler preference for this application only
         #[arg(long)]
         upscaler: Option<nucleon_core::upscaler::Backend>,
-        /// metalfx or off; currently validated for Talos 2 with the MetalFX upscaler
+        /// metalfx or off; native DLSS-G frame generation with the MetalFX upscaler
         #[arg(long)]
         frame_generation: Option<nucleon_core::frame_generation::Setting>,
         #[arg(last = true)]

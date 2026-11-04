@@ -1,0 +1,57 @@
+Experimental GPTK 4 beta 3 callback layout repair.
+Applies only to Switchyard revision 34a09170d3754522dc55416617c6754dd2d9a086.
+Beta 3 has 71 Windows callbacks plus two metadata entries. The three added
+callbacks each take one argument block. The native thread callback is slot 43.
+The source-built repair passed isolated DXGI factory, adapter and D3D12 device
+creation. This patch is not enabled by any Nucleon runtime recipe.
+
+--- a/dlls/ntdll/loader.c
++++ b/dlls/ntdll/loader.c
+@@ -3829,9 +3829,9 @@
+ }
+ 
+ #define SWITCHYARD_GPTK_WIN32_DISPATCH_LEGACY_ENTRIES 43
+-#define SWITCHYARD_GPTK_WIN32_DISPATCH_V4_ENTRIES 70
++#define SWITCHYARD_GPTK_WIN32_DISPATCH_V4_ENTRIES 73
+ #define SWITCHYARD_GPTK_WIN32_CALLBACK_LEGACY_ENTRIES 41
+-#define SWITCHYARD_GPTK_WIN32_CALLBACK_V4_ENTRIES 68
++#define SWITCHYARD_GPTK_WIN32_CALLBACK_V4_ENTRIES 71
+ 
+ #ifdef _WIN64
+ 
+@@ -9152,7 +9152,7 @@
+     {
+         if (!is_native_callback_target_or_thunk( table[1] ) ||
+             !is_native_callback_target_or_thunk( table[2] ) ||
+-            !table[42] || !table[43])
++            !table[43] || !table[44])
+             return;
+ 
+         switchyard_allow_gptk_trampoline_data_section( table );
+@@ -9180,7 +9180,7 @@
+                                                SWITCHYARD_NATIVE_CALLBACK_WRAP_D3D11_OUTPUT_VTABLES ); /* D3D11CreateDeviceAndSwapChain */
+         wrap_native_callback_entry_with_flags( &table[11], 0,
+                                                SWITCHYARD_NATIVE_CALLBACK_NOTE_GFXT_DEFERRED_VTABLE ); /* GFXT dispatch post-init */
+-        wrap_native_callback_entry_with_flags( &table[42], 1, 0 ); /* GFXT_ThreadCallback */
++        wrap_native_callback_entry_with_flags( &table[43], 1, 0 ); /* GFXT_ThreadCallback */
+     }
+     __EXCEPT_PAGE_FAULT
+     {
+@@ -9197,7 +9197,7 @@
+         4, 3, 1, 1, 3,
+         1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+         4,
+-        1, 1, 1, 1, 1, 1, 1, 1
++        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1
+     };
+     void **table = args;
+     void *module;
+@@ -9224,7 +9224,7 @@
+         else if (is_pe_callback_target_or_thunk_in_module( table[41], module ) &&
+                  is_pe_callback_target_or_thunk_in_module( table[59], module ) &&
+                  is_pe_callback_target_or_thunk_in_module( table[67], module ) &&
+-                 table[68] && table[69] == (void *)0x1000000)
++                 table[71] && table[72] == (void *)0x1000000)
+         {
+             callback_count = SWITCHYARD_GPTK_WIN32_CALLBACK_V4_ENTRIES;
+             entry_count = SWITCHYARD_GPTK_WIN32_DISPATCH_V4_ENTRIES;

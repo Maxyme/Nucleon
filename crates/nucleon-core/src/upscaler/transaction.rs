@@ -24,6 +24,10 @@ use std::{
     path::{Path, PathBuf},
 };
 
+// A new recipe must replace previously prepared generated settings, while the
+// journal continues preserving originals and archiving user-edited INI files.
+const RECIPE_REVISION: u32 = 1;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct Fingerprint {
     sha256: Option<String>,
@@ -70,6 +74,10 @@ struct Journal {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Binding {
     pub schema: u32,
+    #[serde(default)]
+    pub recipe_revision: u32,
+    #[serde(default)]
+    pub patcher: bool,
     pub executable: PathBuf,
     pub renderer: PathBuf,
     pub runtime: PathBuf,
@@ -526,6 +534,10 @@ pub fn preview(root: &Path, resolved: &Resolved) -> Result<()> {
         if resolved.bridge.is_some() {
             desired.insert("OptiScaler/nucleon-metalfx/nvngx.dll".into(), vec![]);
         }
+        if resolved.settings.backend.provider() == "metalfx" {
+            assets::fake_nvapi(root)?;
+            desired.insert("OptiScaler/fakenvapi.dll".into(), vec![]);
+        }
         if resolved.patcher {
             desired.insert("OptiScaler/plugins/OptiPatcher.asi".into(), vec![]);
         }
@@ -586,6 +598,8 @@ pub fn prepare(root: &Path, installation: &Installation, resolved: &Resolved) ->
         restore(installation)?;
         return Ok(Binding {
             schema: 1,
+            recipe_revision: RECIPE_REVISION,
+            patcher: false,
             executable: resolved.executable.clone(),
             renderer: resolved.renderer.clone(),
             runtime: resolved.runtime.clone(),
@@ -602,7 +616,10 @@ pub fn prepare(root: &Path, installation: &Installation, resolved: &Resolved) ->
         });
     }
     if let Some(binding) = lookup(root, &resolved.executable)?
-        && binding.settings.backend == resolved.settings.backend
+        && binding.recipe_revision == RECIPE_REVISION
+        && binding.settings == resolved.settings
+        && binding.patcher == resolved.patcher
+        && binding.api == resolved.api
         && binding.input == resolved.input
         && binding.renderer == resolved.renderer
         && binding.runtime == resolved.runtime
@@ -660,6 +677,8 @@ pub fn prepare(root: &Path, installation: &Installation, resolved: &Resolved) ->
     } else {
         "Dx12Upscaler"
     };
+    let metalfx = resolved.settings.backend.provider() == "metalfx";
+    let spoof = resolved.input == Input::Dlss && !resolved.patcher;
     for (section, key, value) in [
         ("Upscalers", key, output.to_string()),
         ("FrameGen", "Enabled", "false".into()),
@@ -667,7 +686,7 @@ pub fn prepare(root: &Path, installation: &Installation, resolved: &Resolved) ->
         ("FrameGen", "FGOutput", "nofg".into()),
         // Stock outputs need no NVIDIA driver probe. The MetalFX fork enables
         // original NGX itself when passthrough is requested below.
-        ("DLSS", "Enabled", "false".into()),
+        ("DLSS", "Enabled", metalfx.to_string()),
         (
             "Inputs",
             "EnableDlssInputs",
@@ -698,11 +717,11 @@ pub fn prepare(root: &Path, installation: &Installation, resolved: &Resolved) ->
             "OptiDllPath",
             windows(&installation.directory.join("OptiScaler")),
         ),
-        ("Spoofing", "Dxgi", "false".into()),
+        ("Spoofing", "Dxgi", spoof.to_string()),
         ("Spoofing", "Vulkan", "false".into()),
-        ("Spoofing", "StreamlineSpoofing", "false".into()),
+        ("Spoofing", "StreamlineSpoofing", spoof.to_string()),
         ("Spoofing", "Registry", "false".into()),
-        ("NvApi", "OverrideNvapiDll", "false".into()),
+        ("NvApi", "OverrideNvapiDll", metalfx.to_string()),
         ("Menu", "OverlayMenu", "false".into()),
         ("Plugins", "LoadAsiPlugins", resolved.patcher.to_string()),
         (
@@ -720,6 +739,15 @@ pub fn prepare(root: &Path, installation: &Installation, resolved: &Resolved) ->
         ),
     ] {
         changes.insert((section.into(), key.into()), value);
+    }
+    if metalfx {
+        let source = assets::fake_nvapi(root)?;
+        files.insert("OptiScaler/fakenvapi.dll".into(), fs::read(&source)?);
+        support.insert(source.clone(), crate::staging::digest(&source)?);
+        changes.insert(
+            ("Libraries".into(), "NvapiPath".into()),
+            windows(&installation.directory.join("OptiScaler/fakenvapi.dll")),
+        );
     }
     if let Some(bridge) = &resolved.bridge {
         let manifest = assets::bridge_provider(root, bridge)?;
@@ -825,6 +853,8 @@ pub fn prepare(root: &Path, installation: &Installation, resolved: &Resolved) ->
     installation.preflight(&files)?;
     let binding = Binding {
         schema: 1,
+        recipe_revision: RECIPE_REVISION,
+        patcher: resolved.patcher,
         executable: resolved.executable.clone(),
         renderer: resolved.renderer.clone(),
         runtime: resolved.runtime.clone(),
@@ -981,6 +1011,8 @@ pub(super) fn migrate_talos_checked(
         serde_json::from_value(profile["environment"].clone())?;
     let binding = Binding {
         schema: 1,
+        recipe_revision: 0,
+        patcher: true,
         executable: exe,
         renderer,
         runtime: resolved.runtime,

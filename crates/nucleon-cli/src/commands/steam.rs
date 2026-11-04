@@ -17,7 +17,7 @@ pub struct PlayArgs {
     pub engine: Option<String>,
     #[arg(long)]
     pub upscaler: Option<nucleon_core::upscaler::Backend>,
-    /// metalfx or off; currently validated for Talos 2
+    /// metalfx or off; native DLSS-G frame generation with the MetalFX upscaler
     #[arg(long)]
     pub frame_generation: Option<nucleon_core::frame_generation::Setting>,
     /// Explicit Windows EXE, absolute or relative to the installation

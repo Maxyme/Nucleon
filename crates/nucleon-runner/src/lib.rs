@@ -219,10 +219,11 @@ fn select_automatic_engine(
     mut available: nucleon_core::detector::AutoBackends,
     configured: nucleon_core::backend::GraphicsBackend,
     custom_wine: bool,
+    has_bundled_gptk: bool,
 ) -> Result<nucleon_core::detector::TargetEngine> {
     use nucleon_core::backend::GraphicsBackend;
     use nucleon_core::detector::TargetEngine;
-    available.gptk &= !custom_wine;
+    available.gptk &= !custom_wine || has_bundled_gptk;
     match configured {
         GraphicsBackend::Auto => available.select(api),
         GraphicsBackend::D3DMetal => Ok(TargetEngine::Gptk),
@@ -719,13 +720,16 @@ fn resolve_steam_launch(request: &SteamRequest) -> Result<ResolvedLaunch> {
                 || ["NUCLEON_WINE", "NUCLEON_WINE_PATH", "WINE_PATH"]
                     .iter()
                     .any(|key| env::var_os(key).is_some());
+            let root = wine_override_root
+                .clone()
+                .or_else(|| nucleon_core::wine::get_active_wine_runtime().map(|r| r.root))
+                .or_else(runner::find_gptk_runner);
+            let has_bundled_gptk = root
+                .as_ref()
+                .is_some_and(|r| runner::inspect_gptk_dir(r).is_some());
             let wine_engine = select_automatic_engine(
                 &graphics_api,
                 {
-                    let root = wine_override_root
-                        .clone()
-                        .or_else(|| nucleon_core::wine::get_active_wine_runtime().map(|r| r.root))
-                        .or_else(runner::find_gptk_runner);
                     let icd = if env::var_os("VK_DRIVER_FILES").is_none()
                         && env::var_os("VK_ICD_FILENAMES").is_none()
                     {
@@ -760,6 +764,7 @@ fn resolve_steam_launch(request: &SteamRequest) -> Result<ResolvedLaunch> {
                 },
                 configured_backend,
                 custom_wine,
+                has_bundled_gptk,
             )?;
             trace_runner(&format!(
                 "Automatic Runner: routing graphics API {:?} (detected {:?}, found: {:?}, evidence: {}) -> selecting {:?}",
@@ -785,7 +790,13 @@ fn resolve_steam_launch(request: &SteamRequest) -> Result<ResolvedLaunch> {
         }
     };
 
-    if explicit_runtime_request && engine == nucleon_core::detector::TargetEngine::Gptk {
+    let has_bundled_gptk = wine_override_root
+        .as_ref()
+        .is_some_and(|r| runner::inspect_gptk_dir(r).is_some());
+    if explicit_runtime_request
+        && engine == nucleon_core::detector::TargetEngine::Gptk
+        && !has_bundled_gptk
+    {
         bail!(
             "An explicit Wine selection cannot use the separate GPTK runner; choose auto, dxmt, dxvk, vkd3d, kosmickrisp or wine"
         );
@@ -803,9 +814,7 @@ fn resolve_steam_launch(request: &SteamRequest) -> Result<ResolvedLaunch> {
     ));
 
     // Per-game Wine is already resolved; use it for execution as well as preflight.
-    let (runner_dir, active_engine) = if engine != nucleon_core::detector::TargetEngine::Gptk
-        && let Some(root) = wine_override_root
-    {
+    let (runner_dir, active_engine) = if let Some(root) = wine_override_root {
         (root, engine)
     } else {
         runner::resolve_runner_for_engine(engine).with_context(|| {
@@ -1110,7 +1119,8 @@ fn execute_launch(resolved: ResolvedLaunch, session: &mut RunSession) -> Result<
     let d3dmetal = if resolved_scaler.bridge.is_some() {
         runner::inspect_gptk_dir(&plan.runtime.root)
     } else if plan.engine == nucleon_core::detector::TargetEngine::Gptk {
-        runner::find_gptk_components(None).ok().flatten()
+        runner::inspect_gptk_dir(&plan.runtime.root)
+            .or_else(|| runner::find_gptk_components(None).ok().flatten())
     } else {
         None
     };
@@ -1622,7 +1632,8 @@ mod tests {
                 &GraphicsApi::DirectX12,
                 available,
                 GraphicsBackend::Auto,
-                false
+                false,
+                false,
             )
             .unwrap(),
             TargetEngine::Gptk
@@ -1632,10 +1643,22 @@ mod tests {
                 &GraphicsApi::DirectX12,
                 available,
                 GraphicsBackend::Auto,
-                true
+                true,
+                false,
             )
             .unwrap(),
             TargetEngine::Vkd3d
+        );
+        assert_eq!(
+            select_automatic_engine(
+                &GraphicsApi::DirectX12,
+                available,
+                GraphicsBackend::Auto,
+                true,
+                true,
+            )
+            .unwrap(),
+            TargetEngine::Gptk
         );
         for (backend, engine) in [
             (GraphicsBackend::D3DMetal, TargetEngine::Gptk),
@@ -1648,7 +1671,8 @@ mod tests {
                     &GraphicsApi::Unknown,
                     AutoBackends::default(),
                     backend,
-                    true
+                    true,
+                    false,
                 )
                 .unwrap(),
                 engine

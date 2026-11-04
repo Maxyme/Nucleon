@@ -258,17 +258,10 @@ pub fn resolve(
             "XeSS is experimental on DX12 only; native DX11 XeSS requires Intel ARC"
         );
     }
-    resolved.patcher = resolved
-        .renderer
-        .file_name()
-        .is_some_and(|s| s.eq_ignore_ascii_case("Talos2-Win64-Shipping.exe"));
-    if resolved.patcher && resolved.input == Input::Auto {
-        resolved.input = Input::Dlss;
-    }
     if resolved.input == Input::Auto {
         resolved.input = detect_input(resolved.renderer.parent().unwrap())?;
     }
-    resolved.patcher &= resolved.input == Input::Dlss;
+    resolved.patcher = requires_patcher(&resolved.renderer, resolved.input);
     ensure!(
         !metalfx || resolved.input == Input::Dlss,
         "The prepared MetalFX provider currently requires DLSS input"
@@ -285,6 +278,9 @@ pub fn resolve(
     resolved.provider = Some(provider);
     if resolved.patcher {
         assets::verify_patcher(root)?;
+    }
+    if metalfx {
+        assets::fake_nvapi(root)?;
     }
     Ok(resolved)
 }
@@ -311,6 +307,19 @@ fn bundled_metalfx(runtime: &crate::runtime::ResolvedRuntime) -> bool {
     }) && ["d3d11.dll", "dxgi.dll", "d3d12.dll", "nvngx-on-metalfx.dll"]
         .iter()
         .all(|name| crate::runtime_checks::pe(Some(&windows.join(name)), true))
+}
+
+fn requires_patcher(renderer: &Path, input: Input) -> bool {
+    input == Input::Dlss
+        && renderer.file_name().is_some_and(|name| {
+            [
+                "Talos2.exe",
+                "Talos2-Win64-Shipping.exe",
+                "StillWakesTheDeep.exe",
+            ]
+            .iter()
+            .any(|candidate| name.eq_ignore_ascii_case(candidate))
+        })
 }
 
 fn has_unreal(exe: &Path) -> bool {
@@ -347,6 +356,9 @@ fn detect_input(directory: &Path) -> Result<Input> {
             }
             _ => {}
         }
+    }
+    if found.len() > 1 && found.contains("dlss") {
+        return Ok(Input::Dlss);
     }
     ensure!(
         found.len() == 1,
@@ -458,7 +470,7 @@ pub fn apply_environment(binding: &Binding, env: &mut HashMap<String, String>) -
     }
     let mut overrides = vec![("dxgi", "n,b")];
     if binding.settings.backend.provider() == "metalfx" {
-        overrides.extend([("nvngx", "n,b"), ("nvapi64", "n,b")]);
+        overrides.extend([("nvngx", "n,b"), ("nvapi64", "d")]);
     }
     env.insert(
         "WINEDLLOVERRIDES".into(),

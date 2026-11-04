@@ -136,6 +136,25 @@ pub(crate) fn provider_path(root: &Path, provider: &str) -> Result<PathBuf> {
         .join(digest)
         .join("provider.json"))
 }
+
+/// MetalFX's essentials archive omits FakeNvAPI. Reuse the verified stock asset,
+/// and give the loader its exact path instead of relying on DLL search order.
+pub(crate) fn fake_nvapi(root: &Path) -> Result<PathBuf> {
+    let manifest = provider_path(root, "stock")?;
+    let provider = read_provider(&manifest).map_err(|error| {
+        anyhow::anyhow!("MetalFX requires 'nucleon upscaler install stock': {error}")
+    })?;
+    ensure!(
+        provider.provider == "stock" && provider.files.contains_key(Path::new("fakenvapi.dll")),
+        "Stock provider omits FakeNvAPI; reinstall the stock provider"
+    );
+    let path = manifest.parent().unwrap().join("fakenvapi.dll");
+    ensure!(
+        crate::runtime_checks::pe(Some(&path), true),
+        "FakeNvAPI must be an x64 DLL"
+    );
+    Ok(path)
+}
 pub(crate) fn verify_patcher(root: &Path) -> Result<PathBuf> {
     let path = root.join("plugins/OptiPatcher.asi");
     ensure!(

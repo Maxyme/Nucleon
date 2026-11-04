@@ -65,7 +65,7 @@ const STATUS_DLL_NOT_FOUND: [u8; 5] = [0xb8, 0x35, 0x01, 0x00, 0xc0];
 const FAILURE_PATH_WINDOW: usize = 24;
 
 /// Bumped whenever the staging rules change, so runners produced by older rules are rebuilt.
-pub const ABI_REVISION: u32 = 2;
+pub const ABI_REVISION: u32 = 3;
 
 /// Runtime images whose exported Unix-call symbol determines the ABI used by GPTK's DLLs.
 ///

@@ -28,6 +28,8 @@ impl FromStr for Setting {
 pub struct Resolved {
     pub setting: Setting,
     pub configuration_directories: Vec<PathBuf>,
+    recipe: Recipe,
+    pub experimental: bool,
 }
 
 /// Resolve before authentication or prefix mutation; unsupported games are not guessed.
@@ -36,14 +38,7 @@ pub fn resolve(
     plan: &LaunchPlan,
     scaler: &upscaler::Resolved,
 ) -> Result<Resolved> {
-    ensure!(
-        scaler
-            .renderer
-            .file_name()
-            .is_some_and(|name| name.eq_ignore_ascii_case("Talos2.exe")
-                || name.eq_ignore_ascii_case("Talos2-Win64-Shipping.exe")),
-        "Frame-generation settings are currently validated only for Talos 2"
-    );
+    let recipe = Recipe::for_renderer(&scaler.renderer)?;
     if setting == Setting::Metalfx {
         ensure!(
             scaler.settings.backend == upscaler::Backend::Metalfx
@@ -55,38 +50,142 @@ pub fn resolve(
     }
     Ok(Resolved {
         setting,
-        configuration_directories: configuration_directories(&plan.prefix)?,
+        recipe,
+        experimental: matches!(recipe, Recipe::StillWakesTheDeep),
+        configuration_directories: configuration_directories(&plan.prefix, &scaler.renderer)?,
     })
 }
 
-fn configuration_directories(prefix: &Path) -> Result<Vec<PathBuf>> {
-    let prefix = prefix
-        .canonicalize()
-        .context("Start Talos 2 once before configuring frame generation")?;
-    let users = prefix.join("drive_c/users");
-    let mut directories = Vec::new();
-    // Wine's active username differs between runtimes. Configure only existing Talos
-    // settings, including older users that may become active after a runtime switch.
-    for user in fs::read_dir(&users).context("Start Talos 2 once to create its settings")? {
-        let directory = user?
-            .path()
-            .join("AppData/Local/Talos2/Saved/Config/Windows");
-        if directory.join("GameUserSettings.ini").is_file() {
-            let directory = directory.canonicalize()?;
-            ensure!(
-                directory.starts_with(&prefix),
-                "Talos settings escape the selected prefix"
-            );
-            directories.push(directory);
+fn candidate_folder_names(renderer: &Path) -> Vec<String> {
+    let mut names = Vec::new();
+    for ancestor in renderer.ancestors() {
+        if ancestor
+            .file_name()
+            .is_some_and(|n| n.to_string_lossy().eq_ignore_ascii_case("Binaries"))
+            && let Some(parent) = ancestor.parent().and_then(|p| p.file_name())
+        {
+            names.push(parent.to_string_lossy().to_string());
         }
     }
+    if let Some(stem) = renderer.file_stem().and_then(|s| s.to_str()) {
+        names.push(stem.to_string());
+        for suffix in [
+            "-Win64-Shipping",
+            "_Win64_Shipping",
+            "-Win64-Test",
+            "_Win64_Test",
+            "-Win64",
+            "_Win64",
+            "-Shipping",
+            "_Shipping",
+        ] {
+            if let Some(stripped) = stem.strip_suffix(suffix) {
+                names.push(stripped.to_string());
+            }
+        }
+    }
+    let mut deduped = Vec::new();
+    for name in names {
+        if !deduped
+            .iter()
+            .any(|e: &String| e.eq_ignore_ascii_case(&name))
+        {
+            deduped.push(name);
+        }
+    }
+    deduped
+}
+
+fn configuration_directories(prefix: &Path, renderer: &Path) -> Result<Vec<PathBuf>> {
+    let prefix = prefix
+        .canonicalize()
+        .context("Start the game once before configuring frame generation")?;
+    let users = prefix.join("drive_c/users");
+    let mut directories = Vec::new();
+    let candidates = candidate_folder_names(renderer);
+
+    if users.is_dir() {
+        for user in fs::read_dir(&users).context("Start the game once to create its settings")? {
+            let user = user?;
+            let appdata_local = user.path().join("AppData/Local");
+            if !appdata_local.is_dir() {
+                continue;
+            }
+            for candidate in &candidates {
+                let candidate_config = appdata_local.join(candidate).join("Saved/Config");
+                if let Ok(entries) = fs::read_dir(&candidate_config) {
+                    for entry in entries.flatten() {
+                        let name = entry.file_name().to_string_lossy().to_string();
+                        if name.to_ascii_lowercase().starts_with("windows")
+                            && entry.path().join("GameUserSettings.ini").is_file()
+                        {
+                            let canon = entry.path().canonicalize()?;
+                            ensure!(
+                                canon.starts_with(&prefix),
+                                "Game settings escape the selected prefix"
+                            );
+                            directories.push(canon);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     directories.sort();
     directories.dedup();
     ensure!(
         !directories.is_empty(),
-        "Start Talos 2 once in this prefix before configuring frame generation"
+        "Start the game once in this prefix before configuring frame generation"
     );
     Ok(directories)
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+enum Recipe {
+    Talos2,
+    StillWakesTheDeep,
+}
+
+impl Recipe {
+    fn for_renderer(renderer: &Path) -> Result<Self> {
+        let name = renderer.file_name().unwrap_or_default().to_string_lossy();
+        if ["Talos2.exe", "Talos2-Win64-Shipping.exe"]
+            .iter()
+            .any(|candidate| name.eq_ignore_ascii_case(candidate))
+        {
+            Ok(Self::Talos2)
+        } else if name.eq_ignore_ascii_case("StillWakesTheDeep.exe") {
+            Ok(Self::StillWakesTheDeep)
+        } else {
+            anyhow::bail!(
+                "No frame-generation settings recipe for {}",
+                renderer.display()
+            )
+        }
+    }
+
+    fn gus_changes(self, value: &str) -> (&'static str, BTreeMap<String, String>) {
+        match self {
+            Self::Talos2 => (
+                "/Script/Talos2.TalosGameUserSettings",
+                BTreeMap::from([("FrameGeneration".into(), value.into())]),
+            ),
+            Self::StillWakesTheDeep => {
+                let mut changes =
+                    BTreeMap::from([("NvidiaDLSSFrameGenerationMode".into(), value.into())]);
+                if value == "1" {
+                    changes.extend([
+                        ("bNvidiaDLSSEnabled".into(), "True".into()),
+                        ("ESSTechnologyType".into(), "NVidiaDLSS".into()),
+                        ("bAMDFSR3Enabled".into(), "False".into()),
+                        ("bAMDFSR3FrameGenEnabled".into(), "False".into()),
+                    ]);
+                }
+                ("/Script/Habitat.HabitatLocalSettings", changes)
+            }
+        }
+    }
 }
 
 impl Resolved {
@@ -99,39 +198,48 @@ impl Resolved {
         };
         let mut edits = Vec::new();
         for directory in &self.configuration_directories {
-            for (name, section, keys) in [
-                (
-                    "Engine.ini",
-                    "ConsoleVariables",
-                    vec!["r.Streamline.InitializePlugin", "r.Streamline.DLSSG.Enable"],
-                ),
-                (
-                    "GameUserSettings.ini",
-                    "/Script/Talos2.TalosGameUserSettings",
-                    vec!["FrameGeneration"],
-                ),
-            ] {
-                let path = directory.join(name);
-                ensure!(
-                    !path.is_symlink(),
-                    "Talos settings cannot be symlinks: {}",
-                    path.display()
-                );
-                let original = match fs::read_to_string(&path) {
-                    Ok(text) => Some(text),
-                    Err(e) if e.kind() == std::io::ErrorKind::NotFound && name == "Engine.ini" => {
-                        None
-                    }
-                    Err(e) => return Err(e).with_context(|| format!("Read {}", path.display())),
-                };
-                let changes = keys
-                    .into_iter()
-                    .map(|key| (key.to_owned(), value.to_owned()))
-                    .collect();
-                let updated = update_ini(original.as_deref().unwrap_or(""), section, &changes);
-                if original.as_deref() != Some(updated.as_str()) {
-                    edits.push((path, original, updated));
-                }
+            let engine_path = directory.join("Engine.ini");
+            ensure!(
+                !engine_path.is_symlink(),
+                "Game settings cannot be symlinks: {}",
+                engine_path.display()
+            );
+            let engine_original = match fs::read_to_string(&engine_path) {
+                Ok(text) => Some(text),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+                Err(e) => return Err(e).with_context(|| format!("Read {}", engine_path.display())),
+            };
+            let engine_changes = BTreeMap::from([
+                ("r.Streamline.InitializePlugin".into(), value.into()),
+                ("r.Streamline.DLSSG.Enable".into(), value.into()),
+            ]);
+            let engine_updated = update_ini(
+                engine_original.as_deref().unwrap_or(""),
+                "ConsoleVariables",
+                &engine_changes,
+            );
+            if engine_original.as_deref() != Some(engine_updated.as_str()) {
+                edits.push((engine_path, engine_original, engine_updated));
+            }
+
+            let gus_path = directory.join("GameUserSettings.ini");
+            ensure!(
+                !gus_path.is_symlink(),
+                "Game settings cannot be symlinks: {}",
+                gus_path.display()
+            );
+            let gus_original = match fs::read_to_string(&gus_path) {
+                Ok(text) => Some(text),
+                Err(e) => return Err(e).with_context(|| format!("Read {}", gus_path.display())),
+            };
+            let (target_section, gus_changes) = self.recipe.gus_changes(value);
+            let gus_updated = update_ini(
+                gus_original.as_deref().unwrap_or(""),
+                target_section,
+                &gus_changes,
+            );
+            if gus_original.as_deref() != Some(gus_updated.as_str()) {
+                edits.push((gus_path, gus_original, gus_updated));
             }
         }
         // Complete backups before making any of the requested edits.
@@ -148,7 +256,7 @@ impl Resolved {
                         file.sync_all()?;
                     }
                     Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
-                    Err(e) => return Err(e).context("Back up Talos frame-generation settings"),
+                    Err(e) => return Err(e).context("Back up game frame-generation settings"),
                 }
             }
         }
@@ -165,9 +273,7 @@ impl Resolved {
                     }
                 }
                 return Err(error).with_context(|| {
-                    format!(
-                        "Configure Talos frame generation; rollback errors: {rollback_errors:?}"
-                    )
+                    format!("Configure game frame generation; rollback errors: {rollback_errors:?}")
                 });
             }
         }
@@ -229,7 +335,13 @@ mod tests {
         fs::write(directory.join("GameUserSettings.ini"), original).unwrap();
         let resolved = Resolved {
             setting: Setting::Metalfx,
-            configuration_directories: configuration_directories(temp.path()).unwrap(),
+            recipe: Recipe::Talos2,
+            experimental: false,
+            configuration_directories: configuration_directories(
+                temp.path(),
+                &temp.path().join("Talos2.exe"),
+            )
+            .unwrap(),
         };
         assert!(!directory.join("Engine.ini").exists()); // resolution is read only
         resolved.apply().unwrap();
@@ -258,6 +370,22 @@ mod tests {
             original
         );
     }
+
+    #[test]
+    fn habitat_recipe_selects_dlss_without_changing_unrelated_settings() {
+        let original = "[Other]\nFrameGeneration=7\n[/Script/Habitat.HabitatLocalSettings]\nESSTechnologyType=AMDFSR3\nbAMDFSR3Enabled=True\nbAMDFSR3FrameGenEnabled=True\nNvidiaDLSSFrameGenerationMode=0\n";
+        let (section, changes) = Recipe::StillWakesTheDeep.gus_changes("1");
+        let enabled = update_ini(original, section, &changes);
+        assert!(enabled.contains("[Other]\nFrameGeneration=7"));
+        assert!(enabled.contains("NvidiaDLSSFrameGenerationMode=1"));
+        assert!(enabled.contains("ESSTechnologyType=NVidiaDLSS"));
+        assert!(enabled.contains("bAMDFSR3FrameGenEnabled=False"));
+        let (_, changes) = Recipe::StillWakesTheDeep.gus_changes("0");
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes["NvidiaDLSSFrameGenerationMode"], "0");
+        assert!(Recipe::for_renderer(Path::new("Unknown-Win64-Shipping.exe")).is_err());
+    }
+
     #[test]
     fn unsupported_titles_and_unvalidated_upscalers_fail_before_config_writes() {
         use crate::{
@@ -306,7 +434,8 @@ mod tests {
         assert!("fsr".parse::<Setting>().is_err());
         assert_eq!("off".parse::<Setting>().unwrap(), Setting::Off);
         let temp = tempfile::tempdir().unwrap();
-        assert!(configuration_directories(temp.path()).is_err());
+        let dummy_renderer = temp.path().join("Talos2.exe");
+        assert!(configuration_directories(temp.path(), &dummy_renderer).is_err());
         let external = tempfile::tempdir().unwrap();
         fs::write(external.path().join("GameUserSettings.ini"), "").unwrap();
         let user = temp
@@ -314,7 +443,7 @@ mod tests {
             .join("drive_c/users/wine/AppData/Local/Talos2/Saved/Config");
         fs::create_dir_all(&user).unwrap();
         std::os::unix::fs::symlink(external.path(), user.join("Windows")).unwrap();
-        assert!(configuration_directories(temp.path()).is_err());
+        assert!(configuration_directories(temp.path(), &dummy_renderer).is_err());
     }
     #[test]
     fn missing_and_duplicate_keys_are_set_only_in_the_target_section() {
