@@ -1,0 +1,84 @@
+--- a/dlls/ntdll/loader.c
++++ b/dlls/ntdll/loader.c
+@@ -4433,6 +4433,9 @@
+     {
+         __TRY
+         {
++            /* A locally handled PE probe fault must not leave exception-mode
++             * TSD restoration active for callbacks made by this native call. */
++            switchyard_clear_native_callback_exception( native_callback_depth );
+             switchyard_set_macos_tsd_base( pthread_teb );
+             ret = ((native_callback_func)func)( arg0, arg1, arg2 );
+             switchyard_leave_native_callback( TRUE, &scope );
+@@ -4469,6 +4472,9 @@
+     {
+         __TRY
+         {
++            /* A locally handled PE probe fault must not leave exception-mode
++             * TSD restoration active for callbacks made by this native call. */
++            switchyard_clear_native_callback_exception( native_callback_depth );
+             switchyard_set_macos_tsd_base( pthread_teb );
+             ret = ((native_callback_func)func)( arg0, arg1, arg2, arg3 );
+             switchyard_leave_native_callback( TRUE, &scope );
+@@ -7250,7 +7256,8 @@
+ static BOOL switchyard_unwrap_com_vtable( void *object,
+                                           struct switchyard_com_vtable_scope *scope )
+ {
+-    struct switchyard_com_vtable_clone_header *header;
++    struct switchyard_com_vtable_clone_cache_entry *entry;
++    void **original = NULL;
+     void **wrapped;
+     BOOL ret = FALSE;
+ 
+@@ -7261,15 +7268,26 @@
+     {
+         wrapped = *(void ***)object;
+         if (!wrapped) return FALSE;
+-        header = (struct switchyard_com_vtable_clone_header *)
+-                 ((BYTE *)wrapped - SWITCHYARD_COM_VTABLE_PREFIX_SIZE) - 1;
+-        if (header->magic == switchyard_com_vtable_clone_magic && header->original)
++        /* A foreign first argument may be a descriptor, not a COM object.
++         * Only dereference metadata of clones owned by this bridge. */
++        RtlEnterCriticalSection( &loader_section );
++        LIST_FOR_EACH_ENTRY( entry, &switchyard_com_vtable_clone_cache,
++                             struct switchyard_com_vtable_clone_cache_entry, entry )
++        {
++            if (entry->copy == wrapped)
++            {
++                original = entry->original;
++                break;
++            }
++        }
++        RtlLeaveCriticalSection( &loader_section );
++        if (original)
+         {
+             scope->object = object;
+-            scope->original = header->original;
++            scope->original = original;
+             scope->wrapped = wrapped;
+             scope->unwrapped = TRUE;
+-            *(void ***)object = header->original;
++            *(void ***)object = original;
+             ret = TRUE;
+         }
+     }
+@@ -8380,6 +8398,9 @@
+                                                &input_vtable_scope );
+             if (params->flags & SWITCHYARD_NATIVE_CALLBACK_D3D11_CONTEXT_EXECUTE)
+                 switchyard_upload_all_d3d_shared_textures( params );
++            /* A locally handled PE probe fault must not leave exception-mode
++             * TSD restoration active for callbacks made by this native call. */
++            switchyard_clear_native_callback_exception( native_callback_depth );
+             switchyard_set_macos_tsd_base( pthread_teb );
+             ret = switchyard_call_native_callback_args_raw( call_params );
+             switchyard_leave_native_callback( TRUE, &scope );
+@@ -8571,6 +8592,9 @@
+                 switchyard_prepare_d3d12_narrow_float_clear(
+                     params, &fixed_params, clear_color ))
+                 call_params = &fixed_params;
++            /* A locally handled PE probe fault must not leave exception-mode
++             * TSD restoration active for callbacks made by this native call. */
++            switchyard_clear_native_callback_exception( native_callback_depth );
+             switchyard_set_macos_tsd_base( pthread_teb );
+             ret = switchyard_call_native_callback_args_raw( call_params );
+             switchyard_set_macos_tsd_base( teb );

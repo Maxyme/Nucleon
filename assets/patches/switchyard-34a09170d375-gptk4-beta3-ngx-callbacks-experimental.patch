@@ -1,0 +1,20 @@
+--- a/dlls/ntdll/loader.c
++++ b/dlls/ntdll/loader.c
+@@ -9310,6 +9310,17 @@
+                                                switchyard_d3d_blob_output_flags( 1 ) ); /* D3D10CreateBlob */
+         wrap_native_callback_entry_with_flags( &table[12], 0,
+                                                SWITCHYARD_NATIVE_CALLBACK_NOTE_GFXT_DEFERRED_VTABLE ); /* GFXT dispatch post-init */
++        /* The beta 3 NGX entry points use the same native MS ABI boundary as
++         * D3D12CreateDevice. Leaving them direct loses macOS TSD at Init_Ext. */
++        {
++            static const BYTE ngx_argc[] = {
++                4, 5, 7, 0, 1, 1, 3, 4, 4, 1, 3, 1, 1, 1,
++                1, 4, 1, 4, 1, 3, 1, 3, 4, 5, 7, 1, 0, 1
++            };
++            unsigned int i;
++            for (i = 0; i < ARRAY_SIZE(ngx_argc); ++i)
++                wrap_native_callback_entry_with_flags( &table[13 + i], ngx_argc[i], 0 );
++        }
+         wrap_native_callback_entry_with_flags( &table[43], 1, 0 ); /* GFXT_ThreadCallback */
+     }
+     __EXCEPT_PAGE_FAULT

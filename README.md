@@ -14,10 +14,10 @@ backend. CrossOver is optional.
 Install [DepotDownloader](https://github.com/SteamRE/DepotDownloader), then use:
 
 ```sh
-nucleon steam install 1622910 --username <account>
-nucleon steam show 1622910
-nucleon launch 1622910
-nucleon steam update 1622910 --username <account>
+nucleon steam install <appid> --username <account>
+nucleon steam show <appid>
+nucleon launch <appid>
+nucleon steam update <appid> --username <account>
 ```
 
 The downloader requests your password or Steam Guard approval interactively;
@@ -26,9 +26,9 @@ Windows files. By default they live under Nucleon's support directory. Choose a
 separate library or an exact game directory when installing:
 
 ```sh
-nucleon steam install 1622910 --username <account> --library ~/Games/Nucleon
-# Stores files in ~/Games/Nucleon/steam/1622910
-nucleon steam install 1622910 --username <account> --install-dir "/Volumes/Games/Still Wakes the Deep"
+nucleon steam install <appid> --username <account> --library ~/Games/Nucleon
+# Stores files in ~/Games/Nucleon/steam/<appid>
+nucleon steam install <appid> --username <account> --install-dir "/Volumes/Games/Game"
 ```
 
 These options are mutually exclusive. Relative paths resolve against the current

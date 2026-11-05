@@ -1,0 +1,122 @@
+--- a/dlls/ntdll/loader.c
++++ b/dlls/ntdll/loader.c
+@@ -7590,18 +7590,23 @@
+     return flags;
+ }
+ 
+-static BOOL switchyard_d3d12_graphics_command_list_entry_uses_scalar_float( unsigned int index )
+-{
+-    /* ClearDepthStencilView, OMSetDepthBounds, and RSSetDepthBias pass scalar
+-     * floats in XMM registers.  The generic integer callback relay deliberately
+-     * leaves them direct, matching the existing D3D11 treatment for such methods. */
+-    return index == 47 || index == 62 || index == 82;
+-}
+ 
+ static ULONG switchyard_d3d12_graphics_command_list_vtable_entry_flags( unsigned int index )
+ {
+     ULONG flags = switchyard_d3d12_device_child_vtable_entry_flags( index );
+ 
++    /* Scalar floats occupy XMM argument slots in the Microsoft x64 ABI.
++     * Reuse the typed D3D11 relay with a D3D12 method-kind discriminator. */
++    if (index == 47) /* ClearDepthStencilView */
++        return flags | SWITCHYARD_NATIVE_CALLBACK_D3D11_CONTEXT_CLEAR_DEPTH_STENCIL_VIEW |
++               SWITCHYARD_NATIVE_CALLBACK_OUTPUT_ARG( 1 );
++    if (index == 62) /* OMSetDepthBounds */
++        return flags | SWITCHYARD_NATIVE_CALLBACK_D3D11_CONTEXT_CLEAR_DEPTH_STENCIL_VIEW |
++               SWITCHYARD_NATIVE_CALLBACK_OUTPUT_ARG( 2 );
++    if (index == 82) /* RSSetDepthBias */
++        return flags | SWITCHYARD_NATIVE_CALLBACK_D3D11_CONTEXT_CLEAR_DEPTH_STENCIL_VIEW |
++               SWITCHYARD_NATIVE_CALLBACK_OUTPUT_ARG( 3 );
++
+     if (index == 48)
+         flags |= SWITCHYARD_NATIVE_CALLBACK_D3D12_NARROW_FLOAT_FIXUP |
+                  SWITCHYARD_D3D12_NARROW_FLOAT_ACTION(
+@@ -7676,7 +7681,6 @@
+         break;
+     case SWITCHYARD_D3D12_GRAPHICS_COMMAND_LIST:
+         entry_flags = switchyard_d3d12_graphics_command_list_vtable_entry_flags;
+-        uses_scalar_float = switchyard_d3d12_graphics_command_list_entry_uses_scalar_float;
+         break;
+     case SWITCHYARD_D3D12_PIPELINE_LIBRARY:
+         entry_flags = switchyard_d3d12_pipeline_library_vtable_entry_flags;
+@@ -7970,6 +7974,10 @@
+ {
+     typedef void (WINAPI *d3d11_clear_depth_stencil_view_func)(
+         ULONG_PTR, ULONG_PTR, ULONG_PTR, float, ULONG_PTR);
++    typedef void (WINAPI *d3d12_clear_depth_stencil_view_func)(
++        ULONG_PTR, ULONG_PTR, ULONG_PTR, float, ULONG_PTR, ULONG_PTR, ULONG_PTR);
++    typedef void (WINAPI *d3d12_depth_bounds_func)(ULONG_PTR, float, float);
++    typedef void (WINAPI *d3d12_depth_bias_func)(ULONG_PTR, float, float, float);
+     typedef ULONG_PTR (WINAPI *native_callback_func0)(void);
+     typedef ULONG_PTR (WINAPI *native_callback_func1)(ULONG_PTR);
+     typedef ULONG_PTR (WINAPI *native_callback_func2)(ULONG_PTR, ULONG_PTR);
+@@ -8000,13 +8008,32 @@
+     if (params->flags &
+         SWITCHYARD_NATIVE_CALLBACK_D3D11_CONTEXT_CLEAR_DEPTH_STENCIL_VIEW)
+     {
+-        float depth;
++        float values[3];
++        unsigned int kind = (params->flags & SWITCHYARD_NATIVE_CALLBACK_OUTPUT_ARG_MASK) >>
++                            SWITCHYARD_NATIVE_CALLBACK_OUTPUT_ARG_SHIFT;
+ 
+-        /* The fourth Microsoft x64 argument is carried in XMM3 when it is a
+-         * float.  Recreate that typed call after installing the pthread TSD. */
+-        memcpy( &depth, &args[3], sizeof(depth) );
+-        ((d3d11_clear_depth_stencil_view_func)params->func)(
+-            args[0], args[1], args[2], depth, args[4] );
++        if (kind >= 2)
++        {
++            memcpy( &values[0], &args[1], sizeof(float) );
++            memcpy( &values[1], &args[2], sizeof(float) );
++            if (kind == 2)
++                ((d3d12_depth_bounds_func)params->func)(args[0], values[0], values[1]);
++            else
++            {
++                memcpy( &values[2], &args[3], sizeof(float) );
++                ((d3d12_depth_bias_func)params->func)(args[0], values[0], values[1], values[2]);
++            }
++        }
++        else
++        {
++            memcpy( &values[0], &args[3], sizeof(float) );
++            if (kind == 1)
++                ((d3d12_clear_depth_stencil_view_func)params->func)(
++                    args[0], args[1], args[2], values[0], args[4], args[5], args[6]);
++            else
++                ((d3d11_clear_depth_stencil_view_func)params->func)(
++                    args[0], args[1], args[2], values[0], args[4]);
++        }
+         return 0;
+     }
+ 
+@@ -9093,16 +9120,21 @@
+     if (flags &
+         SWITCHYARD_NATIVE_CALLBACK_D3D11_CONTEXT_CLEAR_DEPTH_STENCIL_VIEW)
+     {
+-        static const BYTE save_xmm3[] =
++        unsigned int kind = (flags & SWITCHYARD_NATIVE_CALLBACK_OUTPUT_ARG_MASK) >>
++                            SWITCHYARD_NATIVE_CALLBACK_OUTPUT_ARG_SHIFT;
++        unsigned int first = kind >= 2 ? 1 : 3;
++        unsigned int last = kind == 2 ? 2 : 3;
++        for (i = first; i <= last; ++i)
+         {
+-            0x66, 0x0f, 0x7e, 0x5c, 0x24,
+-            SWITCHYARD_NATIVE_CALLBACK_PARAMS_OFFSET +
+-            SWITCHYARD_NATIVE_CALLBACK_ARGS_OFFSET + 3 * sizeof(ULONG_PTR)
+-            /* movd %xmm3,params.args[3](%rsp) */
+-        };
+-
+-        memcpy( p, save_xmm3, sizeof(save_xmm3) );
+-        p += sizeof(save_xmm3);
++            /* movd %xmmN,params.args[N](%rsp); save before the C relay. */
++            *p++ = 0x66;
++            *p++ = 0x0f;
++            *p++ = 0x7e;
++            *p++ = 0x44 | (i << 3);
++            *p++ = 0x24;
++            *p++ = SWITCHYARD_NATIVE_CALLBACK_PARAMS_OFFSET +
++                   SWITCHYARD_NATIVE_CALLBACK_ARGS_OFFSET + i * sizeof(ULONG_PTR);
++        }
+     }
+ 
+     *p++ = 0x48;

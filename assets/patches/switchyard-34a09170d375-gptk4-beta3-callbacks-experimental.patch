@@ -2,8 +2,6 @@ Experimental GPTK 4 beta 3 callback layout repair.
 Applies only to Switchyard revision 34a09170d3754522dc55416617c6754dd2d9a086.
 Beta 3 has 71 Windows callbacks plus two metadata entries. The three added
 callbacks each take one argument block. The native thread callback is slot 43.
-The source-built repair passed isolated DXGI factory, adapter and D3D12 device
-creation. This patch is not enabled by any Nucleon runtime recipe.
 
 --- a/dlls/ntdll/loader.c
 +++ b/dlls/ntdll/loader.c

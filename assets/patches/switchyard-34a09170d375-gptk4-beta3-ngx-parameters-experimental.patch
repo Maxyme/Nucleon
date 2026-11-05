@@ -1,0 +1,139 @@
+--- a/dlls/ntdll/loader.c
++++ b/dlls/ntdll/loader.c
+@@ -7968,7 +7968,57 @@
+     }
+     __ENDTRY
+ }
++
++/* NGX parameter maps are not IUnknown objects: 8 Set overloads, 8 Get
++ * overloads, then Reset. GPTK beta 3 uses the Microsoft overload order. */
++static void *switchyard_ngx_parameter_output_functions[6];
++
++static void switchyard_wrap_ngx_parameter_output(
++    const struct switchyard_native_callback_params *params, ULONG_PTR ret )
++{
++    unsigned int i;
++    void *object;
++    void **vtable, **wrapped;
++    ULONG_PTR signature;
+ 
++    if (params->argc != 1 || ret != 1 || !params->args[0]) return;
++    for (i = 0; i < ARRAY_SIZE(switchyard_ngx_parameter_output_functions); ++i)
++        if (params->func == switchyard_ngx_parameter_output_functions[i]) break;
++    if (i == ARRAY_SIZE(switchyard_ngx_parameter_output_functions)) return;
++
++    __TRY
++    {
++        object = *(void **)params->args[0];
++        if (!object || !(vtable = *(void ***)object)) return;
++        signature = switchyard_com_vtable_wrapper_signature_seed( 17, FALSE );
++        for (i = 0; i < 17; ++i)
++        {
++            ULONG flags = SWITCHYARD_NATIVE_CALLBACK_SHARE_THUNK;
++            if (i == 5 || i == 6)
++                flags |= SWITCHYARD_NATIVE_CALLBACK_D3D11_CONTEXT_CLEAR_DEPTH_STENCIL_VIEW |
++                         SWITCHYARD_NATIVE_CALLBACK_OUTPUT_ARG( i == 5 ? 5 : 4 );
++            signature = switchyard_com_vtable_wrapper_signature_step(
++                signature, i, i == 16 ? 1 : 3, flags );
++        }
++        wrapped = switchyard_clone_com_vtable_for_wrapping(
++            object, vtable, 17, FALSE, signature );
++        if (!wrapped) return;
++        for (i = 0; i < 17; ++i)
++        {
++            ULONG flags = SWITCHYARD_NATIVE_CALLBACK_SHARE_THUNK;
++            if (i == 5 || i == 6)
++                flags |= SWITCHYARD_NATIVE_CALLBACK_D3D11_CONTEXT_CLEAR_DEPTH_STENCIL_VIEW |
++                         SWITCHYARD_NATIVE_CALLBACK_OUTPUT_ARG( i == 5 ? 5 : 4 );
++            switchyard_wrap_native_callback_vtable_slot( &wrapped[i], i == 16 ? 1 : 3, flags );
++        }
++        switchyard_publish_com_vtable_clone_for_wrapping( object, wrapped );
++    }
++    __EXCEPT_PAGE_FAULT
++    {
++    }
++    __ENDTRY
++}
++
+ static ULONG_PTR switchyard_call_native_callback_args_raw(
+     const struct switchyard_native_callback_params *params )
+ {
+@@ -7978,6 +8028,8 @@
+         ULONG_PTR, ULONG_PTR, ULONG_PTR, float, ULONG_PTR, ULONG_PTR, ULONG_PTR);
+     typedef void (WINAPI *d3d12_depth_bounds_func)(ULONG_PTR, float, float);
+     typedef void (WINAPI *d3d12_depth_bias_func)(ULONG_PTR, float, float, float);
++    typedef void (WINAPI *ngx_set_float_func)(ULONG_PTR, ULONG_PTR, float);
++    typedef void (WINAPI *ngx_set_double_func)(ULONG_PTR, ULONG_PTR, double);
+     typedef ULONG_PTR (WINAPI *native_callback_func0)(void);
+     typedef ULONG_PTR (WINAPI *native_callback_func1)(ULONG_PTR);
+     typedef ULONG_PTR (WINAPI *native_callback_func2)(ULONG_PTR, ULONG_PTR);
+@@ -8012,7 +8064,18 @@
+         unsigned int kind = (params->flags & SWITCHYARD_NATIVE_CALLBACK_OUTPUT_ARG_MASK) >>
+                             SWITCHYARD_NATIVE_CALLBACK_OUTPUT_ARG_SHIFT;
+ 
+-        if (kind >= 2)
++        if (kind == 4)
++        {
++            memcpy( &values[0], &args[2], sizeof(float) );
++            ((ngx_set_float_func)params->func)(args[0], args[1], values[0]);
++        }
++        else if (kind == 5)
++        {
++            double value;
++            memcpy( &value, &args[2], sizeof(value) );
++            ((ngx_set_double_func)params->func)(args[0], args[1], value);
++        }
++        else if (kind >= 2)
+         {
+             memcpy( &values[0], &args[1], sizeof(float) );
+             memcpy( &values[1], &args[2], sizeof(float) );
+@@ -8471,6 +8534,7 @@
+                 SWITCHYARD_NATIVE_CALLBACK_D3D12_NARROW_FLOAT_FIXUP)
+                 switchyard_postprocess_d3d12_narrow_float( params, teb );
+             switchyard_postprocess_d3d12_timestamp( params, ret );
++            switchyard_wrap_ngx_parameter_output( params, ret );
+             if (params->flags & SWITCHYARD_NATIVE_CALLBACK_DXGI_RESOURCE_GET_SHARED_HANDLE)
+                 ret = switchyard_get_d3d_shared_handle( params, ret );
+             if (params->flags & SWITCHYARD_NATIVE_CALLBACK_D3D11_DEVICE_OPEN_SHARED_RESOURCE)
+@@ -8664,6 +8728,7 @@
+                 SWITCHYARD_NATIVE_CALLBACK_D3D12_NARROW_FLOAT_FIXUP)
+                 switchyard_postprocess_d3d12_narrow_float( params, teb );
+             switchyard_postprocess_d3d12_timestamp( params, ret );
++            switchyard_wrap_ngx_parameter_output( params, ret );
+             if ((LONG)ret >= 0 &&
+                 (params->flags &
+                  SWITCHYARD_NATIVE_CALLBACK_WRAP_D3D12_OUTPUT_VTABLE))
+@@ -9122,14 +9187,14 @@
+     {
+         unsigned int kind = (flags & SWITCHYARD_NATIVE_CALLBACK_OUTPUT_ARG_MASK) >>
+                             SWITCHYARD_NATIVE_CALLBACK_OUTPUT_ARG_SHIFT;
+-        unsigned int first = kind >= 2 ? 1 : 3;
+-        unsigned int last = kind == 2 ? 2 : 3;
++        unsigned int first = kind >= 4 ? 2 : kind >= 2 ? 1 : 3;
++        unsigned int last = kind >= 4 ? 2 : kind == 2 ? 2 : 3;
+         for (i = first; i <= last; ++i)
+         {
+             /* movd %xmmN,params.args[N](%rsp); save before the C relay. */
+             *p++ = 0x66;
+             *p++ = 0x0f;
+-            *p++ = 0x7e;
++            *p++ = kind == 5 ? 0xd6 : 0x7e; /* movq for double, movd for float */
+             *p++ = 0x44 | (i << 3);
+             *p++ = 0x24;
+             *p++ = SWITCHYARD_NATIVE_CALLBACK_PARAMS_OFFSET +
+@@ -9349,7 +9414,15 @@
+                 4, 5, 7, 0, 1, 1, 3, 4, 4, 1, 3, 1, 1, 1,
+                 1, 4, 1, 4, 1, 3, 1, 3, 4, 5, 7, 1, 0, 1
+             };
++            static const BYTE parameter_outputs[] = { 18, 24, 25, 27, 31, 33 };
+             unsigned int i;
++            for (i = 0; i < ARRAY_SIZE(parameter_outputs); ++i)
++            {
++                void *func = table[parameter_outputs[i]];
++                if (is_native_callback_thunk( func ))
++                    switchyard_get_native_callback_thunk_info( func, &func, NULL, NULL );
++                switchyard_ngx_parameter_output_functions[i] = func;
++            }
+             for (i = 0; i < ARRAY_SIZE(ngx_argc); ++i)
+                 wrap_native_callback_entry_with_flags( &table[13 + i], ngx_argc[i], 0 );
+         }

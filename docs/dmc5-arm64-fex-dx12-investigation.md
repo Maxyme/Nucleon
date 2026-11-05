@@ -1,6 +1,6 @@
 # DMC5 Direct3D 12 on native ARM64 Wine/FEX
 
-Investigation: 2026-10-15, Apple M5 Max, macOS 27.2, Vulkan SDK 1.4.363.0.
+Investigation: macOS 27.2, Vulkan SDK 1.4.363.0.
 
 A plausible route exists, but the present prototype cannot run it by selecting
 DX12. The recommended experiment is native ARM64 Wine/FEX, VKD3D-Proton and a

@@ -288,7 +288,7 @@ mod tests {
     #[test]
     fn download_selects_windows_and_preserves_argument_boundaries() {
         let args = download_arguments(
-            1622910,
+            1234,
             "a user",
             std::path::Path::new("/Games/a ' $(literal)"),
             "public",
@@ -304,9 +304,9 @@ mod tests {
                 .any(|a| a == "-password" || a == "-remember-password")
         );
         let qr = download_arguments(
-            1622910,
+            1234,
             "a user",
-            std::path::Path::new("/Games/still-wakes-the-deep"),
+            std::path::Path::new("/Games/Game"),
             "public",
             "english",
             true,

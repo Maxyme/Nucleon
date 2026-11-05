@@ -1,0 +1,19 @@
+--- a/dlls/ntdll/loader.c
++++ b/dlls/ntdll/loader.c
+@@ -4650,13 +4650,15 @@
+ static BOOL switchyard_get_native_callback_jump_table_slot( void *entry, void ***result )
+ {
+     static const BYTE jump_entry_prefix[] = { 0xff, 0x25, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00 };
++    static const BYTE nop_jump_entry_prefix[] = { 0x66, 0x90, 0xff, 0x25, 0x00, 0x00, 0x00, 0x00 };
+     static const BYTE adjusted_jump_entry_prefix[] = { 0x48, 0x83, 0xe9, 0x10, 0x48, 0xb8 };
+     static const BYTE adjusted_jump_entry_suffix[] = { 0xff, 0xe0 };
+     void **slot;
+     void *target;
+ 
+     if (!entry) return FALSE;
+-    if (!memcmp( entry, jump_entry_prefix, sizeof(jump_entry_prefix) ))
++    if (!memcmp( entry, jump_entry_prefix, sizeof(jump_entry_prefix) ) ||
++        !memcmp( entry, nop_jump_entry_prefix, sizeof(nop_jump_entry_prefix) ))
+         slot = (void **)((BYTE *)entry + sizeof(jump_entry_prefix));
+     else if (!memcmp( entry, adjusted_jump_entry_prefix, sizeof(adjusted_jump_entry_prefix) ) &&
+              !memcmp( (BYTE *)entry + 14, adjusted_jump_entry_suffix,

@@ -1,0 +1,79 @@
+--- a/dlls/ntdll/loader.c
++++ b/dlls/ntdll/loader.c
+@@ -7401,6 +7401,8 @@
+ enum switchyard_d3d12_interface_kind
+ {
+     SWITCHYARD_D3D12_OBJECT,
++    SWITCHYARD_D3D12_SDK_CONFIGURATION,
++    SWITCHYARD_D3D12_DEVICE_FACTORY,
+     SWITCHYARD_D3D12_DEVICE_CHILD,
+     SWITCHYARD_D3D12_GRAPHICS_COMMAND_LIST,
+     SWITCHYARD_D3D12_DEVICE,
+@@ -7428,6 +7430,12 @@
+ 
+ static const struct switchyard_d3d12_interface_info switchyard_d3d12_interfaces[] =
+ {
++    SWITCHYARD_D3D12_INTERFACE( 0xe9eb5314, 0x33aa, 0x42b2, 0xa7, 0x18, 0xd7, 0x7f, 0x58, 0xb1, 0xf1, 0xc7,
++                                4, SWITCHYARD_D3D12_SDK_CONFIGURATION, "ID3D12SDKConfiguration" ),
++    SWITCHYARD_D3D12_INTERFACE( 0x8aaf9303, 0xad25, 0x48b9, 0x9a, 0x57, 0xd9, 0xc3, 0x7e, 0x00, 0x9d, 0x9f,
++                                6, SWITCHYARD_D3D12_SDK_CONFIGURATION, "ID3D12SDKConfiguration1" ),
++    SWITCHYARD_D3D12_INTERFACE( 0x61f307d3, 0xd34e, 0x4e7c, 0x83, 0x74, 0x3b, 0xa4, 0xde, 0x23, 0xcc, 0xcb,
++                                10, SWITCHYARD_D3D12_DEVICE_FACTORY, "ID3D12DeviceFactory" ),
+     SWITCHYARD_D3D12_INTERFACE( 0xc4fec28f, 0x7966, 0x4e95, 0x9f, 0x94, 0xf4, 0x31, 0xcb, 0x56, 0xc3, 0xb8,
+                                 7, SWITCHYARD_D3D12_OBJECT, "ID3D12Object" ),
+     SWITCHYARD_D3D12_INTERFACE( 0x905db94b, 0xa00c, 0x4140, 0x9d, 0xf5, 0x2b, 0x64, 0xca, 0x9e, 0xa3, 0x57,
+@@ -7548,6 +7556,20 @@
+ {
+     return SWITCHYARD_NATIVE_CALLBACK_SHARE_THUNK |
+            (index == 0 ? switchyard_d3d12_output_flags( 2 ) : 0);
++}
++
++static ULONG switchyard_d3d12_sdk_configuration_vtable_entry_flags( unsigned int index )
++{
++    return switchyard_d3d12_object_vtable_entry_flags( index ) |
++           (index == 4 ? switchyard_d3d12_output_flags( 4 ) : 0);
++}
++
++static ULONG switchyard_d3d12_device_factory_vtable_entry_flags( unsigned int index )
++{
++    ULONG flags = switchyard_d3d12_object_vtable_entry_flags( index );
++    if (index == 7) flags |= switchyard_d3d12_output_flags( 3 );
++    if (index == 9) flags |= switchyard_d3d12_output_flags( 4 );
++    return flags;
+ }
+ 
+ static ULONG switchyard_d3d12_pipeline_state_vtable_entry_flags( unsigned int index )
+@@ -7641,6 +7663,12 @@
+ 
+     switch (info->kind)
+     {
++    case SWITCHYARD_D3D12_SDK_CONFIGURATION:
++        entry_flags = switchyard_d3d12_sdk_configuration_vtable_entry_flags;
++        break;
++    case SWITCHYARD_D3D12_DEVICE_FACTORY:
++        entry_flags = switchyard_d3d12_device_factory_vtable_entry_flags;
++        break;
+     case SWITCHYARD_D3D12_DEVICE:
+         entry_flags = switchyard_d3d12_device_vtable_entry_flags;
+         break;
+@@ -9268,13 +9296,17 @@
+             &table[5], 4, switchyard_d3d12_output_flags( 3 ) ); /* D3D12CreateRootSignatureDeserializer */
+         wrap_native_callback_entry_with_flags(
+             &table[6], 4, switchyard_d3d12_output_flags( 3 ) ); /* D3D12CreateVersionedRootSignatureDeserializer */
+-        wrap_native_callback_entry_with_flags( &table[7], 10,
++        wrap_native_callback_entry_with_flags( &table[7], 3,
++                                               switchyard_d3d12_output_flags( 2 ) ); /* D3D12GetInterface */
++        wrap_native_callback_entry_with_flags( &table[8], 10,
+                                                SWITCHYARD_NATIVE_CALLBACK_WRAP_GFXT_DEFERRED_VTABLE |
+                                                SWITCHYARD_NATIVE_CALLBACK_WRAP_D3D11_OUTPUT_VTABLES ); /* D3D11CreateDevice */
+-        wrap_native_callback_entry_with_flags( &table[8], 12,
++        wrap_native_callback_entry_with_flags( &table[9], 12,
+                                                SWITCHYARD_NATIVE_CALLBACK_WRAP_GFXT_DEFERRED_VTABLE |
+                                                SWITCHYARD_NATIVE_CALLBACK_WRAP_D3D11_OUTPUT_VTABLES ); /* D3D11CreateDeviceAndSwapChain */
+-        wrap_native_callback_entry_with_flags( &table[11], 0,
++        wrap_native_callback_entry_with_flags( &table[11], 2,
++                                               switchyard_d3d_blob_output_flags( 1 ) ); /* D3D10CreateBlob */
++        wrap_native_callback_entry_with_flags( &table[12], 0,
+                                                SWITCHYARD_NATIVE_CALLBACK_NOTE_GFXT_DEFERRED_VTABLE ); /* GFXT dispatch post-init */
+         wrap_native_callback_entry_with_flags( &table[43], 1, 0 ); /* GFXT_ThreadCallback */
+     }
