@@ -253,12 +253,13 @@ pub fn validate_metal_driver(runner: &Path) -> Result<()> {
     ];
     for lib in ["lib/wine", "lib64/wine"] {
         let path = runner.join(lib).join("x86_64-unix/winemac.so");
-        if let Ok(bytes) = fs::read(&path)
-            && crate::runtime_checks::native_arch(&path, object::Architecture::X86_64)
-            && (crate::runtime_checks::has_export(&bytes, &["macdrv_functions"])
-                || legacy
-                    .iter()
-                    .all(|name| crate::runtime_checks::has_export(&bytes, &[*name])))
+        if crate::runtime_checks::native_arch(&path, object::Architecture::X86_64)
+            && crate::runtime_checks::check_macho_file(&path, |f| {
+                crate::runtime_checks::file_has_export(f, &["macdrv_functions"])
+                    || legacy
+                        .iter()
+                        .all(|name| crate::runtime_checks::file_has_export(f, &[*name]))
+            })
         {
             return Ok(());
         }
@@ -269,30 +270,31 @@ pub fn validate_metal_driver(runner: &Path) -> Result<()> {
     )
 }
 
-/// Builtin DXMT DLLs and the Metal window interface must match the selected Wine runtime.
-pub fn validate_runtime(bundle: &DxmtBundle, runner_dir: Option<&Path>) -> Result<()> {
-    if let Some(runner) = runner_dir
-        && runner.join(crate::runtime::DESCRIPTOR).is_file()
-    {
-        let runtime = crate::runtime::ResolvedRuntime::inspect(runner)?;
-        if runtime.mode == crate::runtime::ExecutionMode::Arm64Fex {
-            anyhow::ensure!(
-                runtime.backends.contains(&GraphicsBackend::Dxmt)
-                    && runtime.graphics.dxmt.as_deref().is_some_and(|p| bundle
-                        .root
-                        .canonicalize()
-                        .ok()
-                        .as_deref()
-                        == Some(p))
-                    && bundle
-                        .x64_winemetal_so
-                        .as_deref()
-                        .is_some_and(|p| crate::runtime_checks::native_arch(p, runtime.arch())),
-                "DXMT requires the explicitly paired ARM64 runtime bundle and Unix companion"
-            );
-            return Ok(());
-        }
+pub(crate) fn validate_resolved_runtime(
+    bundle: &DxmtBundle,
+    runtime: &crate::runtime::ResolvedRuntime,
+) -> Result<()> {
+    if runtime.mode == crate::runtime::ExecutionMode::Arm64Fex {
+        anyhow::ensure!(
+            runtime.backends.contains(&GraphicsBackend::Dxmt)
+                && runtime.graphics.dxmt.as_deref().is_some_and(|p| bundle
+                    .root
+                    .canonicalize()
+                    .ok()
+                    .as_deref()
+                    == Some(p))
+                && bundle
+                    .x64_winemetal_so
+                    .as_deref()
+                    .is_some_and(|p| crate::runtime_checks::native_arch(p, runtime.arch())),
+            "DXMT requires the explicitly paired ARM64 runtime bundle and Unix companion"
+        );
+        return Ok(());
     }
+    validate_intel_runtime(bundle, Some(&runtime.root))
+}
+
+fn validate_intel_runtime(bundle: &DxmtBundle, runner_dir: Option<&Path>) -> Result<()> {
     if let Some(runner) = runner_dir {
         validate_metal_driver(runner)?;
     }
@@ -318,6 +320,17 @@ pub fn validate_runtime(bundle: &DxmtBundle, runner_dir: Option<&Path>) -> Resul
         }
     }
     Ok(())
+}
+
+/// Builtin DXMT DLLs and the Metal window interface must match the selected Wine runtime.
+pub fn validate_runtime(bundle: &DxmtBundle, runner_dir: Option<&Path>) -> Result<()> {
+    if let Some(runner) = runner_dir
+        && runner.join(crate::runtime::DESCRIPTOR).is_file()
+    {
+        let runtime = crate::runtime::ResolvedRuntime::inspect(runner)?;
+        return validate_resolved_runtime(bundle, &runtime);
+    }
+    validate_intel_runtime(bundle, runner_dir)
 }
 
 /// Stages DXMT DLLs without changing the source Wine runtime.

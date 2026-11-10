@@ -110,17 +110,25 @@ pub(crate) fn bridge_key(original_digest: &str) -> Result<String> {
     let identities = builder_identities()?;
     crate::staging::key(&[original_digest, identities.bridge])
 }
-pub(crate) fn bridge_provider(root: &Path, bridge: &Path) -> Result<PathBuf> {
-    let key = bridge_key(&crate::staging::digest(bridge)?)?;
+pub(crate) fn bridge_provider_for_digest(
+    root: &Path,
+    original_digest: &str,
+) -> Result<(PathBuf, Provider)> {
+    let key = bridge_key(original_digest)?;
     let manifest = root
         .join("providers/bridge")
         .join(key)
         .join("provider.json");
+    let provider = read_provider(&manifest)?;
     ensure!(
-        read_provider(&manifest)?.provider == "bridge",
+        provider.provider == "bridge",
         "Install the matching NGX forwarding bridge first"
     );
-    Ok(manifest)
+    Ok((manifest, provider))
+}
+#[cfg(test)]
+pub(crate) fn bridge_provider(root: &Path, bridge: &Path) -> Result<PathBuf> {
+    bridge_provider_for_digest(root, &crate::staging::digest(bridge)?).map(|(manifest, _)| manifest)
 }
 pub(crate) fn provider_path(root: &Path, provider: &str) -> Result<PathBuf> {
     ensure!(matches!(provider, "stock" | "metalfx"), "Unknown provider");

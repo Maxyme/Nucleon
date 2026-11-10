@@ -721,22 +721,21 @@ fn runtime_unix_lib_dirs(runner_dir: &Path) -> Vec<PathBuf> {
 /// Reports exports that could not be verified in the runtime's library images.
 pub fn missing_d3dmetal_exports(runner_dir: &Path) -> Vec<&'static str> {
     let candidates = ["gdi32.so", "win32u.so"];
-    let images: Vec<Vec<u8>> = runtime_unix_lib_dirs(runner_dir)
+    let paths: Vec<PathBuf> = runtime_unix_lib_dirs(runner_dir)
         .into_iter()
         .flat_map(|dir| {
             candidates
                 .into_iter()
-                .filter_map(move |name| fs::read(dir.join(name)).ok())
+                .map(move |name| dir.join(name))
+                .filter(|path| path.is_file())
         })
         .collect();
     D3DMETAL_REQUIRED_EXPORTS
         .into_iter()
         .filter(|(_, aliases)| {
-            !aliases.iter().any(|alias| {
-                images
-                    .iter()
-                    .any(|bytes| crate::runtime_checks::has_export(bytes, &[*alias]))
-            })
+            !paths
+                .iter()
+                .any(|path| crate::runtime_checks::has_export_file(path, aliases))
         })
         .map(|(name, _)| name)
         .collect()

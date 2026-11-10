@@ -34,7 +34,6 @@ impl GraphicsComponents {
     /// Standalone GPTK may use only the selected runtime's own matched components.
     pub fn bundled_gptk(runtime: &ResolvedRuntime) -> bool {
         runtime.mode == ExecutionMode::Intel
-            && crate::runner::missing_d3dmetal_exports(&runtime.root).is_empty()
             && crate::runner::inspect_gptk_dir(&runtime.root).is_some_and(|(framework, shared)| {
                 runtime_checks::native_arch(&framework.join("D3DMetal"), runtime.arch())
                     && runtime_checks::native_arch(&shared, runtime.arch())
@@ -46,6 +45,7 @@ impl GraphicsComponents {
                         },
                     )
             })
+            && crate::runner::missing_d3dmetal_exports(&runtime.root).is_empty()
     }
 
     pub fn discover(
@@ -244,7 +244,7 @@ impl GraphicsComponents {
                     pe(d3d11.as_deref())
                         && pe(dxgi.as_deref())
                         && pe(metal.as_deref())
-                        && crate::dxmt::validate_runtime(b, Some(&runtime.root)).is_ok()
+                        && crate::dxmt::validate_resolved_runtime(b, runtime).is_ok()
                         && b.x64_winemetal_so
                             .as_deref()
                             .is_some_and(|p| runtime_checks::native_arch(p, runtime.arch()))
@@ -289,15 +289,18 @@ pub struct RuntimeFeatures {
 }
 impl RuntimeFeatures {
     fn inspect(runtime: &ResolvedRuntime) -> Self {
-        let Ok(image) = fs::read(runtime.unix_dir.join("ntdll.so")) else {
-            return Self::default();
-        };
+        let mut dll_search_prepend = false;
+        let mut guest_supervisor = false;
+        runtime_checks::check_macho_file(&runtime.unix_dir.join("ntdll.so"), |f| {
+            dll_search_prepend |=
+                runtime_checks::file_has_export(f, &["isotope_dll_search_prepend_v1"]);
+            guest_supervisor |=
+                runtime_checks::file_has_export(f, &["isotope_guest_supervisor_v1"]);
+            dll_search_prepend && guest_supervisor
+        });
         Self {
-            dll_search_prepend: runtime_checks::has_export(
-                &image,
-                &["isotope_dll_search_prepend_v1"],
-            ),
-            guest_supervisor: runtime_checks::has_export(&image, &["isotope_guest_supervisor_v1"]),
+            dll_search_prepend,
+            guest_supervisor,
         }
     }
 }
@@ -334,7 +337,7 @@ impl LaunchPlan {
         if engine == TargetEngine::Dxmt
             && let Some(bundle) = &graphics.dxmt
         {
-            crate::dxmt::validate_runtime(bundle, Some(&runtime.root))?;
+            crate::dxmt::validate_resolved_runtime(bundle, &runtime)?;
         }
         let available = graphics.available(&runtime, api, is64);
         let usable = match engine {

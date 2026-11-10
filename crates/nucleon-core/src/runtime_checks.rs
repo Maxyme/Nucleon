@@ -3,19 +3,66 @@ use anyhow::{Result, bail};
 use object::{Architecture, BinaryFormat, Object, ObjectSymbol};
 use std::{fs, path::Path};
 
-pub(crate) fn native_arch(path: &Path, arch: Architecture) -> bool {
-    fs::read(path)
-        .ok()
-        .and_then(|data| {
-            crate::binary_image::slices(&data, None).ok().map(|images| {
-                images.iter().any(|image| {
-                    object::File::parse(*image).is_ok_and(|f| {
-                        f.format() == BinaryFormat::MachO && f.architecture() == arch
-                    })
-                })
-            })
+pub(crate) fn check_macho_file(
+    path: &Path,
+    mut check: impl FnMut(&object::File<'_, object::read::ReadCacheRange<'_, fs::File>>) -> bool,
+) -> bool {
+    let Ok(file) = fs::File::open(path) else {
+        return false;
+    };
+    let Ok(file_len) = file.metadata().map(|m| m.len()) else {
+        return false;
+    };
+    let cache = object::read::ReadCache::new(file);
+    let check_fat = |arches: Vec<(u64, u64)>,
+                     check: &mut dyn FnMut(
+        &object::File<'_, object::read::ReadCacheRange<'_, fs::File>>,
+    ) -> bool|
+     -> bool {
+        if !arches
+            .iter()
+            .all(|&(offset, size)| offset.checked_add(size).is_some_and(|end| end <= file_len))
+        {
+            return false;
+        }
+        arches.into_iter().any(|(offset, size)| {
+            let slice = cache.range(offset, size);
+            object::File::parse(slice).is_ok_and(|f| check(&f))
         })
-        .unwrap_or(false)
+    };
+    use object::{
+        FileKind,
+        read::macho::{FatArch, MachOFatFile32, MachOFatFile64},
+    };
+    match FileKind::parse(&cache) {
+        Ok(FileKind::MachOFat32) => MachOFatFile32::parse(&cache).is_ok_and(|fat| {
+            let arches = fat
+                .arches()
+                .iter()
+                .map(|a| (u64::from(a.offset()), u64::from(a.size())))
+                .collect();
+            check_fat(arches, &mut check)
+        }),
+        Ok(FileKind::MachOFat64) => MachOFatFile64::parse(&cache).is_ok_and(|fat| {
+            let arches = fat
+                .arches()
+                .iter()
+                .map(|a| (a.offset(), a.size()))
+                .collect();
+            check_fat(arches, &mut check)
+        }),
+        Ok(_) => {
+            let slice = cache.range(0, file_len);
+            object::File::parse(slice).is_ok_and(|f| check(&f))
+        }
+        Err(_) => false,
+    }
+}
+
+pub(crate) fn native_arch(path: &Path, arch: Architecture) -> bool {
+    check_macho_file(path, |f| {
+        f.format() == BinaryFormat::MachO && f.architecture() == arch
+    })
 }
 
 #[cfg(test)]
@@ -72,9 +119,15 @@ pub(crate) fn dxmt(bundle: &crate::dxmt::DxmtBundle, root: &Path, is64: bool) ->
         })
 }
 
+pub(crate) fn pe_abi_file(path: &Path) -> Result<PeAbi> {
+    let file = fs::File::open(path)?;
+    let cache = object::read::ReadCache::new(file);
+    pe_abi_from(&cache)
+}
+
 pub(crate) fn pe(path: Option<&Path>, is64: bool) -> bool {
-    path.and_then(|p| fs::read(p).ok()).is_some_and(|data| {
-        pe_abi(&data).is_ok_and(|abi| abi == if is64 { PeAbi::X64 } else { PeAbi::X86 })
+    path.is_some_and(|p| {
+        pe_abi_file(p).is_ok_and(|abi| abi == if is64 { PeAbi::X64 } else { PeAbi::X86 })
     })
 }
 
@@ -87,9 +140,7 @@ pub(crate) fn graphics_pe(
     if abi == crate::runtime::FrontendAbi::X64 {
         return pe(path, is64);
     }
-    is64 && path
-        .and_then(|p| fs::read(p).ok())
-        .is_some_and(|data| pe_abi(&data).is_ok_and(|abi| abi == PeAbi::Arm64Ec))
+    is64 && path.is_some_and(|p| pe_abi_file(p).is_ok_and(|abi| abi == PeAbi::Arm64Ec))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -176,29 +227,38 @@ pub(crate) fn vulkan_arch(icd: &Path, arch: Architecture) -> bool {
     native_arch(&manifest.library, arch)
 }
 
-pub(crate) fn has_export(data: &[u8], aliases: &[&str]) -> bool {
-    crate::binary_image::slices(data, None).is_ok_and(|images| {
-        images.iter().any(|image| {
-            object::File::parse(*image).is_ok_and(|f| {
-                f.symbols().chain(f.dynamic_symbols()).any(|s| {
-                    s.is_definition()
-                        && s.is_global()
-                        && s.name()
-                            .is_ok_and(|name| aliases.contains(&name.trim_start_matches('_')))
-                }) || f.exports().is_ok_and(|mut exports| {
-                    exports.any(|e| {
-                        e.is_ok_and(|e| {
-                            e.name().into_name().is_some_and(|name| {
-                                std::str::from_utf8(name).is_ok_and(|name| {
-                                    aliases.contains(&name.trim_start_matches('_'))
-                                })
-                            })
-                        })
-                    })
+pub(crate) fn file_has_export<'data, R: object::read::ReadRef<'data>>(
+    f: &object::File<'data, R>,
+    aliases: &[&str],
+) -> bool {
+    f.symbols().chain(f.dynamic_symbols()).any(|s| {
+        s.is_definition()
+            && s.is_global()
+            && s.name()
+                .is_ok_and(|name| aliases.contains(&name.trim_start_matches('_')))
+    }) || f.exports().is_ok_and(|mut exports| {
+        exports.any(|e| {
+            e.is_ok_and(|e| {
+                e.name().into_name().is_some_and(|name| {
+                    std::str::from_utf8(name)
+                        .is_ok_and(|name| aliases.contains(&name.trim_start_matches('_')))
                 })
             })
         })
     })
+}
+
+#[cfg(test)]
+pub(crate) fn has_export(data: &[u8], aliases: &[&str]) -> bool {
+    crate::binary_image::slices(data, None).is_ok_and(|images| {
+        images
+            .iter()
+            .any(|image| object::File::parse(*image).is_ok_and(|f| file_has_export(&f, aliases)))
+    })
+}
+
+pub(crate) fn has_export_file(path: &Path, aliases: &[&str]) -> bool {
+    check_macho_file(path, |f| file_has_export(f, aliases))
 }
 
 #[cfg(test)]

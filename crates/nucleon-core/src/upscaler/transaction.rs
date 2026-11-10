@@ -767,16 +767,19 @@ pub fn prepare(root: &Path, installation: &Installation, resolved: &Resolved) ->
     }
     if metalfx {
         let source = assets::fake_nvapi(root)?;
-        files.insert("OptiScaler/fakenvapi.dll".into(), fs::read(&source)?);
-        support.insert(source.clone(), crate::staging::digest(&source)?);
+        let fakenvapi = fs::read(&source)?;
+        let fakenvapi_digest = crate::staging::digest_reader(&mut fakenvapi.as_slice())?;
+        files.insert("OptiScaler/fakenvapi.dll".into(), fakenvapi);
+        support.insert(source.clone(), fakenvapi_digest);
         changes.insert(
             ("Libraries".into(), "NvapiPath".into()),
             windows(&installation.directory.join("OptiScaler/fakenvapi.dll")),
         );
     }
     if let Some(bridge) = &resolved.bridge {
-        let manifest = assets::bridge_provider(root, bridge)?;
-        let provider = assets::read_provider(&manifest)?;
+        let bridge_bytes = fs::read(bridge)?;
+        let bridge_digest = crate::staging::digest_reader(&mut bridge_bytes.as_slice())?;
+        let (manifest, provider) = assets::bridge_provider_for_digest(root, &bridge_digest)?;
         let directory = manifest.parent().unwrap();
         support.extend(
             provider
@@ -798,18 +801,17 @@ pub fn prepare(root: &Path, installation: &Installation, resolved: &Resolved) ->
         // Static NGX accepts Wine's builtin PE entry before LoadLibrary is
         // intercepted by OptiScaler. Actual calls use the forwarder in
         // NvngxPath, preserving the real bridge's original module name.
-        files.insert("nvngx.dll".into(), fs::read(bridge)?);
-        files.insert("nvngx-on-metalfx.dll".into(), fs::read(bridge)?);
-        support.insert(bridge.clone(), crate::staging::digest(bridge)?);
+        files.insert("nvngx.dll".into(), bridge_bytes.clone());
+        files.insert("nvngx-on-metalfx.dll".into(), bridge_bytes);
+        support.insert(bridge.clone(), bridge_digest);
         env.insert("D3DM_ENABLE_METALFX".into(), "1".into());
     }
     if resolved.patcher {
         let patcher = assets::verify_patcher(root)?;
-        files.insert(
-            "OptiScaler/plugins/OptiPatcher.asi".into(),
-            fs::read(&patcher)?,
-        );
-        support.insert(patcher.clone(), crate::staging::digest(&patcher)?);
+        let patcher_bytes = fs::read(&patcher)?;
+        let patcher_digest = crate::staging::digest_reader(&mut patcher_bytes.as_slice())?;
+        files.insert("OptiScaler/plugins/OptiPatcher.asi".into(), patcher_bytes);
+        support.insert(patcher, patcher_digest);
     }
     if let Some(native) = &resolved.native_provider {
         let native_root = native.parent().unwrap();
@@ -1050,13 +1052,16 @@ pub(super) fn migrate_talos_checked(
         crate::staging::digest(&framework)? == original_digest,
         "Original GPTK framework changed"
     );
-    support_files.insert(framework, original_digest.into());
     for (p, h) in &support_files {
+        if p == &framework {
+            continue;
+        }
         ensure!(
             crate::staging::digest(p)? == *h,
             "Talos support file changed"
         );
     }
+    support_files.insert(framework, original_digest.into());
     let environment: BTreeMap<String, String> =
         serde_json::from_value(profile["environment"].clone())?;
     let binding = Binding {

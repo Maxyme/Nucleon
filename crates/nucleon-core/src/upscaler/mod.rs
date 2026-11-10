@@ -235,8 +235,7 @@ pub fn resolve(
                 "Native provider identity/version differs from the selected model"
             );
             ensure!(
-                provider.framework_sha256.as_deref()
-                    == Some(crate::staging::digest(&framework.join("D3DMetal"))?.as_str()),
+                provider.framework_sha256.as_deref() == Some(digest.as_str()),
                 "Prepared native hook belongs to a different GPTK framework; prepare it again"
             );
             resolved.native_provider = Some(manifest);

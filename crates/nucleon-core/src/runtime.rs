@@ -44,6 +44,8 @@ pub struct GraphicsPaths {
     pub vkd3d: Option<PathBuf>,
     pub vulkan_icd: Option<PathBuf>,
     pub vulkan_loader: Option<PathBuf>,
+    #[serde(skip)]
+    pub(crate) verified_frontend_digests: BTreeMap<PathBuf, (crate::staging::Identity, String)>,
 }
 
 /// Graphics implementation ABI, independent of the game's guest ABI.
@@ -253,8 +255,10 @@ impl ResolvedRuntime {
         );
         let core_abis = windows_dirs
             .iter()
-            .filter_map(|p| fs::read(p.join("ntdll.dll")).ok())
-            .map(|data| runtime_checks::pe_abi(&data))
+            .filter_map(|p| {
+                let dll = p.join("ntdll.dll");
+                dll.is_file().then(|| runtime_checks::pe_abi_file(&dll))
+            })
             .collect::<Result<Vec<_>>>()?;
         for guest in &d.guests {
             let compatible = match (d.mode, guest) {
@@ -296,10 +300,7 @@ impl ResolvedRuntime {
                 ensure!(
                     companion.parent() == Some(unix_dir.as_path())
                         && runtime_checks::native_arch(&companion, arch)
-                        && runtime_checks::has_export(
-                            &fs::read(&companion)?,
-                            &["wine_unix_call_funcs"]
-                        ),
+                        && runtime_checks::has_export_file(&companion, &["wine_unix_call_funcs"]),
                     "Invalid FEX Unix companion {}: expected a native library in unix_dir exporting __wine_unix_call_funcs",
                     companion.display()
                 );
@@ -315,7 +316,7 @@ impl ResolvedRuntime {
                         "Experimental ARM64EC graphics requires the paired libarm64ecfex.dll/so boundary"
                     );
                 }
-                let abi = runtime_checks::pe_abi(&fs::read(&module)?)?;
+                let abi = runtime_checks::pe_abi_file(&module)?;
                 let expected = match guest {
                     GuestAbi::X64 => runtime_checks::PeAbi::Arm64Ec,
                     GuestAbi::X86 => runtime_checks::PeAbi::Arm64,
@@ -370,6 +371,7 @@ impl ResolvedRuntime {
             vkd3d: optional(d.graphics.vkd3d, true)?,
             vulkan_icd: optional(d.graphics.vulkan_icd, false)?,
             vulkan_loader: optional(d.graphics.vulkan_loader, false)?,
+            verified_frontend_digests: BTreeMap::new(),
         };
         if let Some(loader) = &graphics.vulkan_loader {
             ensure!(
@@ -377,7 +379,7 @@ impl ResolvedRuntime {
                 "Vulkan loader architecture does not match Wine"
             );
             ensure!(
-                runtime_checks::has_export(&fs::read(loader)?, &["vkGetInstanceProcAddr"]),
+                runtime_checks::has_export_file(loader, &["vkGetInstanceProcAddr"]),
                 "Vulkan loader does not export vkGetInstanceProcAddr"
             );
         }
@@ -393,7 +395,7 @@ impl ResolvedRuntime {
                 "Bundled Vulkan ICD library must stay inside the runtime and match its native ABI"
             );
         }
-        let runtime = Self {
+        let mut runtime = Self {
             root: root.to_owned(),
             mode: d.mode,
             prefix,
@@ -408,7 +410,7 @@ impl ResolvedRuntime {
             steam_protocols,
             graphics,
         };
-        crate::frontend::validate_declared(&runtime)?;
+        crate::frontend::validate_declared(&mut runtime)?;
         Ok(runtime)
     }
 

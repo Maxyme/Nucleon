@@ -28,24 +28,49 @@ impl WineRuntime {
 }
 
 fn query_wine_version(wine_bin: &Path) -> Option<String> {
+    use std::collections::BTreeMap;
+    use std::sync::{Mutex, OnceLock};
+    type VersionCache = BTreeMap<PathBuf, (crate::staging::Identity, Option<String>)>;
+    static CACHE: OnceLock<Mutex<VersionCache>> = OnceLock::new();
+    let canonical = wine_bin
+        .canonicalize()
+        .unwrap_or_else(|_| wine_bin.to_path_buf());
+    let identity = fs::metadata(&canonical)
+        .ok()
+        .map(|m| crate::staging::Identity::from(&m));
+    if let Some(ref id) = identity
+        && let Ok(guard) = CACHE.get_or_init(|| Mutex::new(BTreeMap::new())).lock()
+        && let Some((cached_id, cached_ver)) = guard.get(&canonical)
+        && cached_id == id
+    {
+        return cached_ver.clone();
+    }
+
     let mut command = Command::new(wine_bin);
     crate::launch_profile::clean_profile_command(&mut command);
     command.arg("--version");
     // Steam's injected loader/overlay can hang even `wine --version`. Discovery must be bounded,
     // must not block on descendants retaining stdout, and must not bootstrap a prefix.
-    let output = crate::process::output_with_timeout(
+    let version = crate::process::output_with_timeout(
         &mut command,
         std::time::Duration::from_secs(2),
         64 * 1024,
     )
-    .ok()?;
-    if output.status.success() {
-        let v = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if !v.is_empty() {
-            return Some(v);
-        }
+    .ok()
+    .and_then(|output| {
+        output
+            .status
+            .success()
+            .then(|| String::from_utf8_lossy(&output.stdout).trim().to_string())
+    })
+    .filter(|v| !v.is_empty());
+
+    if let Some(id) = identity
+        && let Ok(mut guard) = CACHE.get_or_init(|| Mutex::new(BTreeMap::new())).lock()
+    {
+        guard.insert(canonical, (id, version.clone()));
     }
-    None
+    version
 }
 
 /// Helper to check if a directory contains a valid Wine executable and wineserver.
@@ -232,10 +257,9 @@ pub fn inspect_wine_dir(
         actual_root.join("bin/wine64")
     };
 
-    let mut version = query_wine_version(&wine_bin);
-    if version.is_none() {
-        version = extract_bundle_version(dir).or_else(|| extract_bundle_version(&actual_root));
-    }
+    let version = extract_bundle_version(dir)
+        .or_else(|| extract_bundle_version(&actual_root))
+        .or_else(|| query_wine_version(&wine_bin));
 
     let name = name_override
         .map(|n| n.to_string())
@@ -280,26 +304,38 @@ pub fn save_custom_wines(records: &[CustomWineRecord]) -> Result<()> {
 pub fn discover_wine_runtimes() -> Vec<WineRuntime> {
     let mut runtimes = Vec::new();
     let mut seen_roots = std::collections::HashSet::new();
+    let mut try_add = |cand: &Path, id: Option<&str>, name: Option<&str>| {
+        let Some(actual_root) = resolve_wine_runtime_root(cand) else {
+            return;
+        };
+        if seen_roots.contains(&actual_root) {
+            return;
+        }
+        if actual_root.join(crate::runtime::DESCRIPTOR).is_file()
+            && let Ok(canonical) = actual_root.canonicalize()
+            && seen_roots.contains(&canonical)
+        {
+            return;
+        }
+        if let Some(rt) = inspect_wine_dir(cand, id, name)
+            && seen_roots.insert(rt.root.clone())
+        {
+            seen_roots.insert(actual_root);
+            runtimes.push(rt);
+        }
+    };
 
     // 1. Explicit environment variable: NUCLEON_WINE_PATH or WINE_PATH
     for var in &["NUCLEON_WINE_PATH", "WINE_PATH"] {
         if let Ok(p) = std::env::var(var) {
             let path = PathBuf::from(p);
-            if let Some(rt) = inspect_wine_dir(&path, None, None)
-                && seen_roots.insert(rt.root.clone())
-            {
-                runtimes.push(rt);
-            }
+            try_add(&path, None, None);
         }
     }
 
     // 2. Custom runtimes persisted via `custom_wines.json`
     for record in load_custom_wines() {
-        if let Some(rt) = inspect_wine_dir(&record.path, Some(&record.id), Some(&record.name))
-            && seen_roots.insert(rt.root.clone())
-        {
-            runtimes.push(rt);
-        }
+        try_add(&record.path, Some(&record.id), Some(&record.name));
     }
 
     // 3. Scan Heroic Games Launcher tools directory
@@ -309,11 +345,8 @@ pub fn discover_wine_runtimes() -> Vec<WineRuntime> {
     {
         for entry in entries.flatten() {
             let p = entry.path();
-            if p.is_dir()
-                && let Some(rt) = inspect_wine_dir(&p, None, None)
-                && seen_roots.insert(rt.root.clone())
-            {
-                runtimes.push(rt);
+            if p.is_dir() {
+                try_add(&p, None, None);
             }
         }
     }
@@ -326,12 +359,7 @@ pub fn discover_wine_runtimes() -> Vec<WineRuntime> {
         PathBuf::from("/usr/local/opt/wine-staging"),
     ];
     for cand in &brew_candidates {
-        if let Some(rt) =
-            inspect_wine_dir(cand, Some("brew-staging"), Some("Homebrew Wine-Staging"))
-            && seen_roots.insert(rt.root.clone())
-        {
-            runtimes.push(rt);
-        }
+        try_add(cand, Some("brew-staging"), Some("Homebrew Wine-Staging"));
     }
 
     // 5. Scan Whisky, CrossOver, and Wine Staging app installations
@@ -403,11 +431,7 @@ pub fn discover_wine_runtimes() -> Vec<WineRuntime> {
         ),
     ];
     for (cand, id, name) in &app_candidates {
-        if let Some(rt) = inspect_wine_dir(cand, Some(id), Some(name))
-            && seen_roots.insert(rt.root.clone())
-        {
-            runtimes.push(rt);
-        }
+        try_add(cand, Some(id), Some(name));
     }
 
     // Dynamically check Applications directories for any CrossOver*.app
@@ -420,13 +444,8 @@ pub fn discover_wine_runtimes() -> Vec<WineRuntime> {
                 let p = entry.path();
                 if p.is_dir() {
                     let name_str = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                    if name_str.starts_with("CrossOver")
-                        && name_str.ends_with(".app")
-                        && let Some(rt) =
-                            inspect_wine_dir(&p, Some("crossover"), Some("CrossOver Wine"))
-                        && seen_roots.insert(rt.root.clone())
-                    {
-                        runtimes.push(rt);
+                    if name_str.starts_with("CrossOver") && name_str.ends_with(".app") {
+                        try_add(&p, Some("crossover"), Some("CrossOver Wine"));
                     }
                 }
             }
@@ -450,11 +469,7 @@ pub fn discover_wine_runtimes() -> Vec<WineRuntime> {
                 } else {
                     None
                 };
-                if let Some(rt) = inspect_wine_dir(&p, id_override, None)
-                    && seen_roots.insert(rt.root.clone())
-                {
-                    runtimes.push(rt);
-                }
+                try_add(&p, id_override, None);
             }
         }
     }
@@ -483,11 +498,7 @@ pub fn discover_wine_runtimes() -> Vec<WineRuntime> {
         ),
     ];
     for (cand, id, name) in &gptk_candidates {
-        if let Some(rt) = inspect_wine_dir(cand, Some(id), Some(name))
-            && seen_roots.insert(rt.root.clone())
-        {
-            runtimes.push(rt);
-        }
+        try_add(cand, Some(id), Some(name));
     }
 
     let custom_ids: std::collections::HashSet<String> =

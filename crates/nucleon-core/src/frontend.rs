@@ -44,7 +44,7 @@ struct Contract {
     builds: BTreeMap<String, Build>,
 }
 
-pub(crate) fn validate_declared(runtime: &ResolvedRuntime) -> Result<()> {
+pub(crate) fn validate_declared(runtime: &mut ResolvedRuntime) -> Result<()> {
     if runtime.graphics.frontend_abi == FrontendAbi::X64 {
         ensure!(
             runtime.graphics.frontend_manifest.is_none(),
@@ -105,15 +105,24 @@ pub(crate) fn validate_declared(runtime: &ResolvedRuntime) -> Result<()> {
         }],
         ..Default::default()
     };
-    validate_selected(runtime, &selected)
+    let verified = validate_selected_digests(runtime, &selected)?;
+    runtime.graphics.verified_frontend_digests = verified;
+    Ok(())
 }
 
 pub(crate) fn validate_selected(
     runtime: &ResolvedRuntime,
     selected: &GraphicsComponents,
 ) -> Result<()> {
+    validate_selected_digests(runtime, selected).map(|_| ())
+}
+
+fn validate_selected_digests(
+    runtime: &ResolvedRuntime,
+    selected: &GraphicsComponents,
+) -> Result<BTreeMap<PathBuf, (crate::staging::Identity, String)>> {
     if runtime.graphics.frontend_abi == FrontendAbi::X64 {
-        return Ok(());
+        return Ok(BTreeMap::new());
     }
     ensure!(
         runtime.mode == ExecutionMode::Arm64Fex && runtime.guests == [GuestAbi::X64],
@@ -137,6 +146,7 @@ pub(crate) fn validate_selected(
         path.display()
     );
     let mut covered = BTreeMap::new();
+    let mut verified_digests = BTreeMap::new();
     for (relative, digest) in &contract.files {
         ensure!(
             !relative.as_os_str().is_empty()
@@ -156,12 +166,32 @@ pub(crate) fn validate_selected(
             "Frontend pairing file escapes runtime: {}",
             relative.display()
         );
+        let meta = fs::symlink_metadata(&file)
+            .with_context(|| format!("Inspect frontend pairing file {}", file.display()))?;
+        let identity = crate::staging::Identity::from(&meta);
+        let actual = if let Some((cached_id, cached_digest)) =
+            runtime.graphics.verified_frontend_digests.get(&file)
+            && cached_id == &identity
+        {
+            cached_digest.clone()
+        } else if let Some(known) = crate::managed_runtime::known_digest(&file, &identity) {
+            known?
+        } else {
+            let computed = crate::staging::digest(&file)?;
+            ensure!(
+                crate::staging::Identity::from(&fs::symlink_metadata(&file)?) == identity,
+                "Frontend pairing file changed while hashing: {}",
+                file.display()
+            );
+            computed
+        };
         ensure!(
-            crate::staging::digest(&file)? == *digest,
+            actual == *digest,
             "Frontend pairing digest mismatch: {}",
             file.display()
         );
-        covered.insert(file, digest);
+        covered.insert(file.clone(), digest);
+        verified_digests.insert(file, (identity, actual));
     }
     let require = |file: &Path| -> Result<&String> {
         covered
@@ -338,7 +368,7 @@ pub(crate) fn validate_selected(
             && vkd3d.x86_d3d12core.is_none(),
         "Experimental ARM64EC pairing supports only the pinned x64-guest DX11/DX12 component set"
     );
-    Ok(())
+    Ok(verified_digests)
 }
 
 #[cfg(test)]
