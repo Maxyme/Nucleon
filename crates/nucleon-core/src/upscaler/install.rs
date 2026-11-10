@@ -223,7 +223,7 @@ fn stock(root: &Path, provider: &str, archive: Option<&Path>) -> Result<()> {
 }
 
 fn bridge(root: &Path, wine: &Path) -> Result<()> {
-    let path = wine.join("lib/wine/x86_64-windows/nvngx-on-metalfx.dll");
+    let path = super::gptk_ngx_bridge_dll(wine);
     let bytes = fs::read(&path).context("Selected Wine has no NGX bridge")?;
     let names = ngx::exports(&bytes)?;
     let digest = digest_reader(&mut bytes.as_slice())?;
@@ -266,7 +266,8 @@ fn native(
     archive: Option<&Path>,
 ) -> Result<()> {
     let wine = wine.canonicalize()?;
-    let digest = crate::staging::digest(&wine.join("lib/external/D3DMetal.framework/D3DMetal"))?;
+    let framework = super::gptk_framework_binary(&wine);
+    let digest = crate::staging::digest(&framework)?;
     let target = root
         .join("providers")
         .join(model.provider())
@@ -274,8 +275,7 @@ fn native(
     generation(&target, model.provider(), |stage| {
         super::native::build(root, &stage.join("fsr4"), &wine, source, model, archive)?;
         ensure!(
-            crate::staging::digest(&wine.join("lib/external/D3DMetal.framework/D3DMetal"))?
-                == digest,
+            crate::staging::digest(&framework)? == digest,
             "Original GPTK framework changed during build"
         );
         manifest(stage, model.provider(), model.version(), Some(digest))

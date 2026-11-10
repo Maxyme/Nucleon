@@ -74,15 +74,17 @@ fn requested_upscaler(
     environment: Option<&str>,
     profile: &GameProfile,
 ) -> Result<Option<nucleon_core::upscaler::Settings>> {
-    if let Some(settings) = temporary.and_then(|p| p.upscaler.clone()) {
-        return Ok(Some(settings));
-    }
-    if let Some(value) = environment {
-        return Ok(Some(nucleon_core::upscaler::Settings::selected(
-            value.parse()?,
-        )));
-    }
-    Ok(profile.upscaler.clone())
+    let primary = if let Some(settings) = temporary.and_then(|p| p.upscaler.clone()) {
+        Some(settings)
+    } else if let Some(value) = environment {
+        Some(nucleon_core::upscaler::Settings::selected(value.parse()?))
+    } else {
+        None
+    };
+    Ok(nucleon_core::upscaler::Settings::merge(
+        primary,
+        profile.upscaler.clone(),
+    ))
 }
 
 fn validate_graphics_paths(
@@ -718,8 +720,19 @@ fn resolve_steam_launch(request: &SteamRequest) -> Result<ResolvedLaunch> {
     let render_target = effective_profile
         .upscaler
         .as_ref()
-        .and_then(|s| s.renderer.as_ref())
-        .map(|renderer| target_exe.parent().unwrap_or(Path::new(".")).join(renderer))
+        .and_then(|s| {
+            s.renderer
+                .as_ref()
+                .map(|renderer| target_exe.parent().unwrap_or(Path::new(".")).join(renderer))
+                .or_else(|| {
+                    (s.backend != nucleon_core::upscaler::Backend::Game).then(|| {
+                        nucleon_core::upscaler::bound_renderer(
+                            &nucleon_core::upscaler::root(),
+                            &target_exe,
+                        )
+                    })?
+                })
+        })
         .unwrap_or_else(|| target_exe.clone());
     let detection = nucleon_core::detector::detect_target_engine(&render_target);
     let graphics_api = effective_profile.graphics_api(&render_target, &detection.api)?;
@@ -1424,9 +1437,13 @@ mod tests {
 
     #[test]
     fn upscaler_precedence_preserves_explicit_game_and_reports_invalid_values() {
-        use nucleon_core::upscaler::{Backend, Settings};
+        use nucleon_core::upscaler::{Backend, Input, Settings};
         let profile = GameProfile {
-            upscaler: Some(Settings::selected(Backend::Fsr2)),
+            upscaler: Some(Settings {
+                backend: Backend::Fsr2,
+                input: Input::Dlss,
+                renderer: Some("Project/Binaries/Win64/Project-Win64-Shipping.exe".into()),
+            }),
             ..Default::default()
         };
         let temporary = GameProfile {
@@ -1440,12 +1457,14 @@ mod tests {
                 .backend,
             Backend::Game
         );
+        let env_selected = requested_upscaler(None, Some("fsr3.1"), &profile)
+            .unwrap()
+            .unwrap();
+        assert_eq!(env_selected.backend, Backend::Fsr31);
+        assert_eq!(env_selected.input, Input::Dlss);
         assert_eq!(
-            requested_upscaler(None, Some("fsr3.1"), &profile)
-                .unwrap()
-                .unwrap()
-                .backend,
-            Backend::Fsr31
+            env_selected.renderer,
+            Some("Project/Binaries/Win64/Project-Win64-Shipping.exe".into())
         );
         assert!(requested_upscaler(None, Some("bad"), &profile).is_err());
         assert_eq!(

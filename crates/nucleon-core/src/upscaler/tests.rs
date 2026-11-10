@@ -789,3 +789,124 @@ fn metalfx_fake_nvapi_must_be_present_verified_and_x64() {
     assert!(assets::fake_nvapi(&f.root).is_err());
     assert!(!f.root.join("games").exists());
 }
+
+#[test]
+fn status_reports_active_observation_and_stock_optiscaler_log_lifecycle() {
+    let f = Fixture::new();
+    let binding = f.prepare(Backend::Fsr2).unwrap();
+    let installation = Installation::existing(&f.root, &f.exe).unwrap().unwrap();
+    assert_eq!(
+        status(&f.root, &f.exe).unwrap()["activation"],
+        "not-observed"
+    );
+    let log_path = installation.state.join("logs/OptiScaler.log");
+    fs::write(&log_path, "OptiScaler initialized\n").unwrap();
+    assert_eq!(
+        observation(&binding).unwrap()["activation"],
+        "optiscaler-log-present"
+    );
+    let report = status(&f.root, &f.exe).unwrap();
+    assert_eq!(report["activation"], "optiscaler-log-present");
+    assert_eq!(
+        report["last_native_report"]["activation"],
+        "optiscaler-log-present"
+    );
+    begin_observation(&binding).unwrap();
+    assert!(!log_path.exists());
+    assert_eq!(observation(&binding).unwrap()["activation"], "not-observed");
+    assert_eq!(
+        status(&f.root, &f.exe).unwrap()["activation"],
+        "not-observed"
+    );
+}
+
+#[test]
+fn input_detection_ignores_staged_optiscaler_recognizes_fsr_dlls_and_checks_launcher_root() {
+    let f = Fixture::new();
+    let game_root = f.exe.parent().unwrap();
+    let shipping = game_root.join("Project/Binaries/Win64/Project-Win64-Shipping.exe");
+    fs::create_dir_all(shipping.parent().unwrap()).unwrap();
+    fs::copy(&f.exe, &shipping).unwrap();
+
+    // Staged OptiScaler DLLs must never be mistaken for game-shipped upscaler inputs.
+    let staged = shipping.parent().unwrap().join("OptiScaler");
+    fs::create_dir_all(&staged).unwrap();
+    fs::write(staged.join("libxess.dll"), b"staged xess").unwrap();
+    assert!(detect_input_for(&shipping, &f.exe).is_err());
+
+    // Unreal Engine plugin DLL under the launcher's root directory is discovered when
+    // the Binaries/Win64 directory contains only the shipping executable.
+    let dlss_plugin =
+        game_root.join("Engine/Plugins/Runtime/Nvidia/DLSS/Binaries/ThirdParty/Win64");
+    fs::create_dir_all(&dlss_plugin).unwrap();
+    fs::write(dlss_plugin.join("nvngx_dlss.dll"), b"dlss").unwrap();
+    assert_eq!(detect_input_for(&shipping, &f.exe).unwrap(), Input::Dlss);
+    fs::remove_dir_all(game_root.join("Engine")).unwrap();
+
+    for (dll, expected) in [
+        ("ffx_fsr2_api_dx12_x64.dll", Input::Fsr2),
+        ("ffx_fsr3upscaler_x64.dll", Input::Fsr3),
+        ("amd_fidelityfx_dx12.dll", Input::Fsr31),
+    ] {
+        let dll_path = shipping.parent().unwrap().join(dll);
+        fs::write(&dll_path, b"sdk").unwrap();
+        assert_eq!(detect_input_for(&shipping, &f.exe).unwrap(), expected);
+        fs::remove_file(&dll_path).unwrap();
+    }
+}
+
+#[test]
+fn settings_merge_preserves_input_and_renderer_and_bound_renderer_resolves_target() {
+    let saved = Settings {
+        backend: Backend::Fsr2,
+        input: Input::Dlss,
+        renderer: Some(PathBuf::from(
+            "Project/Binaries/Win64/Project-Win64-Shipping.exe",
+        )),
+    };
+    let merged = Settings::merge(
+        Some(Settings::selected(Backend::Fsr31)),
+        Some(saved.clone()),
+    )
+    .expect("merged settings");
+    assert_eq!(merged.backend, Backend::Fsr31);
+    assert_eq!(merged.input, Input::Dlss);
+    assert_eq!(merged.renderer, saved.renderer);
+
+    let f = Fixture::new();
+    let game_root = f.exe.parent().unwrap();
+    let shipping = game_root.join("Project/Binaries/Win64/Project-Win64-Shipping.exe");
+    fs::create_dir_all(shipping.parent().unwrap()).unwrap();
+    fs::copy(&f.exe, &shipping).unwrap();
+    let resolved = resolve(&f.root, &f.plan, &f.exe, &saved).unwrap();
+    let installation = Installation::open(&f.root, &resolved).unwrap();
+    prepare(&f.root, &installation, &resolved).unwrap();
+    assert_eq!(
+        bound_renderer(&f.root, &f.exe),
+        Some(shipping.canonicalize().unwrap())
+    );
+}
+
+#[test]
+fn gptk_helpers_support_redist_layout_and_fallback_paths() {
+    let dir = tempfile::tempdir().unwrap();
+    let redist_fw = dir.path().join("redist/lib/external/D3DMetal.framework");
+    let redist_win = dir.path().join("redist/lib/wine/x86_64-windows");
+    fs::create_dir_all(&redist_fw).unwrap();
+    fs::create_dir_all(&redist_win).unwrap();
+    fs::write(redist_fw.join("D3DMetal"), b"d3dmetal").unwrap();
+    fs::write(
+        dir.path().join("redist/lib/external/libd3dshared.dylib"),
+        b"shared",
+    )
+    .unwrap();
+    fs::write(redist_win.join("nvngx-on-metalfx.dll"), b"bridge").unwrap();
+    assert_eq!(
+        gptk_framework_binary(dir.path()),
+        redist_fw.join("D3DMetal")
+    );
+    assert_eq!(
+        gptk_ngx_bridge_dll(dir.path()),
+        redist_win.join("nvngx-on-metalfx.dll")
+    );
+}

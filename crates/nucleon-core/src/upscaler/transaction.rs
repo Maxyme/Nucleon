@@ -109,7 +109,7 @@ pub(crate) fn lock(path: &Path) -> Result<fs::File> {
         .context("Another command or running game owns this upscaler installation")?;
     Ok(file)
 }
-fn identity(path: &Path) -> Result<String> {
+pub(super) fn identity(path: &Path) -> Result<String> {
     crate::staging::key(&path)
 }
 fn index(root: &Path, exe: &Path) -> Result<PathBuf> {
@@ -143,6 +143,8 @@ pub(crate) fn lookup(root: &Path, exe: &Path) -> Result<Option<Binding>> {
         })
         .transpose()
 }
+type CurrentFingerprints = BTreeMap<PathBuf, Option<Fingerprint>>;
+
 impl Installation {
     pub fn open(root: &Path, resolved: &Resolved) -> Result<Self> {
         let directory = resolved
@@ -252,12 +254,17 @@ impl Installation {
         }
         Ok(target)
     }
-    fn validate(&self, journal: &Journal, allow_mutable: bool) -> Result<Vec<PathBuf>> {
+    fn validate(
+        &self,
+        journal: &Journal,
+        allow_mutable: bool,
+    ) -> Result<(Vec<PathBuf>, CurrentFingerprints)> {
         ensure!(
             journal.schema == 1 && journal.directory == self.directory,
             "Invalid game-local journal owner"
         );
         let mut mutable = vec![];
+        let mut current_files = BTreeMap::new();
         for entry in &journal.files {
             let current = fingerprint(&self.target(&entry.relative)?)?;
             if current != entry.installed && current != entry.original && current != entry.previous
@@ -280,8 +287,9 @@ impl Installation {
                     "Missing or changed original backup"
                 );
             }
+            current_files.insert(entry.relative.clone(), current);
         }
-        Ok(mutable)
+        Ok((mutable, current_files))
     }
     fn archive_settings(&self, mutable: &[PathBuf]) -> Result<()> {
         for relative in mutable {
@@ -305,12 +313,12 @@ impl Installation {
                 journal.status != "installing",
                 "Interrupted preparation; restore it before retrying"
             );
-            self.validate(journal, true)?;
+            let (_, current_files) = self.validate(journal, true)?;
             if journal.status == "prepared" {
                 for e in &journal.files {
                     if e.relative != Path::new("OptiScaler.ini") {
                         ensure!(
-                            fingerprint(&self.target(&e.relative)?)? == e.installed,
+                            current_files.get(&e.relative).and_then(Clone::clone) == e.installed,
                             "Prepared file changed: {}",
                             e.relative.display()
                         );
@@ -333,7 +341,11 @@ impl Installation {
         }
         Ok(())
     }
-    fn reconcile(&self, desired: &BTreeMap<PathBuf, Vec<u8>>) -> Result<()> {
+    fn reconcile(
+        &self,
+        desired: &BTreeMap<PathBuf, Vec<u8>>,
+        before_install: impl FnOnce() -> Result<()>,
+    ) -> Result<()> {
         let path = self.state.join("install.json");
         let prior: Option<Journal> = crate::configuration::optional_json(&path)?;
         let mut journal = prior.unwrap_or(Journal {
@@ -346,13 +358,13 @@ impl Installation {
             journal.status != "installing",
             "Interrupted upscaler preparation; run 'nucleon upscaler restore' first"
         );
-        let mutable = self.validate(&journal, true)?;
+        let (mutable, mut current_files) = self.validate(&journal, true)?;
         // A prepared installation must match every active executable exactly.
         if journal.status == "prepared" {
             for e in &journal.files {
                 if e.relative != Path::new("OptiScaler.ini") {
                     ensure!(
-                        fingerprint(&self.target(&e.relative)?)? == e.installed,
+                        current_files.get(&e.relative).and_then(Clone::clone) == e.installed,
                         "Prepared file is missing/changed: {}",
                         e.relative.display()
                     );
@@ -367,6 +379,7 @@ impl Installation {
                     "Existing unowned file {}; refusing to replace a mod or invent a DLL chain",
                     target.display()
                 );
+                current_files.insert(relative.clone(), None);
                 journal.files.push(FileRecord {
                     relative: relative.clone(),
                     original: None,
@@ -377,8 +390,9 @@ impl Installation {
             }
         }
         self.archive_settings(&mutable)?;
+        before_install()?;
         for e in &mut journal.files {
-            e.previous = fingerprint(&self.target(&e.relative)?)?;
+            e.previous = current_files.remove(&e.relative).unwrap_or(None);
             e.installed = if let Some(data) = desired.get(&e.relative) {
                 use sha2::{Digest, Sha256};
                 Some(Fingerprint {
@@ -395,7 +409,7 @@ impl Installation {
         let result = (|| -> Result<()> {
             for e in &journal.files {
                 let target = self.target(&e.relative)?;
-                if fingerprint(&target)? == e.installed {
+                if e.previous == e.installed {
                     continue;
                 }
                 if let Some(data) = desired.get(&e.relative) {
@@ -471,7 +485,7 @@ pub fn restore(installation: &Installation) -> Result<()> {
     let Some(mut journal) = crate::configuration::optional_json::<Journal>(&path)? else {
         return Ok(());
     };
-    let mutable = installation.validate(&journal, true)?;
+    let (mutable, _) = installation.validate(&journal, true)?;
     installation.archive_settings(&mutable)?;
     for e in journal.files.iter().rev() {
         restore_entry(&installation.target(&e.relative)?, e)?;
@@ -480,6 +494,13 @@ pub fn restore(installation: &Installation) -> Result<()> {
     save(&path, &journal)
 }
 pub fn status(root: &Path, exe: &Path) -> Result<serde_json::Value> {
+    status_checked(root, exe, |_| false)
+}
+fn status_checked(
+    root: &Path,
+    exe: &Path,
+    skip_support_file: impl Fn(&Path) -> bool,
+) -> Result<serde_json::Value> {
     let Some(binding) = lookup(root, exe)? else {
         return Ok(if legacy_conflict(root, &exe.canonicalize()?)? {
             serde_json::json!({"status":"legacy-prepared","activation":"not-observed","migration_required":true,"next":"nucleon upscaler migrate-talos"})
@@ -509,14 +530,18 @@ pub fn status(root: &Path, exe: &Path) -> Result<serde_json::Value> {
         }
     }
     for (path, expected) in &binding.support_files {
+        if skip_support_file(path) {
+            continue;
+        }
         if !path.is_file() || crate::staging::digest(path)? != *expected {
             changed.push(path.clone());
         }
     }
-    let observed = super::observation(&binding)?;
+    let observed = super::observation_in(&binding, Some(&state))?;
+    let activation = observed["activation"].as_str().unwrap_or("not-observed");
     Ok(
         serde_json::json!({"status":journal.status,"binding":binding,"changed_files":changed,
-        "settings_modified":settings_modified,"activation":"not-observed","last_native_report":observed,"state":state}),
+        "settings_modified":settings_modified,"activation":activation,"last_native_report":observed,"state":state}),
     )
 }
 fn windows(path: &Path) -> String {
@@ -652,7 +677,12 @@ pub fn prepare(root: &Path, installation: &Installation, resolved: &Resolved) ->
         && binding.native_provider == resolved.native_provider
         && installation.state.join("install.json").is_file()
     {
-        let report = status(root, &resolved.executable)?;
+        let provider_dir = resolved.provider.as_deref().and_then(Path::parent);
+        let native_dir = resolved.native_provider.as_deref().and_then(Path::parent);
+        let report = status_checked(root, &resolved.executable, |path| {
+            provider_dir.is_some_and(|dir| path.starts_with(dir))
+                || native_dir.is_some_and(|dir| path.starts_with(dir))
+        })?;
         ensure!(
             report["changed_files"]
                 .as_array()
@@ -877,7 +907,6 @@ pub fn prepare(root: &Path, installation: &Installation, resolved: &Resolved) ->
             &changes,
         )?,
     );
-    installation.preflight(&files)?;
     let binding = Binding {
         schema: 1,
         recipe_revision: RECIPE_REVISION,
@@ -901,18 +930,23 @@ pub fn prepare(root: &Path, installation: &Installation, resolved: &Resolved) ->
     let renderer_index = index(root, &binding.renderer)?;
     let had_exe_index = exe_index.is_file();
     let had_renderer_index = renderer_index.is_file();
-    // Publish the binding and alias before writes so interrupted first installs can be restored.
-    save(&installation.state.join("pending-binding.json"), &binding)?;
-    save(&exe_index, &installation.state)?;
-    save(&renderer_index, &installation.state)?;
-    if let Err(error) = installation.reconcile(&files) {
-        let interrupted = crate::configuration::optional_json::<Journal>(
-            &installation.state.join("install.json"),
-        )
-        .ok()
-        .flatten()
-        .is_some_and(|j| j.status == "installing");
-        if !interrupted {
+    let mut published_pending = false;
+    if let Err(error) = installation.reconcile(&files, || {
+        // Publish the binding and alias right before writes so interrupted first installs can be restored.
+        save(&installation.state.join("pending-binding.json"), &binding)?;
+        save(&exe_index, &installation.state)?;
+        save(&renderer_index, &installation.state)?;
+        published_pending = true;
+        Ok(())
+    }) {
+        let interrupted = published_pending
+            && crate::configuration::optional_json::<Journal>(
+                &installation.state.join("install.json"),
+            )
+            .ok()
+            .flatten()
+            .is_some_and(|j| j.status == "installing");
+        if published_pending && !interrupted {
             let _ = fs::remove_file(installation.state.join("pending-binding.json"));
             if !had_binding {
                 let _ = fs::remove_file(installation.state.join("install.json"));

@@ -219,7 +219,7 @@ impl GraphicsApiInfo {
 pub fn detect_target_engine(exe_path: &Path) -> GraphicsApiInfo {
     // Inspect the requested directory itself, never neighboring game directories.
     if exe_path.is_dir() {
-        return scan_directory_for_graphics_api(exe_path, 3)
+        return scan_directory_for_graphics_api(exe_path, 4)
             .unwrap_or_else(|| classify_libraries(&[]));
     }
     let primary = inspect_pe_file(exe_path).ok();
@@ -235,7 +235,7 @@ pub fn detect_target_engine(exe_path: &Path) -> GraphicsApiInfo {
 
     // 2. If unknown (e.g. wrapper launcher), scan neighboring and subdirectories for game binaries
     if let Some(parent) = exe_path.parent()
-        && let Some(info) = scan_directory_for_graphics_api(parent, 2)
+        && let Some(info) = scan_directory_for_graphics_api(parent, 4)
     {
         return info;
     }
@@ -247,8 +247,9 @@ pub fn detect_target_engine(exe_path: &Path) -> GraphicsApiInfo {
 // identify the API selected for a game; DirectX 11 is the usual Windows default. Treat this
 // as a fallback only, leaving an explicit game graphics setting free to override it.
 fn unity_default_graphics(exe_path: &Path) -> Option<GraphicsApiInfo> {
-    let exe = fs::read(exe_path).ok()?;
-    let (is64, libraries) = match object::File::parse(exe.as_slice()).ok()? {
+    let file = fs::File::open(exe_path).ok()?;
+    let cache = object::read::ReadCache::new(file);
+    let (is64, libraries) = match object::File::parse(&cache).ok()? {
         object::File::Pe32(file) => (false, pe_libraries(&file)),
         object::File::Pe64(file) => (true, pe_libraries(&file)),
         _ => return None,
@@ -283,8 +284,26 @@ fn unity_default_graphics(exe_path: &Path) -> Option<GraphicsApiInfo> {
 }
 
 pub fn inspect_pe_file(path: &Path) -> Result<GraphicsApiInfo, anyhow::Error> {
+    // Stream import tables via ReadCache first to avoid buffering whole 100+ MB game executables
+    // when standard or delay-load PE import descriptors already identify the graphics API.
+    if let Ok(file) = fs::File::open(path) {
+        let cache = object::read::ReadCache::new(file);
+        if let Ok(object::File::Pe32(pe)) = object::File::parse(&cache) {
+            let mut parsed = classify_libraries(&pe_libraries(&pe));
+            if parsed.api != GraphicsApi::Unknown {
+                parsed.binary = Some(path.to_path_buf());
+                return Ok(parsed);
+            }
+        } else if let Ok(object::File::Pe64(pe)) = object::File::parse(&cache) {
+            let mut parsed = classify_libraries(&pe_libraries(&pe));
+            if parsed.api != GraphicsApi::Unknown {
+                parsed.binary = Some(path.to_path_buf());
+                return Ok(parsed);
+            }
+        }
+    }
     // Own the bytes so concurrent file replacement/truncation cannot invalidate
-    // a borrowed mapping while object parsing is in progress.
+    // a borrowed mapping while heuristic scanning is in progress.
     let data = fs::read(path)?;
     let mut info = inspect_pe_bytes(&data)?;
     info.binary = Some(path.to_path_buf());
@@ -360,8 +379,8 @@ fn classify_libraries(libraries: &[(String, DetectionEvidence)]) -> GraphicsApiI
     }
 }
 
-fn pe_libraries<'data, Pe: object::read::pe::ImageNtHeaders>(
-    file: &object::read::pe::PeFile<'data, Pe>,
+fn pe_libraries<'data, Pe: object::read::pe::ImageNtHeaders, R: object::ReadRef<'data>>(
+    file: &object::read::pe::PeFile<'data, Pe, R>,
 ) -> Vec<(String, DetectionEvidence)> {
     use object::{endian::LittleEndian, read::pe::ImageOptionalHeader};
     let mut libraries = Vec::new();
@@ -473,6 +492,11 @@ fn scan_directory_for_graphics_api(dir: &Path, depth: u32) -> Option<GraphicsApi
                 || ["binaries", "bin", "x64", "win64"]
                     .iter()
                     .any(|name| entry.file_name().eq_ignore_ascii_case(name))
+                || (entry.depth() == 1
+                    && !entry.path_is_symlink()
+                    && !entry.file_name().eq_ignore_ascii_case("engine")
+                    && (entry.path().join("Binaries").is_dir()
+                        || entry.path().join("bin").is_dir()))
         })
         .find_map(|entry| {
             let entry = match entry {
@@ -884,6 +908,19 @@ mod tests {
         let detected = detect_target_engine(&wrapper);
         assert_eq!(detected.api, GraphicsApi::DirectX10);
         assert_eq!(detected.binary, Some(game.join("game.exe")));
+
+        // Unreal Engine bootstrapper layout: <GameRoot>/Launcher.exe with the real
+        // shipping binary at <GameRoot>/<Project>/Binaries/Win64/<Project>-Win64-Shipping.exe.
+        fs::remove_file(game.join("game.exe")).unwrap();
+        let engine_helper = game.join("Engine/Binaries/Win64/UnrealCEFSubProcess.exe");
+        fs::create_dir_all(engine_helper.parent().unwrap()).unwrap();
+        fs::write(&engine_helper, pe_with_libraries(true, &["d3d11.dll"], &[])).unwrap();
+        let shipping = game.join("MyGame/Binaries/Win64/MyGame-Win64-Shipping.exe");
+        fs::create_dir_all(shipping.parent().unwrap()).unwrap();
+        fs::write(&shipping, pe_with_libraries(true, &["d3d12.dll"], &[])).unwrap();
+        let ue_detected = detect_target_engine(&wrapper);
+        assert_eq!(ue_detected.api, GraphicsApi::DirectX12);
+        assert_eq!(ue_detected.binary, Some(shipping));
     }
 
     #[test]

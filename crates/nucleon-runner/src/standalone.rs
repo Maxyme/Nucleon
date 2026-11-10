@@ -31,9 +31,22 @@ pub fn resolve_standalone(request: StandaloneRequest) -> Result<ResolvedStandalo
         .as_deref()
         .map(nucleon_core::application::working_directory)
         .transpose()?;
+    let env_upscaler = if request.settings.upscaler.is_none() {
+        nucleon_core::configuration::environment("NUCLEON_UPSCALER")?
+            .map(|value| {
+                value
+                    .parse()
+                    .map(nucleon_core::upscaler::Settings::selected)
+            })
+            .transpose()?
+    } else {
+        None
+    };
+    let requested_upscaler =
+        nucleon_core::upscaler::Settings::merge(request.settings.upscaler, env_upscaler);
     let saved_upscaler = request.application.upscaler.clone();
     let settings = Settings {
-        upscaler: request.settings.upscaler.or(saved_upscaler),
+        upscaler: nucleon_core::upscaler::Settings::merge(requested_upscaler, saved_upscaler),
         frame_generation: request
             .settings
             .frame_generation

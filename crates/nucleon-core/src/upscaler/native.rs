@@ -403,11 +403,13 @@ fn run(command: &mut Command, timeout: Duration) -> Result<()> {
 }
 
 fn environment(command: &mut Command, source: &Path, wine: &Path, model: Model, profile: &str) {
+    let framework = super::gptk_framework_binary(wine);
+    let framework_dir = framework
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| wine.join("lib/external/D3DMetal.framework"));
     command
-        .env(
-            "NUCLEON_FSR4_FRAMEWORK",
-            wine.join("lib/external/D3DMetal.framework"),
-        )
+        .env("NUCLEON_FSR4_FRAMEWORK", framework_dir)
         .env("FSR4_ROOT", source)
         .env("FSR4_REPLACE", "1")
         .env("FSR4_VERSION", model.version())
@@ -504,7 +506,7 @@ pub(super) fn build(
         command("/usr/bin/arch").arg("-x86_64").arg(&test),
         BUILD_TIMEOUT,
     )?;
-    let original = wine.join("lib/external/D3DMetal.framework/D3DMetal");
+    let original = super::gptk_framework_binary(wine);
     let original_framework_sha256 = artifacts::digest(&original)?;
     let mut install = command("python3");
     install.arg(&builder).args([

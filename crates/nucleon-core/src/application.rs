@@ -27,7 +27,7 @@ impl Settings {
     /// Explicit fields win; false and auto are intentional choices.
     pub fn with_defaults(self, defaults: Self) -> Self {
         Self {
-            upscaler: self.upscaler.or(defaults.upscaler),
+            upscaler: crate::upscaler::Settings::merge(self.upscaler, defaults.upscaler),
             frame_generation: self.frame_generation.or(defaults.frame_generation),
             wine: self.wine.or(defaults.wine),
             emulator: self.emulator.or(defaults.emulator),
@@ -92,8 +92,22 @@ pub fn resolve_launch(
     let target = settings
         .upscaler
         .as_ref()
-        .and_then(|s| s.renderer.as_ref())
-        .map(|renderer| executable.parent().unwrap_or(Path::new(".")).join(renderer))
+        .and_then(|s| {
+            s.renderer
+                .as_ref()
+                .map(|renderer| executable.parent().unwrap_or(Path::new(".")).join(renderer))
+                .or_else(|| {
+                    (s.backend != crate::upscaler::Backend::Game).then(|| {
+                        crate::upscaler::bound_renderer(&data.join("upscalers"), executable)
+                            .or_else(|| {
+                                crate::upscaler::bound_renderer(
+                                    &crate::upscaler::root(),
+                                    executable,
+                                )
+                            })
+                    })?
+                })
+        })
         .unwrap_or_else(|| executable.into());
     let api = settings
         .profile()

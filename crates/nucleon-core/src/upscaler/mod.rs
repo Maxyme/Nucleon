@@ -108,10 +108,54 @@ impl Settings {
             renderer: None,
         }
     }
+
+    pub fn with_defaults(self, defaults: Self) -> Self {
+        Self {
+            backend: self.backend,
+            input: if self.input == Input::Auto {
+                defaults.input
+            } else {
+                self.input
+            },
+            renderer: self.renderer.or(defaults.renderer),
+        }
+    }
+
+    pub fn merge(primary: Option<Self>, fallback: Option<Self>) -> Option<Self> {
+        match (primary, fallback) {
+            (Some(primary), Some(fallback)) => Some(primary.with_defaults(fallback)),
+            (primary, fallback) => primary.or(fallback),
+        }
+    }
 }
 
 pub fn root() -> PathBuf {
     crate::paths::support_dir().join("upscalers")
+}
+
+pub fn bound_renderer(root: &Path, executable: &Path) -> Option<PathBuf> {
+    let executable = executable.canonicalize().ok()?;
+    transaction::lookup(root, &executable)
+        .ok()
+        .flatten()
+        .map(|binding| binding.renderer)
+}
+
+pub(super) fn gptk_framework_binary(wine: &Path) -> PathBuf {
+    crate::runner::inspect_gptk_dir(wine)
+        .map(|(framework, _)| framework.join("D3DMetal"))
+        .filter(|path| path.is_file())
+        .unwrap_or_else(|| wine.join("lib/external/D3DMetal.framework/D3DMetal"))
+}
+
+pub(super) fn gptk_ngx_bridge_dll(wine: &Path) -> PathBuf {
+    crate::runner::inspect_gptk_dir(wine)
+        .and_then(|(framework, shared)| {
+            crate::runner::gptk_windows_binaries_dir(&framework, &shared)
+        })
+        .map(|windows| windows.join("nvngx-on-metalfx.dll"))
+        .filter(|path| path.is_file())
+        .unwrap_or_else(|| wine.join("lib/wine/x86_64-windows/nvngx-on-metalfx.dll"))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -258,7 +302,7 @@ pub fn resolve(
         );
     }
     if resolved.input == Input::Auto {
-        resolved.input = detect_input(resolved.renderer.parent().unwrap())?;
+        resolved.input = detect_input_for(&resolved.renderer, &resolved.executable)?;
     }
     resolved.patcher = requires_patcher(&resolved.renderer, resolved.input);
     ensure!(
@@ -269,12 +313,13 @@ pub fn resolve(
         resolved.input != Input::Xess || !has_unreal(&resolved.renderer),
         "Unreal XeSS input may omit depth; choose a validated DLSS/FSR input recipe"
     );
-    let provider = assets::provider_path(root, settings.backend.provider())?;
+    let provider_path = assets::provider_path(root, settings.backend.provider())?;
+    let provider = assets::read_provider(&provider_path)?;
     ensure!(
-        assets::read_provider(&provider)?.provider == settings.backend.provider(),
+        provider.provider == settings.backend.provider(),
         "Provider identity differs from the selected output"
     );
-    resolved.provider = Some(provider);
+    resolved.provider = Some(provider_path);
     if resolved.patcher {
         assets::verify_patcher(root)?;
     }
@@ -328,11 +373,18 @@ fn has_unreal(exe: &Path) -> bool {
             .contains("shipping")
     })
 }
-fn detect_input(directory: &Path) -> Result<Input> {
+
+fn scan_input_dlls(directory: &Path) -> Result<std::collections::BTreeSet<&'static str>> {
     let mut found = std::collections::BTreeSet::new();
     for entry in walkdir::WalkDir::new(directory)
-        .max_depth(7)
+        .max_depth(10)
         .follow_links(false)
+        .into_iter()
+        .filter_entry(|entry| {
+            entry.depth() == 0
+                || !entry.file_type().is_dir()
+                || !entry.file_name().eq_ignore_ascii_case("OptiScaler")
+        })
     {
         let entry = entry?;
         if !entry.file_type().is_file() {
@@ -350,18 +402,36 @@ fn detect_input(directory: &Path) -> Result<Input> {
             "libxess.dll" => {
                 found.insert("xess");
             }
-            "amd_fidelityfx_upscaler_dx12.dll" => {
+            "amd_fidelityfx_upscaler_dx12.dll" | "amd_fidelityfx_dx12.dll" => {
                 found.insert("fsr31");
+            }
+            "ffx_fsr3upscaler_x64.dll" | "ffx_fsr3_x64.dll" => {
+                found.insert("fsr3");
+            }
+            "ffx_fsr2_api_x64.dll" | "ffx_fsr2_api_dx12_x64.dll" | "ffx_fsr2_api_dx11_x64.dll" => {
+                found.insert("fsr2");
             }
             _ => {}
         }
+    }
+    Ok(found)
+}
+
+fn detect_input_for(renderer: &Path, executable: &Path) -> Result<Input> {
+    let renderer_dir = renderer.parent().context("Renderer has no directory")?;
+    let mut found = scan_input_dlls(renderer_dir)?;
+    if found.is_empty()
+        && let Some(exe_dir) = executable.parent()
+        && exe_dir != renderer_dir
+    {
+        found = scan_input_dlls(exe_dir)?;
     }
     if found.len() > 1 && found.contains("dlss") {
         return Ok(Input::Dlss);
     }
     ensure!(
         found.len() == 1,
-        "Upscaler input is missing or ambiguous; prepare with --input dlss|fsr2|fsr31|xess and select that input in-game"
+        "Upscaler input is missing or ambiguous; prepare with --input dlss|fsr2|fsr3|fsr31|xess and select that input in-game"
     );
     found.first().unwrap().parse()
 }
@@ -483,6 +553,27 @@ pub fn apply_environment(binding: &Binding, env: &mut HashMap<String, String>) -
     Ok(())
 }
 
+fn optiscaler_log_path(binding: &Binding, state: Option<&Path>) -> Option<PathBuf> {
+    if binding.settings.backend == Backend::Game {
+        return None;
+    }
+    if let Some(state) = state {
+        return Some(state.join("logs/OptiScaler.log"));
+    }
+    if let Some(directory) = binding.environment.get("FSR4_STATE_DIR") {
+        return Some(Path::new(directory).join("logs/OptiScaler.log"));
+    }
+    let renderer_dir = binding.renderer.parent()?;
+    let id = transaction::identity(renderer_dir).ok()?;
+    let root = binding
+        .provider
+        .as_deref()
+        .and_then(|manifest| manifest.parent()?.parent()?.parent()?.parent())
+        .map(Path::to_path_buf)
+        .unwrap_or_else(root);
+    Some(root.join("games").join(id).join("logs/OptiScaler.log"))
+}
+
 pub fn begin_observation(binding: &Binding) -> Result<()> {
     if let Some(directory) = binding.environment.get("FSR4_STATE_DIR") {
         let path = Path::new(directory).join("status.conf");
@@ -490,10 +581,25 @@ pub fn begin_observation(binding: &Binding) -> Result<()> {
             fs::remove_file(path)?;
         }
     }
+    if let Some(log) = optiscaler_log_path(binding, None)
+        && log.exists()
+    {
+        fs::remove_file(log)?;
+    }
     Ok(())
 }
+
 pub fn observation(binding: &Binding) -> Result<serde_json::Value> {
+    observation_in(binding, None)
+}
+
+pub(crate) fn observation_in(binding: &Binding, state: Option<&Path>) -> Result<serde_json::Value> {
     let Some(directory) = binding.environment.get("FSR4_STATE_DIR") else {
+        if let Some(log) = optiscaler_log_path(binding, state)
+            && fs::metadata(&log).is_ok_and(|meta| meta.is_file() && meta.len() > 0)
+        {
+            return Ok(serde_json::json!({"activation":"optiscaler-log-present","log":log}));
+        }
         return Ok(serde_json::json!({"activation":"not-observed"}));
     };
     let Some(text) =

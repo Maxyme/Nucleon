@@ -84,7 +84,7 @@ impl GameProfile {
     /// Fill absent fields without overriding explicit false or auto choices.
     pub fn with_defaults(self, defaults: Self) -> Self {
         Self {
-            upscaler: self.upscaler.or(defaults.upscaler),
+            upscaler: crate::upscaler::Settings::merge(self.upscaler, defaults.upscaler),
             frame_generation: self.frame_generation.or(defaults.frame_generation),
             hud: self.hud.or(defaults.hud),
             engine: self.engine.or(defaults.engine),
