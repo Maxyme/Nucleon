@@ -144,6 +144,71 @@ fn group_has_live_members(group: rustix::process::Pid) -> bool {
     })
 }
 
+#[derive(Debug)]
+pub struct BoundedOutput {
+    pub status: ExitStatus,
+    pub stdout: Vec<u8>,
+    pub stderr: Vec<u8>,
+}
+
+pub fn run_with_timeout(
+    command: &mut Command,
+    timeout: Duration,
+    grace: Duration,
+) -> Result<ExitStatus> {
+    let program = command.get_program().to_string_lossy().into_owned();
+    let mut child =
+        OwnedChild::spawn(command).with_context(|| format!("Could not start {program}"))?;
+    let start = std::time::Instant::now();
+    loop {
+        if let Some(status) = child.try_wait()? {
+            child.terminate(Duration::ZERO)?;
+            return Ok(status);
+        }
+        if start.elapsed() >= timeout {
+            let _ = child.terminate(grace);
+            anyhow::bail!(
+                "Command {program} timed out after {} ms",
+                timeout.as_millis()
+            );
+        }
+        thread::sleep(Duration::from_millis(15));
+    }
+}
+
+pub fn output_with_timeout(
+    command: &mut Command,
+    timeout: Duration,
+    limit: u64,
+) -> Result<BoundedOutput> {
+    use std::io::{Read, Seek};
+    let mut stdout_file = tempfile::tempfile().context("Create stdout spool")?;
+    let mut stderr_file = tempfile::tempfile().context("Create stderr spool")?;
+    command
+        .stdin(std::process::Stdio::null())
+        .stdout(stdout_file.try_clone().context("Clone stdout spool")?)
+        .stderr(stderr_file.try_clone().context("Clone stderr spool")?);
+    let status = run_with_timeout(command, timeout, TERMINATION_GRACE)?;
+    let read_spool = |file: &mut std::fs::File, name: &str| -> Result<Vec<u8>> {
+        file.rewind()
+            .with_context(|| format!("Rewind {name} spool"))?;
+        let mut bytes = Vec::new();
+        file.take(limit + 1)
+            .read_to_end(&mut bytes)
+            .with_context(|| format!("Read {name} spool"))?;
+        anyhow::ensure!(
+            (bytes.len() as u64) <= limit,
+            "Command {name} exceeded size limit of {limit} bytes"
+        );
+        Ok(bytes)
+    };
+    Ok(BoundedOutput {
+        status,
+        stdout: read_spool(&mut stdout_file, "stdout")?,
+        stderr: read_spool(&mut stderr_file, "stderr")?,
+    })
+}
+
 impl Drop for OwnedChild {
     fn drop(&mut self) {
         if !self.reaped
@@ -305,5 +370,44 @@ mod tests {
             .unwrap();
         drop(launcher);
         assert_not_running(child);
+    }
+
+    #[test]
+    fn bounded_output_does_not_block_on_descendant_holding_stdout_and_enforces_limits() {
+        let dir = tempfile::tempdir().unwrap();
+        let start = Instant::now();
+        let output = output_with_timeout(
+            Command::new("sh")
+                .args(["-c", "printf 'wine-11.21\\n'; sleep 30 & echo $! > child"])
+                .current_dir(dir.path()),
+            Duration::from_secs(2),
+            64,
+        )
+        .unwrap();
+        assert!(start.elapsed() < Duration::from_millis(800));
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"wine-11.21\n");
+        let child: u32 = fs::read_to_string(dir.path().join("child"))
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        assert_not_running(child);
+
+        let oversized = output_with_timeout(
+            Command::new("sh").args(["-c", "printf '12345'"]),
+            Duration::from_secs(1),
+            4,
+        )
+        .unwrap_err();
+        assert!(oversized.to_string().contains("exceeded size limit"));
+
+        let timed_out = output_with_timeout(
+            Command::new("sleep").arg("30"),
+            Duration::from_millis(100),
+            64,
+        )
+        .unwrap_err();
+        assert!(timed_out.to_string().contains("timed out"));
     }
 }

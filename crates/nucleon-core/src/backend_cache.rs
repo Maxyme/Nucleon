@@ -194,22 +194,31 @@ impl D3dMetal {
     }
 }
 fn user_cache_dir() -> Result<PathBuf, String> {
-    let result = Command::new("/usr/bin/getconf")
-        .arg("DARWIN_USER_CACHE_DIR")
-        .output()
-        .map_err(|e| e.to_string())?;
-    if !result.status.success() {
-        return Err(format!("getconf DARWIN_USER_CACHE_DIR: {}", result.status));
-    }
-    let path = PathBuf::from(
-        String::from_utf8(result.stdout)
-            .map_err(|e| e.to_string())?
-            .trim(),
-    );
-    if !path.is_absolute() {
-        return Err("System returned a non-absolute cache path".into());
-    }
-    Ok(path)
+    static CACHE_DIR: std::sync::OnceLock<Result<PathBuf, String>> = std::sync::OnceLock::new();
+    CACHE_DIR
+        .get_or_init(|| {
+            let mut command = Command::new("/usr/bin/getconf");
+            command.arg("DARWIN_USER_CACHE_DIR");
+            let result = crate::process::output_with_timeout(
+                &mut command,
+                std::time::Duration::from_secs(5),
+                4096,
+            )
+            .map_err(|e| e.to_string())?;
+            if !result.status.success() {
+                return Err(format!("getconf DARWIN_USER_CACHE_DIR: {}", result.status));
+            }
+            let path = PathBuf::from(
+                String::from_utf8(result.stdout)
+                    .map_err(|e| e.to_string())?
+                    .trim(),
+            );
+            if !path.is_absolute() {
+                return Err("System returned a non-absolute cache path".into());
+            }
+            Ok(path)
+        })
+        .clone()
 }
 fn unreal_inventories(prefix: &Path, renderer: &Path) -> Vec<Inventory> {
     let Some(binaries) = renderer.parent().and_then(Path::parent) else {

@@ -2,8 +2,8 @@
 mod appinfo;
 pub mod library;
 use crate::paths;
-use anyhow::{Context, Result, bail, ensure};
-use std::{path::PathBuf, process::Command};
+use anyhow::{Context, Result, ensure};
+use std::path::PathBuf;
 
 pub fn check_steam_installed() -> Result<PathBuf> {
     let app = paths::steam_app();
@@ -16,16 +16,11 @@ pub fn is_steam_running() -> bool {
 }
 
 pub fn running() -> Result<bool> {
-    let output = Command::new("pgrep")
-        .args(["-x", "steam_osx"])
-        .output()
-        .context("Check whether Steam is running")?;
-    match output.status.code() {
-        Some(0) => Ok(true),
-        Some(1) => Ok(false),
-        _ => bail!(
-            "Cannot inspect Steam processes: {}",
-            String::from_utf8_lossy(&output.stderr)
-        ),
-    }
+    use sysinfo::{ProcessRefreshKind, ProcessStatus, ProcessesToUpdate, System};
+    let mut system = System::new().context("Cannot inspect Steam processes")?;
+    system.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::nothing());
+    Ok(system
+        .processes()
+        .values()
+        .any(|process| process.status() != ProcessStatus::Zombie && process.name() == "steam_osx"))
 }

@@ -656,6 +656,22 @@ fn bundle_detection_accepts_matched_legacy_wine_libraries_and_process_guard_igno
         "/A Wine Bundle/bin/wine64-preloader"
     ));
     assert!(transaction::wine_command("Talos2-Win64-Shipping.exe"));
+    assert!(transaction::path_within_directory(
+        Path::new("/Games/Halo"),
+        "/Games/Halo/Game.exe"
+    ));
+    assert!(transaction::path_within_directory(
+        Path::new("/Games/Halo"),
+        "Z:\\Games\\Halo\\Game.exe"
+    ));
+    assert!(!transaction::path_within_directory(
+        Path::new("/Games/Halo"),
+        "/Games/Halo2/Game.exe"
+    ));
+    assert!(!transaction::path_within_directory(
+        Path::new("/Games/Halo"),
+        "/Games/Halo_CE/Game.exe"
+    ));
     fs::remove_file(windows.join("nvngx-on-metalfx.dll")).unwrap();
     assert!(!bundled_metalfx(&runtime));
 }

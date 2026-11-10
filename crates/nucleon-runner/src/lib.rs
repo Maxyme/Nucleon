@@ -1325,6 +1325,9 @@ fn execute_launch(resolved: ResolvedLaunch, session: &mut RunSession) -> Result<
                     // poll for up to 5 seconds to detect the background Wine game process before deciding to exit.
                     let mut found_game = false;
                     for _ in 0..25 {
+                        if term_flag.load(Ordering::SeqCst) {
+                            break;
+                        }
                         if is_wine_process_running(
                             &runner_dir,
                             &target_exe,

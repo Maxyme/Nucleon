@@ -183,42 +183,50 @@ impl Installation {
         Self::open(root, &resolved).map(Some)
     }
     pub fn assert_idle(&self, prefix: Option<&Path>) -> Result<()> {
-        let commands = std::process::Command::new("/bin/ps")
-            .args(["-axo", "pid=,comm="])
-            .output()?;
-        ensure!(
-            commands.status.success(),
-            "Cannot inspect process identities"
+        use sysinfo::{ProcessRefreshKind, ProcessStatus, ProcessesToUpdate, System};
+        let mut system = System::new().context("Cannot inspect active game processes")?;
+        system.refresh_processes_specifics(
+            ProcessesToUpdate::All,
+            true,
+            ProcessRefreshKind::everything(),
         );
-        let wine_pids: std::collections::BTreeSet<_> = String::from_utf8_lossy(&commands.stdout)
-            .lines()
-            .filter_map(|line| {
-                let (pid, command) = line.trim().split_once(char::is_whitespace)?;
-                let pid = pid.parse::<u32>().ok()?;
-                (pid != std::process::id() && wine_command(command.trim())).then_some(pid)
-            })
-            .collect();
-        let output = std::process::Command::new("/bin/ps")
-            .args(["eww", "-axo", "pid=,args="])
-            .output()?;
+        let my_pid = std::process::id();
+        let prefix_env =
+            prefix.map(|p| std::ffi::OsString::from(format!("WINEPREFIX={}", p.display())));
+        let busy = system.processes().iter().any(|(pid, process)| {
+            if pid.as_u32() == my_pid || process.status() == ProcessStatus::Zombie {
+                return false;
+            }
+            let is_wine = wine_command(&process.name().to_string_lossy())
+                || process
+                    .exe()
+                    .is_some_and(|exe| wine_command(&exe.to_string_lossy()))
+                || process
+                    .cmd()
+                    .first()
+                    .is_some_and(|arg| wine_command(&arg.to_string_lossy()));
+            if !is_wine {
+                return false;
+            }
+            if let Some(expected_env) = &prefix_env
+                && process.environ().contains(expected_env)
+            {
+                return true;
+            }
+            if process
+                .cwd()
+                .is_some_and(|cwd| cwd.starts_with(&self.directory))
+            {
+                return true;
+            }
+            process
+                .cmd()
+                .iter()
+                .chain(process.environ().iter())
+                .any(|entry| path_within_directory(&self.directory, &entry.to_string_lossy()))
+        });
         ensure!(
-            output.status.success(),
-            "Cannot inspect active game processes"
-        );
-        let rows = String::from_utf8_lossy(&output.stdout);
-        ensure!(
-            !rows
-                .lines()
-                .filter(|row| row
-                    .trim()
-                    .split_once(char::is_whitespace)
-                    .and_then(|(pid, _)| pid.parse::<u32>().ok())
-                    .is_some_and(|pid| wine_pids.contains(&pid)))
-                .any(
-                    |row| row.contains(self.directory.to_string_lossy().as_ref())
-                        || prefix
-                            .is_some_and(|p| row.contains(&format!("WINEPREFIX={}", p.display())))
-                ),
+            !busy,
             "Game installation or prefix is in use; quit it before preparing/restoring upscaling"
         );
         Ok(())
@@ -440,6 +448,23 @@ pub(super) fn wine_command(command: &str) -> bool {
         name.as_str(),
         "wine" | "wine64" | "wineserver" | "wineserver64" | "wine-preloader" | "wine64-preloader"
     ) || name.ends_with(".exe")
+}
+pub(super) fn path_within_directory(directory: &Path, text: &str) -> bool {
+    let dir = directory.to_string_lossy().replace('\\', "/");
+    let dir = dir.trim_end_matches('/');
+    if dir.is_empty() {
+        return false;
+    }
+    let normalized = text.replace('\\', "/");
+    let mut search = normalized.as_str();
+    while let Some(pos) = search.find(dir) {
+        let after = &search[pos + dir.len()..];
+        if after.is_empty() || after.starts_with('/') {
+            return true;
+        }
+        search = &search[pos + dir.len()..];
+    }
+    false
 }
 pub fn restore(installation: &Installation) -> Result<()> {
     let path = installation.state.join("install.json");

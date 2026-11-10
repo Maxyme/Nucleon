@@ -185,10 +185,12 @@ impl LaunchProfile {
         if let Some(config) = config {
             command.env("LEGENDARY_CONFIG_PATH", config);
         }
-        command.stdin(std::process::Stdio::null());
-        let output = command
-            .output()
-            .context("Could not request Legendary authentication")?;
+        let output = crate::process::output_with_timeout(
+            &mut command,
+            std::time::Duration::from_secs(30),
+            1024 * 1024,
+        )
+        .context("Could not request Legendary authentication")?;
         // Neither stderr nor JSON is included in errors: they may contain live credentials.
         ensure!(
             output.status.success(),

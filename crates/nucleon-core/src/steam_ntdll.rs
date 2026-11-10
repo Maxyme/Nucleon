@@ -237,9 +237,12 @@ pub fn bind_prefix_for_runtime(
                     .args(["-change", dependency, DIRECT_DEPENDENCY])
                     .arg(&temporary);
                 crate::launch::clean_command(&mut command);
-                let output = command
-                    .output()
-                    .context("Relink private ARM64 Steam bridge")?;
+                let output = crate::process::output_with_timeout(
+                    &mut command,
+                    std::time::Duration::from_secs(15),
+                    256 * 1024,
+                )
+                .context("Relink private ARM64 Steam bridge")?;
                 anyhow::ensure!(
                     output.status.success(),
                     "Cannot relink private Steam bridge: {}",
@@ -288,9 +291,12 @@ fn signing_command(arguments: &[&str], path: &Path) -> Result<()> {
     let mut command = std::process::Command::new("/usr/bin/codesign");
     command.args(arguments).arg(path);
     crate::launch::clean_command(&mut command);
-    let output = command
-        .output()
-        .context("Run codesign on private Steam bridge")?;
+    let output = crate::process::output_with_timeout(
+        &mut command,
+        std::time::Duration::from_secs(15),
+        256 * 1024,
+    )
+    .context("Run codesign on private Steam bridge")?;
     anyhow::ensure!(
         output.status.success(),
         "Steam bridge signing failed for {}: {}",

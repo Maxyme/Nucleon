@@ -238,13 +238,20 @@ fn bridge(root: &Path, wine: &Path) -> Result<()> {
         }
         fs::write(&definition, text)?;
         let output = stage.join("nvngx.dll");
-        let status = Command::new("x86_64-w64-mingw32-gcc")
+        let mut command = Command::new("x86_64-w64-mingw32-gcc");
+        crate::launch_profile::clean_profile_command(&mut command);
+        command
             .args(["-shared", "-nostdlib"])
             .arg(definition)
             .args(["-Wl,--entry,0", "-Wl,--no-insert-timestamp", "-o"])
             .arg(&output)
-            .status()
-            .context("NGX forwarding setup requires x86_64-w64-mingw32-gcc")?;
+            .stdin(std::process::Stdio::null());
+        let status = crate::process::run_with_timeout(
+            &mut command,
+            std::time::Duration::from_secs(30),
+            crate::process::TERMINATION_GRACE,
+        )
+        .context("NGX forwarding setup requires x86_64-w64-mingw32-gcc")?;
         ensure!(status.success(), "NGX forwarder compilation failed");
         ngx::verify_forwarder(&fs::read(output)?, &names)?;
         manifest(stage, "bridge", "ngx-forward-v1", None)

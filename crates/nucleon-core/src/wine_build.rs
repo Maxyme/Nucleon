@@ -153,12 +153,7 @@ fn archive(
 
 fn clean_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
     let mut command = Command::new(program);
-    for (key, _) in std::env::vars_os() {
-        let key_text = key.to_string_lossy();
-        if key_text.starts_with("DYLD_") || key_text.starts_with("WINE") {
-            command.env_remove(key);
-        }
-    }
+    crate::launch_profile::clean_profile_command(&mut command);
     let path = std::env::var_os("PATH").unwrap_or_default();
     command.env(
         "PATH",
@@ -167,18 +162,19 @@ fn clean_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
             path.to_string_lossy()
         ),
     );
+    command.stdin(Stdio::null());
     command
 }
 
 fn run(command: &mut Command, description: &str) -> Result<()> {
     log::info!("{description}");
-    ensure!(
-        command
-            .status()
-            .with_context(|| description.to_string())?
-            .success(),
-        "{description} failed"
-    );
+    let status = crate::process::run_with_timeout(
+        command,
+        std::time::Duration::from_secs(30 * 60),
+        crate::process::TERMINATION_GRACE,
+    )
+    .with_context(|| description.to_string())?;
+    ensure!(status.success(), "{description} failed ({status})");
     Ok(())
 }
 
@@ -280,7 +276,14 @@ fn contained_directory(root: &Path, relative: &Path) -> Result<PathBuf> {
 }
 
 fn check_tools() -> Result<()> {
-    let bison = clean_command("bison").arg("--version").output().context(
+    let mut bison_cmd = clean_command("bison");
+    bison_cmd.arg("--version");
+    let bison = crate::process::output_with_timeout(
+        &mut bison_cmd,
+        std::time::Duration::from_secs(10),
+        64 * 1024,
+    )
+    .context(
         "Install build prerequisites: Xcode Command Line Tools, mingw-w64, bison, flex, make",
     )?;
     let text = String::from_utf8_lossy(&bison.stdout);
@@ -302,11 +305,15 @@ fn check_tools() -> Result<()> {
         "patch",
         "x86_64-w64-mingw32-gcc",
     ] {
-        let result = clean_command(tool)
-            .arg("--version")
+        let mut cmd = clean_command(tool);
+        cmd.arg("--version")
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
+            .stderr(Stdio::null());
+        let result = crate::process::run_with_timeout(
+            &mut cmd,
+            std::time::Duration::from_secs(10),
+            std::time::Duration::ZERO,
+        );
         ensure!(
             result.is_ok_and(|status| status.success()),
             "Missing build tool {tool}; install Xcode Command Line Tools and brew install mingw-w64 bison flex"

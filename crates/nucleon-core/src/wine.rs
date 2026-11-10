@@ -29,37 +29,16 @@ impl WineRuntime {
 
 fn query_wine_version(wine_bin: &Path) -> Option<String> {
     let mut command = Command::new(wine_bin);
-    command
-        .arg("--version")
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null());
-    // Steam's injected loader/overlay can hang even `wine --version`. Discovery must be bounded
-    // and must not bootstrap a prefix or load another runtime's libraries.
-    for key in [
-        "DYLD_INSERT_LIBRARIES",
-        "DYLD_FALLBACK_LIBRARY_PATH",
-        "WINEDLLPATH",
-        "WINEPREFIX",
-        "WINEARCH",
-        "WINELOADER",
-        "WINESERVER",
-    ] {
-        command.env_remove(key);
-    }
-    let mut child = command.spawn().ok()?;
-    let start = std::time::Instant::now();
-    loop {
-        if child.try_wait().ok()?.is_some() {
-            break;
-        }
-        if start.elapsed() >= std::time::Duration::from_secs(2) {
-            let _ = child.kill();
-            let _ = child.wait();
-            return None;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(20));
-    }
-    let output = child.wait_with_output().ok()?;
+    crate::launch_profile::clean_profile_command(&mut command);
+    command.arg("--version");
+    // Steam's injected loader/overlay can hang even `wine --version`. Discovery must be bounded,
+    // must not block on descendants retaining stdout, and must not bootstrap a prefix.
+    let output = crate::process::output_with_timeout(
+        &mut command,
+        std::time::Duration::from_secs(2),
+        64 * 1024,
+    )
+    .ok()?;
     if output.status.success() {
         let v = String::from_utf8_lossy(&output.stdout).trim().to_string();
         if !v.is_empty() {
