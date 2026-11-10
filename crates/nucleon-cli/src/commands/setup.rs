@@ -4,7 +4,7 @@ use clap::Subcommand;
 use nucleon_core::{backend, d7vk, dxmt, dxvk, manifest, paths, runner, steam, vkd3d, wine};
 use std::path::{Path, PathBuf};
 
-#[derive(Subcommand, Debug, Clone)]
+#[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
 pub enum SetupAction {
     /// Prepare Nucleon directories, runtime and Steamworks bridge
     Fix,
@@ -29,6 +29,25 @@ pub struct SetupArgs {
     pub wine_path: Option<PathBuf>,
     pub gptk_path: Option<PathBuf>,
     pub bridge_path: Option<PathBuf>,
+}
+
+impl SetupArgs {
+    pub fn has_remediation_flags(&self) -> bool {
+        self.force
+            || self.kosmickrisp_path.is_some()
+            || self.kosmickrisp_version.is_some()
+            || self.fetch_vkd3d
+            || self.vkd3d_path.is_some()
+            || self.fetch_d7vk
+            || self.d7vk_path.is_some()
+            || self.fetch_dxvk
+            || self.dxvk_path.is_some()
+            || self.fetch_dxmt
+            || self.dxmt_path.is_some()
+            || self.wine.is_some()
+            || self.wine_path.is_some()
+            || self.bridge_path.is_some()
+    }
 }
 
 pub struct PrerequisiteCheck {
@@ -131,7 +150,7 @@ pub fn check_prerequisites(gptk_override: Option<&Path>) -> Vec<PrerequisiteChec
             "Skipped (no GPTK components configured)".to_string()
         },
         remediation: "Apple's D3DMetal binaries import entry points implemented by Wine itself. \
-                      Select a Wine build that implements them ('nucleon wine set <name>' then \
+                      Select a Wine build that implements them ('nucleon wine use <name>' then \
                       'nucleon setup fix'), or run the title on DXMT/KosmicKrisp instead."
             .to_string(),
     });
@@ -195,83 +214,80 @@ pub fn run_fix(args: &SetupArgs) -> Result<()> {
 
     // 2. Custom path configuration if provided in flags
     if let Some(ref gp) = args.gptk_path {
-        match runner::set_custom_gptk_path(gp) {
-            Ok((fw, shared)) => {
-                ui::success(format!(
-                    "Registered custom Apple GPTK path at {}",
-                    gp.display()
-                ));
-                ui::tree_kv("└─", "D3DMetal.framework:", fw.display());
-                ui::tree_kv("└─", "libd3dshared.dylib:", shared.display());
-            }
-            Err(e) => ui::warn(format!(
-                "Failed to set custom GPTK path {}: {:#}",
-                gp.display(),
-                e
-            )),
-        }
+        let (fw, shared) = runner::set_custom_gptk_path(gp)?;
+        ui::success(format!(
+            "Registered custom Apple GPTK path at {}",
+            gp.display()
+        ));
+        ui::tree_kv("└─", "D3DMetal.framework:", fw.display());
+        ui::tree_kv("└─", "libd3dshared.dylib:", shared.display());
     }
 
     if let Some(ref wp) = args.wine_path {
-        match wine::set_custom_wine_path(wp) {
-            Ok(rt) => {
-                ui::success(format!(
-                    "Registered custom Wine runtime at {}",
-                    rt.root.display()
-                ));
-                let _ = wine::set_active_wine(&rt.id);
-            }
-            Err(e) => ui::warn(format!(
-                "Failed to set custom Wine path {}: {:#}",
-                wp.display(),
-                e
-            )),
-        }
+        let rt = wine::set_custom_wine_path(wp)?;
+        ui::success(format!(
+            "Registered custom Wine runtime at {}",
+            rt.root.display()
+        ));
+        wine::set_active_wine(&rt.id)?;
     }
 
     if let Some(ref kp) = args.kosmickrisp_path {
-        match runner::set_custom_kosmickrisp_path(kp, args.kosmickrisp_version.as_deref()) {
-            Ok(info) => {
-                ui::success(format!(
-                    "Registered custom KosmicKrisp at {}",
-                    info.icd_path.display()
-                ));
-            }
-            Err(e) => ui::warn(format!("Failed to set custom KosmicKrisp path: {:#}", e)),
-        }
+        let info = runner::set_custom_kosmickrisp_path(kp, args.kosmickrisp_version.as_deref())?;
+        ui::success(format!(
+            "Registered custom KosmicKrisp at {}",
+            info.icd_path.display()
+        ));
     }
 
     if let Some(ref desired_wine) = args.wine {
-        let _ = wine::set_active_wine(desired_wine);
+        let rt = wine::set_active_wine(desired_wine)?;
+        ui::success(format!(
+            "Selected active Wine runtime: {} ({})",
+            rt.name,
+            rt.root.display()
+        ));
     }
 
     if let Some(ref p) = args.vkd3d_path {
-        let _ = vkd3d::set_custom_vkd3d_proton_path(p);
+        let info = vkd3d::set_custom_vkd3d_proton_path(p)?;
+        ui::success(format!(
+            "Registered custom VKD3D-Proton at {}",
+            info.root.display()
+        ));
     } else if args.fetch_vkd3d {
-        let _ = vkd3d::fetch_vkd3d_proton(None, None);
+        let info = vkd3d::fetch_vkd3d_proton(None, None)?;
+        ui::success(format!("Fetched VKD3D-Proton to {}", info.root.display()));
     }
 
     if let Some(ref p) = args.d7vk_path {
-        let _ = d7vk::set_custom_d7vk_path(p);
+        let info = d7vk::set_custom_d7vk_path(p)?;
+        ui::success(format!("Registered custom D7VK at {}", info.root.display()));
     } else if args.fetch_d7vk {
-        let _ = d7vk::fetch_d7vk(None, None);
+        let info = d7vk::fetch_d7vk(None, None)?;
+        ui::success(format!("Fetched D7VK to {}", info.root.display()));
     }
 
     if let Some(ref p) = args.dxvk_path {
-        let _ = dxvk::set_custom_dxvk_path(p);
+        let info = dxvk::set_custom_dxvk_path(p)?;
+        ui::success(format!("Registered custom DXVK at {}", info.root.display()));
     } else if args.fetch_dxvk {
-        let _ = dxvk::fetch_dxvk(None, None);
+        let info = dxvk::fetch_dxvk(None, None)?;
+        ui::success(format!("Fetched DXVK to {}", info.root.display()));
     }
 
     if let Some(ref p) = args.dxmt_path {
-        let _ = dxmt::set_custom_dxmt_path(p);
+        let info = dxmt::set_custom_dxmt_path(p)?;
+        ui::success(format!("Registered custom DXMT at {}", info.root.display()));
     } else if args.fetch_dxmt {
-        let _ = dxmt::fetch_dxmt(None, None);
+        let info = dxmt::fetch_dxmt(None, None)?;
+        ui::success(format!("Fetched DXMT to {}", info.root.display()));
     }
 
     // 4. Stage Valve bridge packages
     match manifest::stage_valve_bridge(args.bridge_path.as_deref()) {
         Ok(()) => ui::success("Valve client bridge libraries staged"),
+        Err(e) if args.bridge_path.is_some() => return Err(e),
         Err(e) => ui::warn(format!("Failed to stage bridge packages: {e}")),
     }
 
@@ -306,6 +322,12 @@ pub fn run(args: SetupArgs) -> Result<()> {
         let checks = check_prerequisites(args.gptk_path.as_deref());
         print_prerequisites_table(&checks);
         return Ok(());
+    }
+
+    if args.has_remediation_flags() {
+        bail!(
+            "Setup remediation flags require 'nucleon setup fix' (for example: 'nucleon setup fix --bridge-path <DIR>')"
+        );
     }
 
     // Default flow: idempotent, non-interactive check

@@ -183,7 +183,7 @@ pub fn set_active_backend(backend: GraphicsBackend) -> Result<()> {
         "# Nucleon Graphics Backend Configuration\n# Options: auto, dxvk, dxmt, d3dmetal, kosmickrisp\nbackend = \"{}\"\n",
         backend.as_str()
     );
-    fs::write(&conf_path, content.as_bytes())
+    crate::fs_util::atomic_write_file(&conf_path, content.as_bytes())
         .with_context(|| format!("Failed to write backend config to {}", conf_path.display()))?;
     log::info!(
         "Persisted active graphics backend '{}' to {}",

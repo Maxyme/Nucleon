@@ -497,6 +497,7 @@ fn shared_installation_lock_symlink_escape_and_corrupt_provider_fail_closed() {
     std::os::unix::fs::symlink(&outside, f.exe.parent().unwrap().join("OptiScaler")).unwrap();
     assert!(f.prepare(Backend::Fsr2).is_err());
     assert!(!outside.join("libxess.dll").exists());
+    assert_eq!(status(&f.root, &f.exe).unwrap()["status"], "unmanaged");
     let manifest = assets::provider_path(&f.root, "stock").unwrap();
     fs::write(
         manifest.parent().unwrap().join("OptiScaler.dll"),

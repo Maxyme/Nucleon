@@ -7,14 +7,18 @@ use std::{path::PathBuf, process::Command};
 #[derive(Args, Debug)]
 pub struct PlayArgs {
     pub appid: u32,
-    #[arg(long)]
-    pub hud: bool,
+    /// Enable Metal HUD, or use --hud=false to disable
+    #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "true")]
+    pub hud: Option<bool>,
     #[arg(long)]
     pub wine: Option<String>,
     #[arg(long)]
     pub emulator: Option<nucleon_core::runtime_selection::Emulator>,
     #[arg(short, long)]
     pub engine: Option<String>,
+    /// auto, dx7, dx9, dx10, dx11, dx12, vulkan or opengl
+    #[arg(long)]
+    pub graphics_api: Option<String>,
     #[arg(long)]
     pub upscaler: Option<nucleon_core::upscaler::Backend>,
     /// metalfx or off; native DLSS-G frame generation with the MetalFX upscaler

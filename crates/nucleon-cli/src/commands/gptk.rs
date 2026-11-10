@@ -65,7 +65,7 @@ pub fn run(action: GptkAction) -> Result<()> {
                             ui::kv(
                                 "GPTK staging rules:",
                                 format!(
-                                    "⚠ runner staged by revision {}, this build uses {}; run `nucleon setup`",
+                                    "⚠ runner staged by revision {}, this build uses {}; run `nucleon setup fix`",
                                     stamp.abi_revision,
                                     gptk_abi::ABI_REVISION
                                 ),
@@ -74,13 +74,13 @@ pub fn run(action: GptkAction) -> Result<()> {
                     }
                     None => ui::kv(
                         "Assembled from:",
-                        "○ unknown — `nucleon setup` will record and refresh it",
+                        "○ unknown — `nucleon setup fix` will record and refresh it",
                     ),
                 }
             } else {
                 ui::kv(
                     "Assembled GPTK runner:",
-                    "○ Not assembled (run 'nucleon setup')",
+                    "○ Not assembled (run 'nucleon setup fix')",
                 );
             }
 
@@ -118,7 +118,7 @@ pub fn run(action: GptkAction) -> Result<()> {
             ));
             ui::success(format!("D3DMetal.framework: {}", fw.display()));
             ui::success(format!("libd3dshared.dylib: {}", shared.display()));
-            println!("\nRun 'nucleon setup' to assemble or refresh the runner with this GPTK.");
+            println!("\nRun 'nucleon setup fix' to assemble or refresh the runner with this GPTK.");
         }
         GptkAction::Verify { path } => {
             ui::header(format!("Verifying GPTK binaries in {}", path.display()));

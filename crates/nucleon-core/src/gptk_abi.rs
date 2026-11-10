@@ -475,6 +475,7 @@ fn walk_windows_tree(
         match rewrite {
             Some(bridge) => {
                 if let Some(target) = target {
+                    remove_existing(&target)?;
                     fs::write(&target, &contents)
                         .with_context(|| format!("Failed to write {}", target.display()))?;
                 }

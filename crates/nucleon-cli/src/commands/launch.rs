@@ -1,4 +1,4 @@
-use anyhow::{Result, ensure};
+use anyhow::{Context, Result, ensure};
 use nucleon_core::{paths, steam, validator};
 
 pub fn run_launch(args: super::steam::PlayArgs) -> Result<()> {
@@ -12,6 +12,14 @@ pub fn run_launch(args: super::steam::PlayArgs) -> Result<()> {
         args.wine.as_deref(),
         args.emulator,
     )?;
+    overrides.graphics_api = args
+        .graphics_api
+        .map(|value| {
+            serde_json::from_value(serde_json::Value::String(value)).context(
+                "Choose auto, dx7, dx9, dx10, dx11, dx12, vulkan or opengl for --graphics-api",
+            )
+        })
+        .transpose()?;
     overrides.upscaler = args
         .upscaler
         .map(nucleon_core::upscaler::Settings::selected);
@@ -30,7 +38,7 @@ pub fn run_launch(args: super::steam::PlayArgs) -> Result<()> {
 }
 
 fn prepare_request(
-    hud: bool,
+    hud: Option<bool>,
     engine: Option<&str>,
     wine: Option<&str>,
     emulator: Option<nucleon_core::runtime_selection::Emulator>,
@@ -48,10 +56,8 @@ fn prepare_request(
         );
     }
     Ok(nucleon_core::profile::GameProfile {
-        hud: Some(hud),
-        engine: engine
-            .map(str::to_owned)
-            .or_else(|| runtime.as_ref().map(|_| "auto".into())),
+        hud,
+        engine: engine.map(str::to_owned),
         wine: runtime.map(|r| r.root.to_string_lossy().into_owned()),
         emulator,
         ..Default::default()
@@ -91,13 +97,16 @@ mod tests {
     use super::*;
     #[test]
     fn requests_keep_explicit_auto_and_reject_invalid_selectors_before_side_effects() {
-        let request = prepare_request(false, Some("auto"), None, None).unwrap();
+        let request = prepare_request(None, Some("auto"), None, None).unwrap();
         assert_eq!(request.engine.as_deref(), Some("auto"));
-        assert_eq!(request.hud, Some(false));
+        assert_eq!(request.hud, None);
         assert!(request.wine.is_none());
-        assert!(prepare_request(false, Some("typo"), None, None).is_err());
+        let explicit_hud = prepare_request(Some(false), None, None, None).unwrap();
+        assert_eq!(explicit_hud.hud, Some(false));
+        assert_eq!(explicit_hud.engine, None);
+        assert!(prepare_request(None, Some("typo"), None, None).is_err());
         let error =
-            prepare_request(false, None, Some("/missing/requested-runtime"), None).unwrap_err();
+            prepare_request(None, None, Some("/missing/requested-runtime"), None).unwrap_err();
         assert!(error.to_string().contains("/missing/requested-runtime"));
     }
 }

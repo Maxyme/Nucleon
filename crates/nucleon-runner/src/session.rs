@@ -154,6 +154,12 @@ impl RunSession {
             game: Rc::new(Cell::new(None)),
             cleanup: Rc::new(Cell::new(None)),
         };
+        let executable = if args.get(3).map(String::as_str) == Some("--exe") {
+            args.get(4)
+        } else {
+            args.get(2)
+        }
+        .map(PathBuf::from);
         let receipt = Receipt {
             schema: 1,
             run_id: run_id.clone(),
@@ -164,7 +170,7 @@ impl RunSession {
                 "steam"
             },
             application,
-            executable: args.get(2).map(PathBuf::from),
+            executable,
             started_at: chrono::Utc::now().to_rfc3339(),
             finished_at: None,
             status: "preparing".into(),
@@ -356,7 +362,13 @@ mod tests {
     #[test]
     fn concurrent_run_files_are_distinct_and_cleanup_is_separate_from_runtime() {
         let temp = tempfile::tempdir().unwrap();
-        let args = vec!["nucleon".into(), "launch".into(), "123".into()];
+        let args = vec![
+            "nucleon".into(),
+            "launch".into(),
+            "123".into(),
+            "--exe".into(),
+            "/games/Game.exe".into(),
+        ];
         let mut a =
             RunSession::create_with_identity(temp.path(), &args, Some("123".into()), "123", None)
                 .unwrap();
@@ -372,6 +384,7 @@ mod tests {
         a.finish("bounded", Some(0), None).unwrap();
         let receipt: serde_json::Value =
             serde_json::from_slice(&fs::read(a.directory.join("receipt.json")).unwrap()).unwrap();
+        assert_eq!(receipt["executable"], "/games/Game.exe");
         assert!(receipt["timings"]["runtime_ms"].is_number());
         assert!(receipt["timings"]["cleanup_ms"].is_number());
         let log = fs::read_to_string(a.directory.join("runner.log")).unwrap();

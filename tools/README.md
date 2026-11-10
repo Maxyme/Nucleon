@@ -52,3 +52,25 @@ target/release/nucleon run /tmp/nucleon-d3d11-present.exe \
 Success requires the `NUCLEON_D3D11_OK` marker and exit 0. See
 [Wine setup](../SETUP.md#download-and-patch-the-recommended-build) for the
 reviewed Wine 11.18 patches and their limits. A successful probe does not establish gameplay.
+
+## Native DX12 bridge checks
+
+`runtime-probes/d3d12-device.c` checks device capabilities and a GPU depth clear
+through readback. `runtime-probes/ngx-parameters.c` checks integer, float and
+double NGX parameter roundtrips against the selected runtime's native library.
+
+`runtime-probes/d3d12-present.c` opens a small window, verifies every pixel of
+twelve alternating-color frames through GPU readback, and presents each frame.
+It exits after success or a bounded timeout; the success marker is
+`NUCLEON_D3D12_OK frames=12 all-pixels-readback-and-present`.
+
+`runtime-probes/native-callback-exception.c` deliberately calls a native D3D12
+allocator method with an invalid object. Success requires the bridge to return
+`E_FAIL`, then complete a valid call and clean up. The probe has a watchdog and
+prints `Native callback exception dispatch test passed` on success.
+
+The C files contain build commands. Run the resulting EXEs with an Intel runtime
+containing matching D3DMetal components, using `nucleon run --engine gptk
+--emulator rosetta --graphics-api dx12 --upscaler game`. The NGX probe also takes
+the native `nvngx.dll` path as its program argument. These probes do not require
+Steam or an installed game.

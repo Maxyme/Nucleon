@@ -12,6 +12,11 @@ version 3 only (`GPL-3.0-only`); see [LICENSE](LICENSE).
   implementation (CW HACK 20760), under LGPL-2.1-or-later. The Steam redirect
   modifies Wine's LGPL-2.1-or-later loader. Patched runtime copies retain Wine's
   license, authors, applied patches and build receipts.
+- The experimental Wine 11.21 native graphics bridge and callback exception
+  probe derive from [Switchyard Wine](https://github.com/jungwuk-ryu/switchyard-wine),
+  revision `34a09170d3754522dc55416617c6754dd2d9a086`, under LGPL-2.1-or-later.
+  The bridge port retains the upstream Wine source notices and incorporates
+  the callback and NGX repairs recorded in [assets/patches](assets/patches/).
 
 ## Runtime and upscaler components
 

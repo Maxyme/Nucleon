@@ -753,7 +753,7 @@ pub fn require_engine_capabilities(runner_dir: &Path, engine: TargetEngine) -> R
     }
     Err(anyhow::anyhow!(
         "{} cannot run Apple GPTK (D3DMetal): this Wine does not implement {}. \
-         Choose a D3DMetal-capable Wine build (`nucleon wine set <name>`) or map the game to a \
+         Choose a D3DMetal-capable Wine build (`nucleon wine use <name>`) or map the game to a \
          non-D3DMetal backend such as DXMT or KosmicKrisp.",
         runner_dir.display(),
         missing.join(", ")
@@ -1156,11 +1156,14 @@ fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
             {
                 let target = fs::read_link(entry.path())?;
                 if dst_child.exists() || dst_child.is_symlink() {
-                    let _ = fs::remove_file(&dst_child);
+                    fs::remove_file(&dst_child)?;
                 }
                 std::os::unix::fs::symlink(target, &dst_child)?;
             }
         } else {
+            if dst_child.exists() || dst_child.is_symlink() {
+                fs::remove_file(&dst_child)?;
+            }
             fs::copy(entry.path(), &dst_child)?;
         }
     }

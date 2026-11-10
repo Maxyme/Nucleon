@@ -328,6 +328,72 @@ mod tests {
         assert!(
             Cli::try_parse_from(["nucleon", "launch", "690790", "--emulator", "box64"]).is_err()
         );
+        let default_hud = Cli::try_parse_from(["nucleon", "launch", "690790"]).unwrap();
+        assert!(matches!(
+            default_hud.command,
+            Commands::Launch(commands::steam::PlayArgs { hud: None, .. })
+        ));
+        let enabled_hud = Cli::try_parse_from(["nucleon", "launch", "690790", "--hud"]).unwrap();
+        assert!(matches!(
+            enabled_hud.command,
+            Commands::Launch(commands::steam::PlayArgs {
+                hud: Some(true),
+                ..
+            })
+        ));
+        let disabled_hud = Cli::try_parse_from([
+            "nucleon",
+            "launch",
+            "690790",
+            "--hud=false",
+            "--graphics-api",
+            "dx12",
+        ])
+        .unwrap();
+        assert!(matches!(
+            disabled_hud.command,
+            Commands::Launch(commands::steam::PlayArgs {
+                hud: Some(false),
+                graphics_api: Some(ref api),
+                ..
+            }) if api == "dx12"
+        ));
+    }
+
+    #[test]
+    fn setup_fix_accepts_trailing_flags_and_rejects_remediation_without_fix() {
+        let cli = Cli::try_parse_from([
+            "nucleon",
+            "setup",
+            "fix",
+            "--bridge-path",
+            "/tmp/bridge",
+            "--fetch-dxvk",
+            "--force",
+        ])
+        .unwrap();
+        let Commands::Setup {
+            action,
+            bridge_path,
+            fetch_dxvk,
+            force,
+            ..
+        } = cli.command
+        else {
+            panic!("expected Setup");
+        };
+        assert_eq!(action, Some(commands::setup::SetupAction::Fix));
+        assert_eq!(bridge_path, Some(PathBuf::from("/tmp/bridge")));
+        assert!(fetch_dxvk);
+        assert!(force);
+
+        let err = commands::setup::run(SetupArgs {
+            action: None,
+            bridge_path: Some(PathBuf::from("/tmp/bridge")),
+            ..Default::default()
+        })
+        .unwrap_err();
+        assert!(err.to_string().contains("nucleon setup fix"));
     }
 }
 
@@ -360,52 +426,52 @@ enum Commands {
         #[command(subcommand)]
         action: Option<commands::setup::SetupAction>,
         /// Run setup non-interactively with defaults or provided flags (skips the interactive prompt)
-        #[arg(short = 'y', long)]
+        #[arg(short = 'y', long, global = true)]
         non_interactive: bool,
         /// Force re-assembly of runner and reinstall of components
-        #[arg(short, long)]
+        #[arg(short, long, global = true)]
         force: bool,
         /// Point to custom KosmicKrisp ICD manifest, driver dylib, or directory
-        #[arg(long)]
+        #[arg(long, global = true)]
         kosmickrisp_path: Option<PathBuf>,
         /// Optional Vulkan API version override for KosmicKrisp (e.g. 1.4.0)
-        #[arg(long)]
+        #[arg(long, global = true)]
         kosmickrisp_version: Option<String>,
         /// Automatically fetch and stage VKD3D-Proton (Direct3D 12 -> Vulkan) from GitHub
-        #[arg(long)]
+        #[arg(long, global = true)]
         fetch_vkd3d: bool,
         /// Point to custom VKD3D-Proton installation directory
-        #[arg(long)]
+        #[arg(long, global = true)]
         vkd3d_path: Option<PathBuf>,
         /// Automatically fetch and stage D7VK (DirectDraw / Direct3D 1-7 -> Vulkan) from GitHub
-        #[arg(long)]
+        #[arg(long, global = true)]
         fetch_d7vk: bool,
         /// Point to custom D7VK installation directory
-        #[arg(long)]
+        #[arg(long, global = true)]
         d7vk_path: Option<PathBuf>,
         /// Automatically fetch and stage DXVK (Direct3D 9/10/11 -> Vulkan) from GitHub
-        #[arg(long)]
+        #[arg(long, global = true)]
         fetch_dxvk: bool,
         /// Point to custom DXVK installation directory
-        #[arg(long)]
+        #[arg(long, global = true)]
         dxvk_path: Option<PathBuf>,
         /// Automatically fetch and stage DXMT (Direct3D 11 -> Apple Metal) from GitHub
-        #[arg(long)]
+        #[arg(long, global = true)]
         fetch_dxmt: bool,
         /// Point to custom DXMT installation directory
-        #[arg(long)]
+        #[arg(long, global = true)]
         dxmt_path: Option<PathBuf>,
         /// Select desired Wine runtime flavor or path (e.g. staging, crossover, or /Applications/CrossOver.app)
-        #[arg(long)]
+        #[arg(long, global = true)]
         wine: Option<String>,
         /// Point to custom Wine installation directory or app bundle (e.g. /Applications/CrossOver.app)
-        #[arg(long)]
+        #[arg(long, global = true)]
         wine_path: Option<PathBuf>,
         /// Point to custom Apple GPTK directory (containing D3DMetal.framework and libd3dshared.dylib)
-        #[arg(long)]
+        #[arg(long, global = true)]
         gptk_path: Option<PathBuf>,
         /// Point to extracted Valve client bridge directory (or set NUCLEON_BRIDGE_PATH)
-        #[arg(long)]
+        #[arg(long, global = true)]
         bridge_path: Option<PathBuf>,
     },
     /// Inspect runtime, graphics and Steam launch configuration

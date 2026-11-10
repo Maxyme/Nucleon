@@ -692,7 +692,6 @@ fn resolve_steam_launch(request: &SteamRequest) -> Result<ResolvedLaunch> {
 
     let mut resolved_graphics = None;
     let mut resolved_runtime = selected_runtime.clone();
-    let detection = nucleon_core::detector::detect_target_engine(&target_exe);
     let mut effective_profile = game_profile.clone();
     effective_profile.upscaler = requested_upscaler(
         Some(request_settings),
@@ -711,7 +710,14 @@ fn resolve_steam_launch(request: &SteamRequest) -> Result<ResolvedLaunch> {
     effective_profile.steam_protocol = request_settings
         .steam_protocol
         .or(game_profile.steam_protocol);
-    let graphics_api = effective_profile.graphics_api(&target_exe, &detection.api)?;
+    let render_target = effective_profile
+        .upscaler
+        .as_ref()
+        .and_then(|s| s.renderer.as_ref())
+        .map(|renderer| target_exe.parent().unwrap_or(Path::new(".")).join(renderer))
+        .unwrap_or_else(|| target_exe.clone());
+    let detection = nucleon_core::detector::detect_target_engine(&render_target);
+    let graphics_api = effective_profile.graphics_api(&render_target, &detection.api)?;
     let (engine, api_desc) = match requested_engine {
         Some(nucleon_core::detector::TargetEngine::Auto) | None => {
             let custom_wine = explicit_runtime_request
@@ -752,7 +758,7 @@ fn resolve_steam_launch(request: &SteamRequest) -> Result<ResolvedLaunch> {
                             &runtime,
                             &graphics_api,
                             nucleon_core::detector::is_pe_file_64_bit(
-                                detection.binary.as_deref().unwrap_or(&target_exe),
+                                detection.binary.as_deref().unwrap_or(&render_target),
                             ),
                         );
                         resolved_graphics = Some(components);
@@ -819,7 +825,7 @@ fn resolve_steam_launch(request: &SteamRequest) -> Result<ResolvedLaunch> {
     } else {
         runner::resolve_runner_for_engine(engine).with_context(|| {
             format!(
-                "Cannot prepare {}. Check 'nucleon wine status' and 'nucleon backends list'",
+                "Cannot prepare {}. Check 'nucleon wine status' and 'nucleon backends status'",
                 engine.display_name()
             )
         })?
@@ -907,10 +913,14 @@ pub fn launch_steam(request: SteamRequest, dry_run: bool) -> Result<()> {
         println!(
             "{}",
             serde_json::to_string_pretty(&serde_json::json!({
-                "appid": request.appid, "executable": request.executable, "arguments": request.arguments,
+                "appid": request.appid, "executable": request.executable,
+                "arguments": nucleon_core::launch_profile::redact_arguments(&request.arguments),
+                "upscaler": resolved.resolved_scaler,
                 "frame_generation": resolved.resolved_frame_generation,
                 "cwd": request.cwd, "prefix": prepared.plan.prefix,
                 "runtime": prepared.plan.runtime.root, "engine": prepared.plan.engine.display_name(),
+                "graphics_api": format!("{:?}", prepared.plan.api),
+                "is_64_bit": prepared.plan.is64, "hud": prepared.hud,
                 "steamworks": prepared.plan.steam_integration, "steam_client_modified": false,
             }))?
         );

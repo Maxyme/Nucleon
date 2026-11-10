@@ -265,7 +265,7 @@ fn steam_direct_preview_preserves_the_existing_prefix_and_has_no_client_side_eff
     fs::create_dir_all(&data).unwrap();
     fs::write(
         data.join(format!("{appid}.json")),
-        serde_json::to_vec(&json!({"use_steam_shim":false})).unwrap(),
+        serde_json::to_vec(&json!({"use_steam_shim":false,"engine":"wine","hud":true})).unwrap(),
     )
     .unwrap();
     let result = output(
@@ -274,13 +274,43 @@ fn steam_direct_preview_preserves_the_existing_prefix_and_has_no_client_side_eff
             .arg(&f.exe)
             .arg("--wine")
             .arg(&f.runtime)
-            .args(["--engine", "wine", "--dry-run", "--", "a b", ""]),
+            .args([
+                "--engine",
+                "wine",
+                "--dry-run",
+                "--",
+                "a b",
+                "-AUTH_PASSWORD=secret-value",
+                "",
+            ]),
     );
     assert_eq!(result["appid"], appid);
     assert_eq!(result["prefix"], f.prefix.join("pfx").to_str().unwrap());
-    assert_eq!(result["arguments"], json!(["a b", ""]));
+    assert_eq!(
+        result["arguments"],
+        json!(["a b", "-AUTH_PASSWORD=<redacted>", ""])
+    );
+    assert!(
+        !serde_json::to_string(&result)
+            .unwrap()
+            .contains("secret-value")
+    );
+    assert_eq!(result["hud"], true);
+    assert_eq!(result["engine"], "Wine + WineD3D OpenGL");
     assert_eq!(result["steamworks"], true);
     assert_eq!(result["steam_client_modified"], false);
+
+    let profile_engine = output(
+        cli(&f.support)
+            .env_remove("NUCLEON_ENGINE")
+            .args(["launch", &appid.to_string(), "--exe"])
+            .arg(&f.exe)
+            .arg("--wine")
+            .arg(&f.runtime)
+            .args(["--dry-run"]),
+    );
+    assert_eq!(profile_engine["engine"], "Wine + WineD3D OpenGL");
+    assert_eq!(profile_engine["hud"], true);
     assert!(!f.support.join("logs").exists());
     assert!(!f.prefix.join("pfx").exists());
     assert_eq!(fs::read(f.prefix.join("save")).unwrap(), b"keep");

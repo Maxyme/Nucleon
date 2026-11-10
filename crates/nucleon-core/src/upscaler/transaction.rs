@@ -869,11 +869,36 @@ pub fn prepare(root: &Path, installation: &Installation, resolved: &Resolved) ->
         experimental: true,
         activation: "not-observed".into(),
     };
+    let had_binding = installation.state.join("binding.json").is_file();
+    let exe_index = index(root, &binding.executable)?;
+    let renderer_index = index(root, &binding.renderer)?;
+    let had_exe_index = exe_index.is_file();
+    let had_renderer_index = renderer_index.is_file();
     // Publish the binding and alias before writes so interrupted first installs can be restored.
     save(&installation.state.join("pending-binding.json"), &binding)?;
-    save(&index(root, &binding.executable)?, &installation.state)?;
-    save(&index(root, &binding.renderer)?, &installation.state)?;
-    installation.reconcile(&files)?;
+    save(&exe_index, &installation.state)?;
+    save(&renderer_index, &installation.state)?;
+    if let Err(error) = installation.reconcile(&files) {
+        let interrupted = crate::configuration::optional_json::<Journal>(
+            &installation.state.join("install.json"),
+        )
+        .ok()
+        .flatten()
+        .is_some_and(|j| j.status == "installing");
+        if !interrupted {
+            let _ = fs::remove_file(installation.state.join("pending-binding.json"));
+            if !had_binding {
+                let _ = fs::remove_file(installation.state.join("install.json"));
+                if !had_exe_index {
+                    let _ = fs::remove_file(&exe_index);
+                }
+                if !had_renderer_index {
+                    let _ = fs::remove_file(&renderer_index);
+                }
+            }
+        }
+        return Err(error);
+    }
     save(&installation.state.join("binding.json"), &binding)?;
     fs::remove_file(installation.state.join("pending-binding.json"))?;
     Ok(binding)
