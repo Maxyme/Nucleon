@@ -11,7 +11,7 @@ build: build-bins
 
 # Build CLI release binary (single binary embedding runner)
 build-bins:
-	cargo build --release -p nucleon-cli
+	cargo build --locked --release -p nucleon-cli
 
 # Run automated Nucleon setup
 setup: build
@@ -32,16 +32,16 @@ fmt:
 # Lint checks
 lint:
     cargo fmt --all -- --check
-    cargo clippy --workspace --all-targets --all-features -- -D warnings
+    cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 
 # Format code and auto-apply clippy fixes
 fix:
     cargo fmt --all
-    cargo clippy --workspace --all-targets --all-features --fix --allow-dirty --allow-staged
+    cargo clippy --locked --workspace --all-targets --all-features --fix --allow-dirty --allow-staged
 
 # Run workspace unit and integration tests
 test:
-    cargo test --workspace
+    cargo test --locked --workspace
 
 # Complete validation: formatting check, strict clippy lints, and test suite
 check: lint test
@@ -50,7 +50,7 @@ check: lint test
 # Build and package the release bundle (thin arm64) for Apple Silicon
 package:
 	@echo "==> Building thin arm64 release binary..."
-	cargo build --release --target aarch64-apple-darwin -p nucleon-cli
+	cargo build --locked --release --target aarch64-apple-darwin -p nucleon-cli
 	@echo "==> Applying ad-hoc codesignatures..."
 	codesign -fs - target/aarch64-apple-darwin/release/nucleon
 	@echo "==> Assembling release bundle directory..."

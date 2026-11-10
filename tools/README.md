@@ -51,7 +51,7 @@ target/release/nucleon run /tmp/nucleon-d3d11-present.exe \
 
 Success requires the `NUCLEON_D3D11_OK` marker and exit 0. See
 [Wine setup](../SETUP.md#download-and-patch-the-recommended-build) for the
-reviewed Wine 11.18 patches and their limits. A successful probe does not establish gameplay.
+reviewed Wine 11.21 patches and their limits. A successful probe does not establish gameplay.
 
 ## Native DX12 bridge checks
 

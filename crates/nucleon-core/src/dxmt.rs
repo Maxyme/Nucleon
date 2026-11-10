@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+use crate::backend::GraphicsBackend;
 use crate::paths;
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
@@ -441,116 +442,6 @@ pub fn fetch_dxmt(version: Option<&str>, dest_dir: Option<&Path>) -> Result<Dxmt
             )
         },
     )
-}
-
-use crate::backend::{Backend, BackendStatus, GraphicsBackend};
-
-#[derive(Debug, Clone, Copy, Default)]
-pub struct DxmtBackend;
-
-impl Backend for DxmtBackend {
-    fn backend(&self) -> GraphicsBackend {
-        GraphicsBackend::Dxmt
-    }
-
-    fn supported_dx_versions(&self) -> &'static str {
-        find_dxmt()
-            .as_ref()
-            .map(|b| b.supported_dx_range())
-            .unwrap_or("DX10-DX11")
-    }
-
-    fn status(&self) -> BackendStatus {
-        let bundle = find_dxmt();
-        let installed = bundle.is_some();
-        let (location, version) = match bundle {
-            Some(ref b) => (Some(b.root.clone()), b.version.clone()),
-            None => (None, None),
-        };
-        BackendStatus {
-            backend: GraphicsBackend::Dxmt,
-            installed,
-            version,
-            location,
-            supported_dx: self.supported_dx_versions(),
-            description: "Direct3D 11 translation to Apple Metal".to_string(),
-        }
-    }
-
-    fn install(&self, paths: &Path) -> Result<()> {
-        set_custom_dxmt_path(paths).map(|_| ())
-    }
-
-    fn enable(&self, prefix: &Path, runner_dir: Option<&Path>) -> Result<usize> {
-        let bundle = find_dxmt().context("DXMT is not installed. Run 'nucleon backends dxmt fetch' or configure via 'nucleon backends dxmt set-path <DIR>'")?;
-        let _ = crate::vkd3d::unstage_vkd3d_proton_from_prefix(prefix, runner_dir);
-        let _ = crate::d7vk::unstage_d7vk_from_prefix(prefix, runner_dir);
-        let _ = crate::dxvk::unstage_dxvk_from_prefix(prefix, runner_dir);
-        stage_dxmt_into_prefix(&bundle, prefix, runner_dir)
-    }
-
-    fn disable(&self, prefix: &Path, runner_dir: Option<&Path>) -> Result<usize> {
-        unstage_dxmt_from_prefix(prefix, runner_dir)
-    }
-
-    fn apply_env(
-        &self,
-        env: &mut std::collections::HashMap<String, String>,
-        runner_dir: &Path,
-        _prefix_dir: &Path,
-        steam_dir: &Path,
-        client_path_str: &str,
-        enable_hud: bool,
-    ) {
-        let bundle = find_dxmt();
-        let mode = if bundle.as_ref().is_some_and(DxmtBundle::uses_builtin_dlls) {
-            "b"
-        } else {
-            "n,b"
-        };
-        env.insert(
-            "WINEDLLOVERRIDES".to_string(),
-            format!("steamclient=n,b;steamclient64=n,b;lsteamclient=b;d3d11,dxgi,d3d10core={mode};winemetal=b;nvapi64,nvngx=n,b"),
-        );
-
-        if let Some(ref dxmt) = bundle {
-            let old = env.get("WINEDLLPATH").cloned().unwrap_or_default();
-            let mut dll_paths = vec![dxmt.root.to_string_lossy().to_string()];
-            for sub in ["x86_64-windows", "i386-windows", "x86_64-unix"] {
-                let dir = dxmt.root.join(sub);
-                if dir.is_dir() {
-                    dll_paths.push(dir.to_string_lossy().to_string());
-                }
-            }
-            if !old.is_empty() {
-                dll_paths.push(old);
-            }
-            env.insert("WINEDLLPATH".to_string(), dll_paths.join(":"));
-        }
-
-        if enable_hud {
-            env.insert("MTL_HUD_ENABLED".to_string(), "1".to_string());
-        }
-
-        let lib_dir = runner_dir.join("lib");
-        let lib_unix = runner_dir.join("lib/wine/x86_64-unix");
-        let mut dyld_paths = vec![
-            steam_dir.to_string_lossy().to_string(),
-            client_path_str.to_string(),
-            lib_unix.to_string_lossy().to_string(),
-            lib_dir.to_string_lossy().to_string(),
-        ];
-        if let Some(dxmt) = bundle {
-            let dxmt_unix = dxmt.root.join("x86_64-unix");
-            if dxmt_unix.is_dir() {
-                dyld_paths.push(dxmt_unix.to_string_lossy().to_string());
-            }
-        }
-        env.insert(
-            "DYLD_FALLBACK_LIBRARY_PATH".to_string(),
-            dyld_paths.join(":"),
-        );
-    }
 }
 
 #[cfg(test)]

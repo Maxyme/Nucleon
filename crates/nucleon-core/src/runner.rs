@@ -9,15 +9,6 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, Clone)]
-pub struct RunnerInfo {
-    pub name: String,
-    pub path: PathBuf,
-    pub wine_bin: PathBuf,
-    pub wineserver_bin: PathBuf,
-    pub has_gptk: bool,
-}
-
 fn runner_is_assembled(path: &Path) -> bool {
     path.join("bin/wine").is_file() && path.join("lib/external/D3DMetal.framework").is_dir()
 }
@@ -537,24 +528,6 @@ pub fn get_kosmickrisp_info() -> Option<KosmicKrispInfo> {
         api_version,
         is_custom,
     })
-}
-
-/// Sets up a shim directory where `libMoltenVK.dylib` links to `libvulkan_kosmickrisp.dylib`,
-/// allowing Wine's `winemac.so` (which calls `dlopen("libMoltenVK.dylib")`) to load KosmicKrisp.
-pub fn setup_kosmickrisp_shim() -> Result<PathBuf> {
-    let shim_dir = paths::kosmickrisp_shim_dir();
-    fs::create_dir_all(&shim_dir)?;
-
-    if let Some(kk_lib) = find_kosmickrisp_driver_dylib() {
-        let dst_moltenvk = shim_dir.join("libMoltenVK.dylib");
-        if dst_moltenvk.exists() || dst_moltenvk.is_symlink() {
-            let _ = fs::remove_file(&dst_moltenvk);
-        }
-        #[cfg(unix)]
-        std::os::unix::fs::symlink(&kk_lib, &dst_moltenvk)?;
-    }
-
-    Ok(shim_dir)
 }
 
 /// What the host already provides for runner resolution.

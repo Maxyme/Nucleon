@@ -1,8 +1,7 @@
 #![forbid(unsafe_code)]
 
 use crate::paths;
-use anyhow::{Context, Result};
-use std::fs;
+use anyhow::Result;
 use std::path::{Path, PathBuf};
 
 /// Default release version from the embedded download catalog.
@@ -303,136 +302,10 @@ pub fn fetch_dxvk(version: Option<&str>, dest_dir: Option<&Path>) -> Result<Dxvk
     )
 }
 
-use crate::backend::{Backend, BackendStatus, GraphicsBackend};
-
-#[derive(Debug, Clone, Copy, Default)]
-pub struct DxvkBackend;
-
-impl Backend for DxvkBackend {
-    fn backend(&self) -> GraphicsBackend {
-        GraphicsBackend::Dxvk
-    }
-
-    fn supported_dx_versions(&self) -> &'static str {
-        find_dxvk()
-            .as_ref()
-            .map(|b| b.supported_dx_range())
-            .unwrap_or("DX9-DX11")
-    }
-
-    fn status(&self) -> BackendStatus {
-        let bundle = find_dxvk();
-        let installed = bundle.is_some();
-        let (location, version) = match bundle {
-            Some(ref b) => (Some(b.root.clone()), b.version.clone()),
-            None => (None, None),
-        };
-        BackendStatus {
-            backend: GraphicsBackend::Dxvk,
-            installed,
-            version,
-            location,
-            supported_dx: self.supported_dx_versions(),
-            description: "Direct3D 9/10/11 translation to Vulkan 1.4 for KosmicKrisp".to_string(),
-        }
-    }
-
-    fn install(&self, paths: &Path) -> Result<()> {
-        set_custom_dxvk_path(paths).map(|_| ())
-    }
-
-    fn enable(&self, prefix: &Path, runner_dir: Option<&Path>) -> Result<usize> {
-        let bundle = find_dxvk().context("DXVK is not installed. Run 'nucleon backends dxvk fetch' or configure via 'nucleon backends dxvk set-path <DIR>'")?;
-        crate::dxmt::unstage_dxmt_from_prefix(prefix, runner_dir)?;
-        stage_dxvk_into_prefix(&bundle, prefix)
-    }
-
-    fn disable(&self, prefix: &Path, runner_dir: Option<&Path>) -> Result<usize> {
-        unstage_dxvk_from_prefix(prefix, runner_dir)
-    }
-
-    fn apply_env(
-        &self,
-        env: &mut std::collections::HashMap<String, String>,
-        runner_dir: &Path,
-        _prefix_dir: &Path,
-        steam_dir: &Path,
-        client_path_str: &str,
-        enable_hud: bool,
-    ) {
-        if let Some(icd) = crate::runner::find_kosmickrisp_icd() {
-            env.insert(
-                "VK_DRIVER_FILES".to_string(),
-                icd.to_string_lossy().to_string(),
-            );
-            env.insert(
-                "VK_ICD_FILENAMES".to_string(),
-                icd.to_string_lossy().to_string(),
-            );
-        }
-        env.insert(
-            "MESA_LOADER_DRIVER_OVERRIDE".to_string(),
-            "kosmickrisp".to_string(),
-        );
-
-        if std::env::var("GALLIUM_DRIVER").is_err() {
-            env.insert("GALLIUM_DRIVER".to_string(), "zink".to_string());
-        }
-        if std::env::var("MESA_GL_VERSION_OVERRIDE").is_err() {
-            env.insert("MESA_GL_VERSION_OVERRIDE".to_string(), "4.6".to_string());
-        }
-        if std::env::var("MESA_GLSL_VERSION_OVERRIDE").is_err() {
-            env.insert("MESA_GLSL_VERSION_OVERRIDE".to_string(), "460".to_string());
-        }
-
-        let shim_dir = crate::runner::setup_kosmickrisp_shim()
-            .unwrap_or_else(|_| paths::kosmickrisp_shim_dir());
-
-        let mut overrides = "steamclient=n,b;steamclient64=n,b;lsteamclient=b;winevulkan=b,n;vulkan-1=b,n;d3d11,dxgi,d3d10core,d3d9=n,b".to_string();
-        if crate::vkd3d::find_vkd3d_proton().is_some() {
-            overrides.push_str(";d3d12,d3d12core=n,b");
-        }
-        if crate::d7vk::find_d7vk().is_some() {
-            overrides.push_str(";ddraw=n,b");
-        }
-        env.insert("WINEDLLOVERRIDES".to_string(), overrides);
-
-        env.insert("DXVK_LOG_LEVEL".to_string(), "info".to_string());
-        env.insert(
-            "DXVK_LOG_PATH".to_string(),
-            paths::support_dir().to_string_lossy().to_string(),
-        );
-
-        let mesa_cache = paths::home_dir().join("Library/Caches/Mesa");
-        let _ = fs::create_dir_all(&mesa_cache);
-        env.insert(
-            "MESA_SHADER_CACHE_DIR".to_string(),
-            mesa_cache.to_string_lossy().to_string(),
-        );
-
-        if enable_hud {
-            env.insert("MTL_HUD_ENABLED".to_string(), "1".to_string());
-        }
-
-        let lib_dir = runner_dir.join("lib");
-        let lib_unix = runner_dir.join("lib/wine/x86_64-unix");
-        env.insert(
-            "DYLD_FALLBACK_LIBRARY_PATH".to_string(),
-            format!(
-                "{}:{}:{}:{}:{}",
-                steam_dir.display(),
-                client_path_str,
-                shim_dir.display(),
-                lib_unix.display(),
-                lib_dir.display()
-            ),
-        );
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     use tempfile::tempdir;
 
     #[test]

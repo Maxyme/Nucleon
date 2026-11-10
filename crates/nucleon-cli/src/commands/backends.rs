@@ -71,7 +71,7 @@ pub fn run(action: BackendsAction) -> Result<()> {
                 ui::tree_kv(
                     "  │   └─",
                     "Status:",
-                    "○ Optional (run 'nucleon wine backends dxvk fetch')",
+                    "○ Optional (run 'nucleon backends dxvk fetch')",
                 );
             }
 
@@ -89,7 +89,7 @@ pub fn run(action: BackendsAction) -> Result<()> {
                 ui::tree_kv(
                     "  │   └─",
                     "Status:",
-                    "○ Optional (run 'nucleon wine backends vkd3d fetch')",
+                    "○ Optional (run 'nucleon backends vkd3d fetch')",
                 );
             }
 
@@ -107,7 +107,7 @@ pub fn run(action: BackendsAction) -> Result<()> {
                 ui::tree_kv(
                     "  │   └─",
                     "Status:",
-                    "○ Optional (run 'nucleon wine backends d7vk fetch')",
+                    "○ Optional (run 'nucleon backends d7vk fetch')",
                 );
             }
 
@@ -153,7 +153,7 @@ pub fn run(action: BackendsAction) -> Result<()> {
                 "\nTranslation Flows:\n  • Vulkan Driver Flow: [Windows Game] -> [Wine] -> [DXVK / VKD3D] -> [KosmicKrisp Vulkan] -> [Mac Metal]\n  • Direct Metal Flow:  [Windows Game] -> [Wine] -> [DXMT (DX11)] -> [Mac Metal]"
             );
             println!(
-                "To manage individual components: nucleon wine backends <dxvk|vkd3d|d7vk|dxmt|kosmickrisp> --help"
+                "To manage individual components: nucleon backends <dxvk|vkd3d|d7vk|dxmt|kosmickrisp> --help"
             );
             println!(
                 "Note: Apple GPTK is an independent runner & D3DMetal backend (manage with: nucleon gptk --help)"

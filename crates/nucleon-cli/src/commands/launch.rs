@@ -6,24 +6,26 @@ pub fn run_launch(args: super::steam::PlayArgs) -> Result<()> {
     let mut target =
         steam::library::target(&installed, args.exe.as_deref(), args.launch_id.as_deref())?;
     target.arguments.extend(args.arguments);
-    let mut overrides = prepare_request(
-        args.hud,
-        args.engine.as_deref(),
-        args.wine.as_deref(),
-        args.emulator,
-    )?;
-    overrides.graphics_api = args
-        .graphics_api
-        .map(|value| {
-            serde_json::from_value(serde_json::Value::String(value)).context(
-                "Choose auto, dx7, dx9, dx10, dx11, dx12, vulkan or opengl for --graphics-api",
-            )
-        })
-        .transpose()?;
-    overrides.upscaler = args
-        .upscaler
-        .map(nucleon_core::upscaler::Settings::selected);
-    overrides.frame_generation = args.frame_generation;
+    let overrides = nucleon_core::profile::GameProfile {
+        graphics_api: args
+            .graphics_api
+            .map(|value| {
+                serde_json::from_value(serde_json::Value::String(value)).context(
+                    "Choose auto, dx7, dx9, dx10, dx11, dx12, vulkan or opengl for --graphics-api",
+                )
+            })
+            .transpose()?,
+        upscaler: args
+            .upscaler
+            .map(nucleon_core::upscaler::Settings::selected),
+        frame_generation: args.frame_generation,
+        ..prepare_request(
+            args.hud,
+            args.engine.as_deref(),
+            args.wine.as_deref(),
+            args.emulator,
+        )?
+    };
     nucleon_runner::launch_steam(
         nucleon_runner::SteamRequest {
             appid: args.appid,

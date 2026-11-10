@@ -82,8 +82,7 @@ fn check_is_valid_wine_root(dir: &Path) -> bool {
 
 /// Attempts to extract version from ancestor Info.plist files (e.g. for app bundles).
 fn extract_bundle_version(root: &Path) -> Option<String> {
-    let mut cur = Some(root);
-    while let Some(dir) = cur {
+    for dir in root.ancestors() {
         let plist_candidates = [dir.join("Contents/Info.plist"), dir.join("Info.plist")];
         for plist_path in &plist_candidates {
             if let Ok(value) = plist::Value::from_file(plist_path)
@@ -96,7 +95,6 @@ fn extract_bundle_version(root: &Path) -> Option<String> {
                 return Some(version.trim().to_string());
             }
         }
-        cur = dir.parent();
     }
     None
 }
@@ -173,22 +171,19 @@ pub fn resolve_wine_runtime_root(candidate: &Path) -> Option<PathBuf> {
 fn derive_name_from_path(dir: &Path, actual_root: &Path) -> String {
     // 1. If dir or actual_root is inside an .app bundle, use the bundle's stem name
     for path in [dir, actual_root] {
-        let mut cur = Some(path);
-        while let Some(p) = cur {
+        for p in path.ancestors() {
             if let Some(file_name) = p.file_name().and_then(|n| n.to_str())
                 && let Some(stem) = file_name.strip_suffix(".app")
                 && !stem.is_empty()
             {
                 return stem.to_string();
             }
-            cur = p.parent();
         }
     }
 
     // 2. Walk up from dir (or actual_root) skipping internal subdirectories or binaries
     for start in [dir, actual_root] {
-        let mut cur = Some(start);
-        while let Some(p) = cur {
+        for p in start.ancestors() {
             if let Some(name) = p.file_name().and_then(|n| n.to_str()) {
                 let lower = name.to_lowercase();
                 let parent_lower = p
@@ -217,7 +212,6 @@ fn derive_name_from_path(dir: &Path, actual_root: &Path) -> String {
                     return name.to_string();
                 }
             }
-            cur = p.parent();
         }
     }
 
@@ -246,9 +240,7 @@ pub fn inspect_wine_dir(
         let id = id_override
             .map(str::to_owned)
             .unwrap_or_else(|| name.to_lowercase().replace([' ', '_'], "-"));
-        let mut runtime = described_wine(&capabilities, &id);
-        runtime.name = name;
-        return Some(runtime);
+        return Some(described_wine(&capabilities, &id, &name));
     }
 
     let wine_bin = if actual_root.join("bin/wine").is_file() {
@@ -509,7 +501,7 @@ pub fn discover_wine_runtimes() -> Vec<WineRuntime> {
     if let Some(runtime) = selected.as_ref()
         && seen_roots.insert(runtime.root.clone())
     {
-        runtimes.push(described_wine(runtime, "fex-preview"));
+        runtimes.push(described_wine(runtime, "fex-preview", "fex-preview"));
     }
     let store = paths::support_dir().join("runtimes/arm64-fex");
     if let Ok(entries) = fs::read_dir(store) {
@@ -520,10 +512,8 @@ pub fn discover_wine_runtimes() -> Vec<WineRuntime> {
                 && runtime.mode == crate::runtime::ExecutionMode::Arm64Fex
                 && seen_roots.insert(runtime.root.clone())
             {
-                runtimes.push(described_wine(
-                    &runtime,
-                    &format!("fex-{}", entry.file_name().to_string_lossy()),
-                ));
+                let id = format!("fex-{}", entry.file_name().to_string_lossy());
+                runtimes.push(described_wine(&runtime, &id, &id));
             }
         }
     }
@@ -547,14 +537,14 @@ pub fn discover_wine_runtimes() -> Vec<WineRuntime> {
     runtimes
 }
 
-fn described_wine(runtime: &crate::runtime::ResolvedRuntime, id: &str) -> WineRuntime {
+fn described_wine(runtime: &crate::runtime::ResolvedRuntime, id: &str, name: &str) -> WineRuntime {
     let version = fs::read(runtime.root.join("share/nucleon-build/release.json"))
         .ok()
         .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
         .and_then(|v| v.get("version").and_then(|v| v.as_str()).map(str::to_owned));
     WineRuntime {
         id: id.into(),
-        name: id.into(),
+        name: name.into(),
         root: runtime.root.clone(),
         version,
     }

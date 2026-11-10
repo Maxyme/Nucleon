@@ -56,10 +56,10 @@ jobs:
             ${{ runner.os }}-cargo-
 
       - name: Check Clippy lints
-        run: cargo clippy -p nucleon-core -p nucleon-runner -p nucleon-cli -p nucleon-devtools --all-targets --all-features -- -D warnings
+        run: cargo clippy --locked -p nucleon-core -p nucleon-runner -p nucleon-cli -p nucleon-devtools --all-targets --all-features -- -D warnings
 
       - name: Run unit tests
-        run: cargo test -p nucleon-core -p nucleon-runner -p nucleon-cli -p nucleon-devtools
+        run: cargo test --locked -p nucleon-core -p nucleon-runner -p nucleon-cli -p nucleon-devtools
 
   build-and-release:
     name: Build & Package Release Bundle
@@ -89,7 +89,7 @@ jobs:
 
       - name: Build thin arm64 release binary
         run: |
-          cargo build --release --target aarch64-apple-darwin \
+          cargo build --locked --release --target aarch64-apple-darwin \
             -p nucleon-cli
 
       - name: Ad-hoc sign release binaries for Apple Silicon

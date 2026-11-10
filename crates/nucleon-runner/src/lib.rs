@@ -216,14 +216,17 @@ fn validate_graphics_paths(
 /// Explicit backend choices win; inferred GPTK must not discard a per-game Wine selection.
 fn select_automatic_engine(
     api: &nucleon_core::detector::GraphicsApi,
-    mut available: nucleon_core::detector::AutoBackends,
+    available: nucleon_core::detector::AutoBackends,
     configured: nucleon_core::backend::GraphicsBackend,
     custom_wine: bool,
     has_bundled_gptk: bool,
 ) -> Result<nucleon_core::detector::TargetEngine> {
     use nucleon_core::backend::GraphicsBackend;
     use nucleon_core::detector::TargetEngine;
-    available.gptk &= !custom_wine || has_bundled_gptk;
+    let available = nucleon_core::detector::AutoBackends {
+        gptk: available.gptk && (!custom_wine || has_bundled_gptk),
+        ..available
+    };
     match configured {
         GraphicsBackend::Auto => available.select(api),
         GraphicsBackend::D3DMetal => Ok(TargetEngine::Gptk),
@@ -692,24 +695,26 @@ fn resolve_steam_launch(request: &SteamRequest) -> Result<ResolvedLaunch> {
 
     let mut resolved_graphics = None;
     let mut resolved_runtime = selected_runtime.clone();
-    let mut effective_profile = game_profile.clone();
-    effective_profile.upscaler = requested_upscaler(
-        Some(request_settings),
-        if request_settings.upscaler.is_some() {
-            None
-        } else {
-            config::environment("NUCLEON_UPSCALER")?
-        }
-        .as_deref(),
-        &game_profile,
-    )?;
-    effective_profile.graphics_api = request_settings.graphics_api.or(game_profile.graphics_api);
-    effective_profile.frame_generation = request_settings
-        .frame_generation
-        .or(game_profile.frame_generation);
-    effective_profile.steam_protocol = request_settings
-        .steam_protocol
-        .or(game_profile.steam_protocol);
+    let effective_profile = GameProfile {
+        upscaler: requested_upscaler(
+            Some(request_settings),
+            if request_settings.upscaler.is_some() {
+                None
+            } else {
+                config::environment("NUCLEON_UPSCALER")?
+            }
+            .as_deref(),
+            &game_profile,
+        )?,
+        graphics_api: request_settings.graphics_api.or(game_profile.graphics_api),
+        frame_generation: request_settings
+            .frame_generation
+            .or(game_profile.frame_generation),
+        steam_protocol: request_settings
+            .steam_protocol
+            .or(game_profile.steam_protocol),
+        ..game_profile.clone()
+    };
     let render_target = effective_profile
         .upscaler
         .as_ref()
@@ -1818,9 +1823,9 @@ mod tests {
         fs::write(dxvk_x64.join("d3d11.dll"), b"dxvk-dll").unwrap();
         nucleon_core::dxvk::set_custom_dxvk_path(&dxvk_dir).unwrap();
 
-        let dxvk_backend =
-            nucleon_core::backend::create_backend(nucleon_core::backend::GraphicsBackend::Dxvk);
-        let staged_dxvk = dxvk_backend.enable(&pfx_dir, None).unwrap();
+        let dxvk_bundle = nucleon_core::dxvk::find_dxvk().unwrap();
+        let staged_dxvk =
+            nucleon_core::dxvk::stage_dxvk_into_prefix(&dxvk_bundle, &pfx_dir).unwrap();
         assert!(staged_dxvk > 0);
         assert_eq!(fs::read(sys32.join("d3d11.dll")).unwrap(), b"dxvk-dll");
 
@@ -1832,9 +1837,10 @@ mod tests {
         fs::write(dxmt_x64.join("winemetal.dll"), b"dxmt-winemetal").unwrap();
         nucleon_core::dxmt::set_custom_dxmt_path(&dxmt_dir).unwrap();
 
-        let dxmt_backend =
-            nucleon_core::backend::create_backend(nucleon_core::backend::GraphicsBackend::Dxmt);
-        let staged_dxmt = dxmt_backend.enable(&pfx_dir, None).unwrap();
+        let dxmt_bundle = nucleon_core::dxmt::find_dxmt().unwrap();
+        nucleon_core::dxvk::unstage_dxvk_from_prefix(&pfx_dir, None).unwrap();
+        let staged_dxmt =
+            nucleon_core::dxmt::stage_dxmt_into_prefix(&dxmt_bundle, &pfx_dir, None).unwrap();
         assert!(staged_dxmt > 0);
         assert_eq!(fs::read(sys32.join("d3d11.dll")).unwrap(), b"dxmt-d3d11");
         assert_eq!(
@@ -1843,9 +1849,8 @@ mod tests {
         );
 
         // 3. Enable D3DMetal (GPTK4 flow) -> unstage all translation layers
-        let d3dm_backend =
-            nucleon_core::backend::create_backend(nucleon_core::backend::GraphicsBackend::D3DMetal);
-        d3dm_backend.enable(&pfx_dir, None).unwrap();
+        nucleon_core::dxvk::unstage_dxvk_from_prefix(&pfx_dir, None).unwrap();
+        nucleon_core::dxmt::unstage_dxmt_from_prefix(&pfx_dir, None).unwrap();
         assert!(
             !sys32.join("winemetal.dll").exists(),
             "D3DMetal flow must unstage winemetal.dll"

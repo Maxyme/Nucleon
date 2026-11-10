@@ -104,10 +104,6 @@ pub fn kosmickrisp_dir() -> PathBuf {
     support_dir().join("drivers/kosmickrisp")
 }
 
-pub fn kosmickrisp_shim_dir() -> PathBuf {
-    support_dir().join("shims/kosmickrisp")
-}
-
 pub fn vkd3d_proton_dir() -> PathBuf {
     support_dir().join("vkd3d-proton")
 }
@@ -132,7 +128,6 @@ pub fn ensure_dirs() -> Result<()> {
         bridge_dir(),
         downloads_dir(),
         kosmickrisp_dir(),
-        kosmickrisp_shim_dir(),
         vkd3d_proton_dir(),
         d7vk_dir(),
         dxvk_dir(),

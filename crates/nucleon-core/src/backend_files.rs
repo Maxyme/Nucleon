@@ -34,8 +34,7 @@ pub fn restore(dir: &Path, name: &str, runner: Option<&Path>, subdirs: &[&str]) 
         }
     }
     let destination = dir.join(name);
-    let mut source = None;
-    if let Some(root) = runner {
+    let source = if let Some(root) = runner {
         let directories = if root.join(crate::runtime::DESCRIPTOR).is_file() {
             let runtime = crate::runtime::ResolvedRuntime::inspect(root)?;
             let is32 = dir.file_name().is_some_and(|s| s == "syswow64");
@@ -52,11 +51,12 @@ pub fn restore(dir: &Path, name: &str, runner: Option<&Path>, subdirs: &[&str]) 
         } else {
             subdirs.iter().map(|s| root.join(s)).collect()
         };
+        let mut found = None;
         for directory in directories {
             let candidate = directory.join(name);
             match fs::metadata(&candidate) {
                 Ok(meta) if meta.is_file() => {
-                    source = Some(candidate);
+                    found = Some(candidate);
                     break;
                 }
                 Ok(_) => bail!("Wine builtin is not a file: {}", candidate.display()),
@@ -67,7 +67,10 @@ pub fn restore(dir: &Path, name: &str, runner: Option<&Path>, subdirs: &[&str]) 
                 }
             }
         }
-    }
+        found
+    } else {
+        None
+    };
     if let Some(source) = source {
         let bytes =
             fs::read(&source).with_context(|| format!("Read builtin {}", source.display()))?;
