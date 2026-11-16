@@ -1686,9 +1686,10 @@ pub fn apply_gptk_execution_env(
 
     env.insert("WINEDEBUG".to_string(), "warn+all,err+all,+seh".to_string());
 
-    if enable_hud {
-        env.insert("MTL_HUD_ENABLED".to_string(), "1".to_string());
-    }
+    env.insert(
+        "MTL_HUD_ENABLED".to_string(),
+        if enable_hud { "1" } else { "0" }.to_string(),
+    );
 
     // Dynamic linker paths including external D3DMetal
     let lib_ext = runner_dir.join("lib/external");
@@ -2089,6 +2090,8 @@ mod tests {
         assert!(dyld.contains("/tmp/test_steam"));
         assert!(dyld.contains("/tmp/test_client"));
         assert!(dyld.contains("/tmp/test_runner/lib/external"));
+        apply_gptk_execution_env(&mut env, &runner_dir, &steam_dir, client_path_str, false);
+        assert_eq!(env.get("MTL_HUD_ENABLED").map(|s| s.as_str()), Some("0"));
     }
 
     #[test]

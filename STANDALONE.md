@@ -42,6 +42,9 @@ graphics stack. GPTK requires a complete compatible Intel Wine runtime bundling
 its matched D3DMetal components, selected explicitly with `--wine`; it does not
 replace a selected Wine runtime with another runner.
 `--hud` enables the Metal HUD; `--hud=false` explicitly disables it.
+Without a saved or command-line HUD choice, `MTL_HUD_ENABLED` is honored and
+the HUD otherwise defaults to off. An explicit `--hud=false` overrides an
+inherited enabled HUD.
 
 `--upscaler game|fsr2|fsr3.1|xess|metalfx|fsr4-native-lite|fsr4-native`
 selects an experimental prepared upscaler. Install the provider and bind the

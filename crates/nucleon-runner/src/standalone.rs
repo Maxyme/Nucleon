@@ -102,7 +102,10 @@ pub fn resolve_standalone(request: StandaloneRequest) -> Result<ResolvedStandalo
         appid: None,
         arguments,
         cwd: application.cwd,
-        hud: settings.hud.unwrap_or(false),
+        hud: match settings.hud {
+            Some(value) => value,
+            None => super::environment_boolean("MTL_HUD_ENABLED")?.unwrap_or(false),
+        },
         overlay: false,
         upscaler: settings.upscaler,
         frame_generation: settings.frame_generation,

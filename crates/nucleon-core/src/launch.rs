@@ -791,9 +791,7 @@ impl LaunchPlan {
                 )
             ),
         );
-        if hud {
-            env.insert("MTL_HUD_ENABLED".into(), "1".into());
-        }
+        env.insert("MTL_HUD_ENABLED".into(), if hud { "1" } else { "0" }.into());
         if self.steam_integration
             && overlay
             && client.join("gameoverlayrenderer.dylib").is_file()
@@ -1024,7 +1022,6 @@ pub fn clean_standalone_command(command: &mut Command) {
         "NUCLEON_STEAMCLIENT_REDIRECT",
         "NUCLEON_STEAM_SHIM",
         "NUCLEON_OVERLAY",
-        "MTL_HUD_ENABLED",
     ] {
         command.env_remove(key);
     }
@@ -1141,6 +1138,7 @@ mod tests {
         assert!(env.contains_key("WINEDLLPATH"));
         assert_eq!(env["WINEESYNC"], plan.bootstrap_env()["WINEESYNC"]);
         assert_eq!(env["MTL_HUD_ENABLED"], "1");
+        assert_eq!(plan.execution_env(false, false)["MTL_HUD_ENABLED"], "0");
     }
 
     #[test]

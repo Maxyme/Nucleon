@@ -126,6 +126,36 @@ impl Fixture {
 }
 
 #[test]
+fn hud_defaults_off_and_explicit_choices_override_the_environment() {
+    let f = Fixture::new();
+    let mut profile = f.profile.clone();
+    profile["settings"].as_object_mut().unwrap().remove("hud");
+    fs::write(
+        f.support.join("applications/sample.json"),
+        serde_json::to_vec(&profile).unwrap(),
+    )
+    .unwrap();
+    for (environment, argument, expected) in [
+        (None, None, false),
+        (Some("1"), None, true),
+        (Some("0"), None, false),
+        (Some("1"), Some("--hud=false"), false),
+        (Some("0"), Some("--hud"), true),
+    ] {
+        let mut command = cli(&f.support);
+        command.args(["app", "run", "sample", "--dry-run"]);
+        if let Some(value) = environment {
+            command.env("MTL_HUD_ENABLED", value);
+        }
+        if let Some(value) = argument {
+            command.arg(value);
+        }
+        assert_eq!(output(&mut command)["hud"], expected);
+    }
+    f.unchanged();
+}
+
+#[test]
 fn saved_and_direct_previews_share_selected_choices_and_have_no_launch_effects() {
     let f = Fixture::new();
     let saved =
