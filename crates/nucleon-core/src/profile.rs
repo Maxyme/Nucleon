@@ -1,4 +1,5 @@
-//! Structured per-game choices shared by Steam launches and diagnostic wrappers.
+//! Structured per-game choices shared by Steam launches and diagnostic wrappers,
+//! backed by `assets/game-configs.toml`.
 use crate::repo_assets::ASSETS;
 use crate::{
     detector::GraphicsApi,
@@ -7,8 +8,10 @@ use crate::{
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
+    sync::OnceLock,
 };
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -70,16 +73,60 @@ pub struct GameProfile {
     pub steam_bridge: Option<PathBuf>,
 }
 
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct UpscalerGameConfigs {
+    #[serde(default)]
+    pub dlss_patcher_executables: Vec<String>,
+    #[serde(default)]
+    pub input_dlls: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct GraphicsApiConfigRule {
+    pub executable: String,
+    pub config_file: String,
+    pub section: String,
+    pub key: String,
+    pub values: BTreeMap<String, GraphicsPreference>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct GameConfigs {
+    pub schema: u32,
+    #[serde(default)]
+    pub upscaler: UpscalerGameConfigs,
+    #[serde(default)]
+    pub graphics_api_configs: Vec<GraphicsApiConfigRule>,
+    #[serde(default)]
+    pub fex_profiles: BTreeMap<String, GameProfile>,
+}
+
+pub(crate) fn game_configs() -> &'static GameConfigs {
+    static CONFIGS: OnceLock<GameConfigs> = OnceLock::new();
+    CONFIGS.get_or_init(|| {
+        let configs: GameConfigs = toml::from_str(
+            ASSETS
+                .get_file("game-configs.toml")
+                .expect("Embedded game-configs.toml")
+                .contents_utf8()
+                .expect("UTF-8 game-configs.toml"),
+        )
+        .expect("Embedded game-configs.toml must match the schema");
+        assert_eq!(configs.schema, 1, "Unsupported game-configs.toml schema");
+        configs
+    })
+}
+
 impl GameProfile {
     pub fn fex_default(appid: &str) -> Self {
-        let mut profiles: std::collections::BTreeMap<String, Self> = serde_json::from_slice(
-            ASSETS
-                .get_file("arm64-fex-profiles.json")
-                .expect("Embedded FEX profiles")
-                .contents(),
-        )
-        .expect("Embedded FEX profiles must match the profile schema");
-        profiles.remove(appid).unwrap_or_default()
+        game_configs()
+            .fex_profiles
+            .get(appid)
+            .cloned()
+            .unwrap_or_default()
     }
     /// Fill absent fields without overriding explicit false or auto choices.
     pub fn with_defaults(self, defaults: Self) -> Self {
@@ -133,13 +180,17 @@ impl GameProfile {
 }
 
 fn configured_graphics_api(exe: &Path) -> Result<Option<GraphicsApi>> {
-    if !exe
-        .file_name()
-        .is_some_and(|s| s.to_string_lossy().eq_ignore_ascii_case("DevilMayCry5.exe"))
-    {
+    let Some(exe_name) = exe.file_name() else {
         return Ok(None);
-    }
-    let path = exe.with_file_name("dmc5config.ini");
+    };
+    let Some(rule) = game_configs()
+        .graphics_api_configs
+        .iter()
+        .find(|r| exe_name.to_string_lossy().eq_ignore_ascii_case(&r.executable))
+    else {
+        return Ok(None);
+    };
+    let path = exe.with_file_name(&rule.config_file);
     let text = match fs::read_to_string(&path) {
         Ok(text) => text,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -148,21 +199,22 @@ fn configured_graphics_api(exe: &Path) -> Result<Option<GraphicsApi>> {
                 .with_context(|| format!("Read game graphics configuration {}", path.display()));
         }
     };
-    let mut render = false;
+    let target_section = format!("[{}]", rule.section);
+    let mut in_section = false;
     let mut api = None;
     for line in text.trim_start_matches('\u{feff}').lines().map(str::trim) {
         if line.starts_with('[') {
-            render = line.eq_ignore_ascii_case("[Render]");
+            in_section = line.eq_ignore_ascii_case(&target_section);
         }
-        if render
+        if in_section
             && let Some((key, value)) = line.split_once('=')
-            && key.trim().eq_ignore_ascii_case("TargetPlatform")
+            && key.trim().eq_ignore_ascii_case(&rule.key)
         {
-            api = match value.trim() {
-                "DirectX11" => Some(GraphicsApi::DirectX11),
-                "DirectX12" => Some(GraphicsApi::DirectX12),
-                _ => None,
-            };
+            api = rule
+                .values
+                .iter()
+                .find(|(k, _)| k.eq_ignore_ascii_case(value.trim()))
+                .and_then(|(_, pref)| pref.api());
         }
     }
     Ok(api)

@@ -1,0 +1,41 @@
+# Per-game and upscaler configuration rules embedded in Nucleon.
+schema = 1
+
+[upscaler]
+dlss_patcher_executables = [
+    "Talos2.exe",
+    "Talos2-Win64-Shipping.exe",
+    "StillWakesTheDeep.exe",
+]
+
+[upscaler.input_dlls]
+"nvngx_dlss.dll" = "dlss"
+"libxess.dll" = "xess"
+"amd_fidelityfx_upscaler_dx12.dll" = "fsr31"
+"amd_fidelityfx_dx12.dll" = "fsr31"
+"ffx_fsr3upscaler_x64.dll" = "fsr3"
+"ffx_fsr3_x64.dll" = "fsr3"
+"ffx_fsr2_api_x64.dll" = "fsr2"
+"ffx_fsr2_api_dx12_x64.dll" = "fsr2"
+"ffx_fsr2_api_dx11_x64.dll" = "fsr2"
+
+[[graphics_api_configs]]
+executable = "DevilMayCry5.exe"
+config_file = "dmc5config.ini"
+section = "Render"
+key = "TargetPlatform"
+
+[graphics_api_configs.values]
+DirectX11 = "dx11"
+DirectX12 = "dx12"
+
+[fex_profiles.601150]
+steam_protocol = "valve-redirect"
+use_steam_shim = true
+overlay = false
+
+[fex_profiles.690790]
+graphics_api = "dx11"
+steam_protocol = "bridge"
+use_steam_shim = true
+overlay = false

@@ -1,0 +1,79 @@
+# Native DLSS-G passthrough recipes and configuration rules embedded in Nucleon.
+schema = 1
+
+strip_suffixes = [
+    "-Win64-Shipping",
+    "_Win64_Shipping",
+    "-Win64-Test",
+    "_Win64_Test",
+    "-Win64",
+    "_Win64",
+    "-Shipping",
+    "_Shipping",
+]
+
+[[defaults.files]]
+file = "Engine.ini"
+section = "ConsoleVariables"
+required = false
+
+[defaults.files.metalfx]
+"r.Streamline.InitializePlugin" = "1"
+"r.Streamline.DLSSG.Enable" = "1"
+
+[defaults.files.off]
+"r.Streamline.InitializePlugin" = "0"
+"r.Streamline.DLSSG.Enable" = "0"
+
+[recipes.Talos2]
+executables = ["Talos2.exe", "Talos2-Win64-Shipping.exe"]
+experimental = false
+
+[[recipes.Talos2.files]]
+file = "GameUserSettings.ini"
+section = "/Script/Talos2.TalosGameUserSettings"
+required = true
+metalfx = { FrameGeneration = "1" }
+off = { FrameGeneration = "0" }
+
+[recipes.StillWakesTheDeep]
+executables = ["StillWakesTheDeep.exe"]
+experimental = true
+
+[[recipes.StillWakesTheDeep.files]]
+file = "GameUserSettings.ini"
+section = "/Script/Habitat.HabitatLocalSettings"
+required = true
+off = { NvidiaDLSSFrameGenerationMode = "0" }
+
+[recipes.StillWakesTheDeep.files.metalfx]
+NvidiaDLSSFrameGenerationMode = "1"
+bNvidiaDLSSEnabled = "True"
+ESSTechnologyType = "NVidiaDLSS"
+bAMDFSR3Enabled = "False"
+bAMDFSR3FrameGenEnabled = "False"
+
+[recipes.TheInvincible]
+executables = ["TheInvincible.exe", "TheInvincible-Win64-Shipping.exe"]
+experimental = true
+
+[[recipes.TheInvincible.files]]
+file = "Engine.ini"
+section = "ConsoleVariables"
+required = false
+metalfx = { "r.NGX.DLSS.Enable" = "1", "r.FidelityFX.FSR2.Enabled" = "0" }
+off = { "r.NGX.DLSS.Enable" = "0" }
+
+[[recipes.TheInvincible.files]]
+file = "GameUserSettings.ini"
+section = "/Script/SWI_Game.SWIGame_ProjectSettings"
+required = true
+metalfx = { FrameGeneration = "1", TemporalUpscaler = "DLSS" }
+off = { FrameGeneration = "0" }
+
+[[recipes.TheInvincible.files]]
+file = "Game.ini"
+section = "/Script/SWI_Game.SWIGame_ProjectSettings"
+required = false
+metalfx = { FrameGeneration = "1", TemporalUpscaler = "DLSS" }
+off = { FrameGeneration = "0" }

@@ -1,4 +1,0 @@
-{
-  "601150": { "steam_protocol": "valve-redirect", "use_steam_shim": true, "overlay": false },
-  "690790": { "graphics_api": "dx11", "steam_protocol": "bridge", "use_steam_shim": true, "overlay": false }
-}

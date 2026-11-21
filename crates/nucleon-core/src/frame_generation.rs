@@ -1,5 +1,6 @@
-//! Explicit native DLSS-G passthrough recipes. This is separate from OptiScaler's FSR/XeSS FG.
-use crate::{fs_util::atomic_write_file, launch::LaunchPlan, upscaler};
+//! Explicit native DLSS-G passthrough recipes loaded from `assets/frame-generation.toml`.
+//! This is separate from OptiScaler's FSR/XeSS FG.
+use crate::{fs_util::atomic_write_file, launch::LaunchPlan, repo_assets::ASSETS, upscaler};
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -8,6 +9,7 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
     str::FromStr,
+    sync::OnceLock,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -24,11 +26,120 @@ impl FromStr for Setting {
     }
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct IniRule {
+    file: String,
+    section: String,
+    #[serde(default)]
+    required: bool,
+    #[serde(default)]
+    metalfx: BTreeMap<String, String>,
+    #[serde(default)]
+    off: BTreeMap<String, String>,
+}
+
+impl IniRule {
+    fn changes(&self, setting: Setting) -> &BTreeMap<String, String> {
+        match setting {
+            Setting::Metalfx => &self.metalfx,
+            Setting::Off => &self.off,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Defaults {
+    #[serde(default)]
+    files: Vec<IniRule>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RecipeSpec {
+    executables: Vec<String>,
+    #[serde(default)]
+    experimental: bool,
+    #[serde(default)]
+    files: Vec<IniRule>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Catalog {
+    schema: u32,
+    #[serde(default)]
+    strip_suffixes: Vec<String>,
+    #[serde(default)]
+    defaults: Defaults,
+    recipes: BTreeMap<String, RecipeSpec>,
+}
+
+fn parse_catalog(text: &str) -> Result<Catalog> {
+    let catalog: Catalog =
+        toml::from_str(text).context("Invalid assets/frame-generation.toml")?;
+    ensure!(
+        catalog.schema == 1 && !catalog.recipes.is_empty(),
+        "Unsupported frame-generation catalog schema"
+    );
+    for (id, recipe) in &catalog.recipes {
+        ensure!(
+            !recipe.executables.is_empty() && !recipe.files.is_empty(),
+            "Frame-generation recipe {id} must define executables and INI rules"
+        );
+        for rule in catalog.defaults.files.iter().chain(&recipe.files) {
+            ensure!(
+                !rule.file.is_empty()
+                    && !rule.file.contains(['/', '\\'])
+                    && !rule.section.trim().is_empty(),
+                "Invalid INI rule in frame-generation recipe {id}"
+            );
+        }
+    }
+    Ok(catalog)
+}
+
+fn catalog() -> Result<&'static Catalog> {
+    static CATALOG: OnceLock<std::result::Result<Catalog, String>> = OnceLock::new();
+    CATALOG
+        .get_or_init(|| {
+            parse_catalog(
+                ASSETS
+                    .get_file("frame-generation.toml")
+                    .expect("Embedded frame-generation catalog")
+                    .contents_utf8()
+                    .expect("UTF-8 frame-generation catalog"),
+            )
+            .map_err(|error| format!("{error:#}"))
+        })
+        .as_ref()
+        .map_err(|error| anyhow::anyhow!("{error}"))
+}
+
+fn find_recipe(renderer: &Path) -> Result<(String, &'static RecipeSpec)> {
+    let name = renderer.file_name().unwrap_or_default().to_string_lossy();
+    let catalog = catalog()?;
+    for (id, spec) in &catalog.recipes {
+        if spec
+            .executables
+            .iter()
+            .any(|candidate| name.eq_ignore_ascii_case(candidate))
+        {
+            return Ok((id.clone(), spec));
+        }
+    }
+    anyhow::bail!(
+        "No frame-generation settings recipe for {}",
+        renderer.display()
+    )
+}
+
 #[derive(Debug, Serialize)]
 pub struct Resolved {
     pub setting: Setting,
     pub configuration_directories: Vec<PathBuf>,
-    recipe: Recipe,
+    recipe: String,
     pub experimental: bool,
 }
 
@@ -38,7 +149,7 @@ pub fn resolve(
     plan: &LaunchPlan,
     scaler: &upscaler::Resolved,
 ) -> Result<Resolved> {
-    let recipe = Recipe::for_renderer(&scaler.renderer)?;
+    let (recipe, spec) = find_recipe(&scaler.renderer)?;
     if setting == Setting::Metalfx {
         ensure!(
             scaler.settings.backend == upscaler::Backend::Metalfx
@@ -51,12 +162,12 @@ pub fn resolve(
     Ok(Resolved {
         setting,
         recipe,
-        experimental: matches!(recipe, Recipe::StillWakesTheDeep),
+        experimental: spec.experimental,
         configuration_directories: configuration_directories(&plan.prefix, &scaler.renderer)?,
     })
 }
 
-fn candidate_folder_names(renderer: &Path) -> Vec<String> {
+fn candidate_folder_names(renderer: &Path) -> Result<Vec<String>> {
     let mut names = Vec::new();
     for ancestor in renderer.ancestors() {
         if ancestor
@@ -69,17 +180,8 @@ fn candidate_folder_names(renderer: &Path) -> Vec<String> {
     }
     if let Some(stem) = renderer.file_stem().and_then(|s| s.to_str()) {
         names.push(stem.to_string());
-        for suffix in [
-            "-Win64-Shipping",
-            "_Win64_Shipping",
-            "-Win64-Test",
-            "_Win64_Test",
-            "-Win64",
-            "_Win64",
-            "-Shipping",
-            "_Shipping",
-        ] {
-            if let Some(stripped) = stem.strip_suffix(suffix) {
+        for suffix in &catalog()?.strip_suffixes {
+            if let Some(stripped) = stem.strip_suffix(suffix.as_str()) {
                 names.push(stripped.to_string());
             }
         }
@@ -93,7 +195,7 @@ fn candidate_folder_names(renderer: &Path) -> Vec<String> {
             deduped.push(name);
         }
     }
-    deduped
+    Ok(deduped)
 }
 
 fn configuration_directories(prefix: &Path, renderer: &Path) -> Result<Vec<PathBuf>> {
@@ -102,7 +204,7 @@ fn configuration_directories(prefix: &Path, renderer: &Path) -> Result<Vec<PathB
         .context("Start the game once before configuring frame generation")?;
     let users = prefix.join("drive_c/users");
     let mut directories = Vec::new();
-    let candidates = candidate_folder_names(renderer);
+    let candidates = candidate_folder_names(renderer)?;
 
     if users.is_dir() {
         for user in fs::read_dir(&users).context("Start the game once to create its settings")? {
@@ -141,107 +243,70 @@ fn configuration_directories(prefix: &Path, renderer: &Path) -> Result<Vec<PathB
     Ok(directories)
 }
 
-#[derive(Debug, Clone, Copy, Serialize)]
-enum Recipe {
-    Talos2,
-    StillWakesTheDeep,
-}
-
-impl Recipe {
-    fn for_renderer(renderer: &Path) -> Result<Self> {
-        let name = renderer.file_name().unwrap_or_default().to_string_lossy();
-        if ["Talos2.exe", "Talos2-Win64-Shipping.exe"]
-            .iter()
-            .any(|candidate| name.eq_ignore_ascii_case(candidate))
-        {
-            Ok(Self::Talos2)
-        } else if name.eq_ignore_ascii_case("StillWakesTheDeep.exe") {
-            Ok(Self::StillWakesTheDeep)
-        } else {
-            anyhow::bail!(
-                "No frame-generation settings recipe for {}",
-                renderer.display()
-            )
-        }
-    }
-
-    fn gus_changes(self, value: &str) -> (&'static str, BTreeMap<String, String>) {
-        match self {
-            Self::Talos2 => (
-                "/Script/Talos2.TalosGameUserSettings",
-                BTreeMap::from([("FrameGeneration".into(), value.into())]),
-            ),
-            Self::StillWakesTheDeep => {
-                let mut changes =
-                    BTreeMap::from([("NvidiaDLSSFrameGenerationMode".into(), value.into())]);
-                if value == "1" {
-                    changes.extend([
-                        ("bNvidiaDLSSEnabled".into(), "True".into()),
-                        ("ESSTechnologyType".into(), "NVidiaDLSS".into()),
-                        ("bAMDFSR3Enabled".into(), "False".into()),
-                        ("bAMDFSR3FrameGenEnabled".into(), "False".into()),
-                    ]);
-                }
-                ("/Script/Habitat.HabitatLocalSettings", changes)
-            }
-        }
-    }
-}
-
 impl Resolved {
     /// Called with the prefix lock held. Back up originals once; preserve all unrelated settings.
     pub fn apply(&self) -> Result<()> {
-        let value = if self.setting == Setting::Metalfx {
-            "1"
-        } else {
-            "0"
-        };
-        let mut edits = Vec::new();
-        for directory in &self.configuration_directories {
-            let engine_path = directory.join("Engine.ini");
-            ensure!(
-                !engine_path.is_symlink(),
-                "Game settings cannot be symlinks: {}",
-                engine_path.display()
-            );
-            let engine_original = match fs::read_to_string(&engine_path) {
-                Ok(text) => Some(text),
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
-                Err(e) => return Err(e).with_context(|| format!("Read {}", engine_path.display())),
-            };
-            let engine_changes = BTreeMap::from([
-                ("r.Streamline.InitializePlugin".into(), value.into()),
-                ("r.Streamline.DLSSG.Enable".into(), value.into()),
-            ]);
-            let engine_updated = update_ini(
-                engine_original.as_deref().unwrap_or(""),
-                "ConsoleVariables",
-                &engine_changes,
-            );
-            if engine_original.as_deref() != Some(engine_updated.as_str()) {
-                edits.push((engine_path, engine_original, engine_updated));
-            }
+        let catalog = catalog()?;
+        let spec = catalog
+            .recipes
+            .get(&self.recipe)
+            .with_context(|| format!("Unknown frame-generation recipe {}", self.recipe))?;
 
-            let gus_path = directory.join("GameUserSettings.ini");
-            ensure!(
-                !gus_path.is_symlink(),
-                "Game settings cannot be symlinks: {}",
-                gus_path.display()
-            );
-            let gus_original = match fs::read_to_string(&gus_path) {
-                Ok(text) => Some(text),
-                Err(e) => return Err(e).with_context(|| format!("Read {}", gus_path.display())),
-            };
-            let (target_section, gus_changes) = self.recipe.gus_changes(value);
-            let gus_updated = update_ini(
-                gus_original.as_deref().unwrap_or(""),
-                target_section,
-                &gus_changes,
-            );
-            if gus_original.as_deref() != Some(gus_updated.as_str()) {
-                edits.push((gus_path, gus_original, gus_updated));
+        // Group rules by filename in declaration order while merging sections that appear in both defaults and recipe.
+        let mut file_order: Vec<(String, bool)> = Vec::new();
+        let mut file_sections: BTreeMap<String, Vec<(String, BTreeMap<String, String>)>> =
+            BTreeMap::new();
+
+        for rule in catalog.defaults.files.iter().chain(&spec.files) {
+            let changes = rule.changes(self.setting);
+            if changes.is_empty() {
+                continue;
+            }
+            if let Some((_, req)) = file_order
+                .iter_mut()
+                .find(|(f, _)| f.eq_ignore_ascii_case(&rule.file))
+            {
+                *req |= rule.required;
+            } else {
+                file_order.push((rule.file.clone(), rule.required));
+            }
+            let sections = file_sections.entry(rule.file.clone()).or_default();
+            if let Some((_, existing)) = sections
+                .iter_mut()
+                .find(|(s, _)| s.eq_ignore_ascii_case(&rule.section))
+            {
+                existing.extend(changes.iter().map(|(k, v)| (k.clone(), v.clone())));
+            } else {
+                sections.push((rule.section.clone(), changes.clone()));
             }
         }
+
+        let mut edits = Vec::new();
+        for directory in &self.configuration_directories {
+            for (file_name, required) in &file_order {
+                let path = directory.join(file_name);
+                ensure!(
+                    !path.is_symlink(),
+                    "Game settings cannot be symlinks: {}",
+                    path.display()
+                );
+                let original = match fs::read_to_string(&path) {
+                    Ok(text) => Some(text),
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound && !required => None,
+                    Err(e) => return Err(e).with_context(|| format!("Read {}", path.display())),
+                };
+                let mut updated = original.clone().unwrap_or_default();
+                if let Some(sections) = file_sections.get(file_name) {
+                    for (section, changes) in sections {
+                        updated = update_ini(&updated, section, changes);
+                    }
+                }
+                if original.as_deref() != Some(updated.as_str()) {
+                    edits.push((path, original, updated));
+                }
+            }
+        }
+
         // Complete backups before making any of the requested edits.
         for (path, original, _) in &edits {
             if let Some(original) = original {
@@ -335,7 +400,7 @@ mod tests {
         fs::write(directory.join("GameUserSettings.ini"), original).unwrap();
         let resolved = Resolved {
             setting: Setting::Metalfx,
-            recipe: Recipe::Talos2,
+            recipe: "Talos2".into(),
             experimental: false,
             configuration_directories: configuration_directories(
                 temp.path(),
@@ -374,16 +439,18 @@ mod tests {
     #[test]
     fn habitat_recipe_selects_dlss_without_changing_unrelated_settings() {
         let original = "[Other]\nFrameGeneration=7\n[/Script/Habitat.HabitatLocalSettings]\nESSTechnologyType=AMDFSR3\nbAMDFSR3Enabled=True\nbAMDFSR3FrameGenEnabled=True\nNvidiaDLSSFrameGenerationMode=0\n";
-        let (section, changes) = Recipe::StillWakesTheDeep.gus_changes("1");
-        let enabled = update_ini(original, section, &changes);
+        let (_, spec) = find_recipe(Path::new("StillWakesTheDeep.exe")).unwrap();
+        let rule = &spec.files[0];
+        let enabled = update_ini(original, &rule.section, rule.changes(Setting::Metalfx));
         assert!(enabled.contains("[Other]\nFrameGeneration=7"));
         assert!(enabled.contains("NvidiaDLSSFrameGenerationMode=1"));
         assert!(enabled.contains("ESSTechnologyType=NVidiaDLSS"));
         assert!(enabled.contains("bAMDFSR3FrameGenEnabled=False"));
-        let (_, changes) = Recipe::StillWakesTheDeep.gus_changes("0");
+        let changes = rule.changes(Setting::Off);
         assert_eq!(changes.len(), 1);
         assert_eq!(changes["NvidiaDLSSFrameGenerationMode"], "0");
-        assert!(Recipe::for_renderer(Path::new("Unknown-Win64-Shipping.exe")).is_err());
+        assert!(find_recipe(Path::new("TheInvincible-Win64-Shipping.exe")).is_ok());
+        assert!(find_recipe(Path::new("Unknown-Win64-Shipping.exe")).is_err());
     }
 
     #[test]
@@ -445,6 +512,7 @@ mod tests {
         std::os::unix::fs::symlink(external.path(), user.join("Windows")).unwrap();
         assert!(configuration_directories(temp.path(), &dummy_renderer).is_err());
     }
+
     #[test]
     fn missing_and_duplicate_keys_are_set_only_in_the_target_section() {
         let values = BTreeMap::from([("Enabled".into(), "0".into()), ("Other".into(), "1".into())]);

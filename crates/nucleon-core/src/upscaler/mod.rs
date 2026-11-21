@@ -356,13 +356,11 @@ fn bundled_metalfx(runtime: &crate::runtime::ResolvedRuntime) -> bool {
 fn requires_patcher(renderer: &Path, input: Input) -> bool {
     input == Input::Dlss
         && renderer.file_name().is_some_and(|name| {
-            [
-                "Talos2.exe",
-                "Talos2-Win64-Shipping.exe",
-                "StillWakesTheDeep.exe",
-            ]
-            .iter()
-            .any(|candidate| name.eq_ignore_ascii_case(candidate))
+            crate::profile::game_configs()
+                .upscaler
+                .dlss_patcher_executables
+                .iter()
+                .any(|candidate| name.eq_ignore_ascii_case(candidate))
         })
 }
 
@@ -376,6 +374,7 @@ fn has_unreal(exe: &Path) -> bool {
 
 fn scan_input_dlls(directory: &Path) -> Result<std::collections::BTreeSet<&'static str>> {
     let mut found = std::collections::BTreeSet::new();
+    let input_dlls = &crate::profile::game_configs().upscaler.input_dlls;
     for entry in walkdir::WalkDir::new(directory)
         .max_depth(10)
         .follow_links(false)
@@ -390,28 +389,12 @@ fn scan_input_dlls(directory: &Path) -> Result<std::collections::BTreeSet<&'stat
         if !entry.file_type().is_file() {
             continue;
         }
-        match entry
-            .file_name()
-            .to_string_lossy()
-            .to_ascii_lowercase()
-            .as_str()
+        let file_name = entry.file_name().to_string_lossy();
+        if let Some((_, input)) = input_dlls
+            .iter()
+            .find(|(dll, _)| file_name.eq_ignore_ascii_case(dll))
         {
-            "nvngx_dlss.dll" => {
-                found.insert("dlss");
-            }
-            "libxess.dll" => {
-                found.insert("xess");
-            }
-            "amd_fidelityfx_upscaler_dx12.dll" | "amd_fidelityfx_dx12.dll" => {
-                found.insert("fsr31");
-            }
-            "ffx_fsr3upscaler_x64.dll" | "ffx_fsr3_x64.dll" => {
-                found.insert("fsr3");
-            }
-            "ffx_fsr2_api_x64.dll" | "ffx_fsr2_api_dx12_x64.dll" | "ffx_fsr2_api_dx11_x64.dll" => {
-                found.insert("fsr2");
-            }
-            _ => {}
+            found.insert(input.as_str());
         }
     }
     Ok(found)
